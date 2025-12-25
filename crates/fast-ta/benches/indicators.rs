@@ -4,6 +4,14 @@
 //!
 //! These benchmarks measure throughput for each indicator across various
 //! input sizes to validate O(n) complexity and establish performance baselines.
+//!
+//! ## Configuration
+//!
+//! Uses criterion.toml for default settings:
+//! - 5s warmup, 10s measurement, 500 samples
+//! - 2% noise threshold, 95% confidence level
+//!
+//! Slower benchmarks (stochastic) use extended 15s measurement time.
 
 #![allow(clippy::cast_precision_loss)]
 #![allow(clippy::unreadable_literal)]
@@ -15,6 +23,7 @@
 #![allow(clippy::type_complexity)]
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use std::time::Duration;
 use fast_ta::indicators::{
     adx::adx, atr::atr, bollinger::bollinger, donchian::donchian, ema::ema, macd::macd, obv::obv,
     rsi::rsi, sma::sma, stochastic::stochastic, vwap::vwap, williams_r::williams_r,
@@ -240,6 +249,7 @@ fn bench_vwap(c: &mut Criterion) {
     group.finish();
 }
 
+// Standard benchmarks with default configuration
 criterion_group!(
     benches,
     bench_sma,
@@ -248,7 +258,6 @@ criterion_group!(
     bench_macd,
     bench_bollinger,
     bench_atr,
-    bench_stochastic,
     bench_adx,
     bench_williams_r,
     bench_donchian,
@@ -256,4 +265,14 @@ criterion_group!(
     bench_vwap,
 );
 
-criterion_main!(benches);
+// Slower benchmarks need extended measurement time
+criterion_group! {
+    name = slow_benches;
+    config = Criterion::default()
+        .warm_up_time(Duration::from_secs(5))
+        .measurement_time(Duration::from_secs(15))
+        .sample_size(500);
+    targets = bench_stochastic
+}
+
+criterion_main!(benches, slow_benches);

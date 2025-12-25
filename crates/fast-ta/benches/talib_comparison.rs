@@ -3,6 +3,14 @@
 //! Run with: `cargo bench -p fast-ta --bench talib_comparison`
 //!
 //! Requires TA-Lib to be installed on the system.
+//!
+//! ## Configuration
+//!
+//! Uses criterion.toml for default settings:
+//! - 5s warmup, 10s measurement, 500 samples
+//! - 2% noise threshold, 95% confidence level
+//!
+//! Slower benchmarks (t3, cmo, cci, stochastic, var) use extended 15s measurement time.
 
 #![allow(clippy::cast_precision_loss)]
 #![allow(clippy::unreadable_literal)]
@@ -16,6 +24,7 @@
 #![allow(clippy::many_single_char_names)]
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use std::time::Duration;
 
 /// OHLCV data tuple: (open, high, low, close, volume)
 type OhlcvData = (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>);
@@ -1636,6 +1645,11 @@ fn bench_bop(c: &mut Criterion) {
     group.finish();
 }
 
+// =============================================================================
+// Benchmark Groups with Custom Configuration
+// =============================================================================
+
+// Standard moving averages (excluding slow T3)
 criterion_group!(
     moving_averages,
     bench_sma,
@@ -1645,21 +1659,51 @@ criterion_group!(
     bench_tema,
     bench_trima,
     bench_kama,
-    bench_t3,
 );
 
+// T3 is slow - needs extended measurement time
+criterion_group! {
+    name = moving_averages_slow;
+    config = Criterion::default()
+        .warm_up_time(Duration::from_secs(5))
+        .measurement_time(Duration::from_secs(15))
+        .sample_size(500);
+    targets = bench_t3
+}
+
+// Standard momentum indicators (excluding slow CMO)
 criterion_group!(
     momentum,
     bench_rsi,
     bench_macd,
     bench_mom,
     bench_roc,
-    bench_cmo,
     bench_apo,
     bench_trix,
 );
 
-criterion_group!(trend, bench_adx, bench_dx, bench_aroon, bench_cci,);
+// CMO is slow - needs extended measurement time
+criterion_group! {
+    name = momentum_slow;
+    config = Criterion::default()
+        .warm_up_time(Duration::from_secs(5))
+        .measurement_time(Duration::from_secs(15))
+        .sample_size(500);
+    targets = bench_cmo
+}
+
+// Standard trend indicators (excluding slow CCI)
+criterion_group!(trend, bench_adx, bench_dx, bench_aroon,);
+
+// CCI is slow - needs extended measurement time
+criterion_group! {
+    name = trend_slow;
+    config = Criterion::default()
+        .warm_up_time(Duration::from_secs(5))
+        .measurement_time(Duration::from_secs(15))
+        .sample_size(500);
+    targets = bench_cci
+}
 
 criterion_group!(
     volatility,
@@ -1668,27 +1712,56 @@ criterion_group!(
     bench_bollinger,
 );
 
-criterion_group!(
-    stochastic_group,
-    bench_stochastic,
-    bench_stochastic_fast,
-    bench_williams_r,
-    bench_ultosc,
-);
+// Stochastic indicators are slow - need extended measurement time
+criterion_group! {
+    name = stochastic_group;
+    config = Criterion::default()
+        .warm_up_time(Duration::from_secs(5))
+        .measurement_time(Duration::from_secs(15))
+        .sample_size(500);
+    targets = bench_stochastic, bench_stochastic_fast, bench_williams_r, bench_ultosc
+}
 
-criterion_group!(volume, bench_obv, bench_ad, bench_mfi,);
+// Standard volume indicators (excluding slow MFI)
+criterion_group!(volume, bench_obv, bench_ad,);
 
-criterion_group!(statistics, bench_var, bench_linearreg, bench_tsf,);
+// MFI is slow - needs extended measurement time
+criterion_group! {
+    name = volume_slow;
+    config = Criterion::default()
+        .warm_up_time(Duration::from_secs(5))
+        .measurement_time(Duration::from_secs(15))
+        .sample_size(500);
+    targets = bench_mfi
+}
+
+// Standard statistics (excluding slow VAR)
+criterion_group!(statistics, bench_linearreg, bench_tsf,);
+
+// VAR is slow - needs extended measurement time
+criterion_group! {
+    name = statistics_slow;
+    config = Criterion::default()
+        .warm_up_time(Duration::from_secs(5))
+        .measurement_time(Duration::from_secs(15))
+        .sample_size(500);
+    targets = bench_var
+}
 
 criterion_group!(other, bench_midpoint, bench_midprice, bench_bop,);
 
 criterion_main!(
     moving_averages,
+    moving_averages_slow,
     momentum,
+    momentum_slow,
     trend,
+    trend_slow,
     volatility,
     stochastic_group,
     volume,
+    volume_slow,
     statistics,
+    statistics_slow,
     other,
 );

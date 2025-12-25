@@ -3,12 +3,17 @@
 //! Run with: `cargo bench -p fast-ta --bench workload`
 //!
 //! Compares Buffer API usage with per-iteration allocations vs buffer reuse.
+//!
+//! ## Configuration
+//!
+//! Uses extended measurement time (15s) with 500 samples for statistical reliability.
 
 #![allow(clippy::cast_precision_loss)]
 #![allow(clippy::unreadable_literal)]
 #![allow(clippy::similar_names)]
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use std::time::Duration;
 use fast_ta::indicators::{
     adx::adx_into, atr::atr_into, bollinger::bollinger_into, ema::ema_into, macd::macd_into,
     obv::obv_into, rsi::rsi_into, sma::sma_into, stochastic::stochastic_fast_into, vwap::vwap_into,
@@ -190,5 +195,14 @@ fn bench_workload(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_workload);
+// Workload benchmark with extended configuration for reliability
+criterion_group! {
+    name = benches;
+    config = Criterion::default()
+        .warm_up_time(Duration::from_secs(5))
+        .measurement_time(Duration::from_secs(15))
+        .sample_size(500);
+    targets = bench_workload
+}
+
 criterion_main!(benches);
