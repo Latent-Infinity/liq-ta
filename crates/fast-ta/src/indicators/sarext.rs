@@ -21,6 +21,7 @@
 
 use crate::error::{Error, Result};
 use crate::traits::SeriesElement;
+use crate::utils::is_invalid;
 
 /// SAREXT parameters for extended Parabolic SAR calculation.
 #[derive(Debug, Clone, Copy)]
@@ -158,6 +159,17 @@ pub fn sarext_full_into<T: SeriesElement>(
     // First value is NaN (lookback period)
     output[0] = T::nan();
 
+    if is_invalid(high[0])
+        || is_invalid(low[0])
+        || is_invalid(high[1])
+        || is_invalid(low[1])
+    {
+        for out in output.iter_mut().skip(1) {
+            *out = T::nan();
+        }
+        return Ok(());
+    }
+
     // Determine initial trend by comparing first two bars
     let mut is_long = high[1] > high[0];
 
@@ -193,7 +205,13 @@ pub fn sarext_full_into<T: SeriesElement>(
         output[1] = T::zero() - sar;
     }
 
+    let mut nan_active = false;
     for i in 2..n {
+        if nan_active || is_invalid(high[i]) || is_invalid(low[i]) {
+            output[i] = T::nan();
+            nan_active = true;
+            continue;
+        }
         // Calculate new SAR
         let mut new_sar = sar + af * (ep - sar);
 

@@ -29,11 +29,16 @@ Applies to all indicators in `crates/fast-ta/src/indicators`, including single- 
   - Provide fluent setters and `compute()` / `compute_into()` methods.
   - Use the existing pattern in `macd`, `bollinger`, `stochastic`, `adx` as examples.
 
-## Output Shape and NaN Policy
+## Output Shape and NaN/Infinity Policy
 - **Full-length outputs**: output length equals input length.
 - **NaN prefix**: first `indicator_lookback(...)` elements are NaN.
-- **NaN propagation**: any NaN within a rolling window yields NaN output at that position.
-- **Infinity propagation**: any `+/-inf` in the window propagates to the output.
+- **Rolling-window rule**: any NaN in the current window yields NaN output at that position.
+- **Cumulative rule**: if a NaN is encountered in the input/state, outputs are NaN at that index and all subsequent indices (`nan_active`).
+  - Examples: OBV, VWAP, running sums/ratios.
+- **Infinity handling**: treat `+/-inf` as invalid (NaN-like). Any window containing `+/-inf` yields NaN output.
+- **Warmup/lookback**: outputs are NaN until the full window required by `*_lookback(...)` is available.
+- **Multi-period indicators**: if any required internal window contains NaN (e.g., MACD fast/slow/signal windows), all output fields at that index are NaN.
+- **Mixed behavior**: if an indicator combines rolling and cumulative state, a NaN in the rolling window yields NaN output and activates cumulative NaN propagation.
 - **Subnormal values**: processed normally; no special handling.
 - **Indeterminate operations**: use explicitly defined outputs:
   - RSI: `avg_loss = 0` -> RSI = 100; `avg_gain = 0` -> RSI = 0
@@ -42,6 +47,21 @@ Applies to all indicators in `crates/fast-ta/src/indicators`, including single- 
   - ATR: first value uses SMA of initial TR window (Wilder seed)
 - **Multi-output alignment**: all fields align to the same lookback and input index.
 - **Lookback canonical**: `*_lookback()` defines the NaN prefix length; `*_min_len()` defines the minimum input length.
+
+### Internal Helper API Shape (NaN Handling)
+Use a shared internal helper for rolling NaN tracking and cumulative propagation to keep behavior consistent and SIMD-friendly.
+
+**Rolling-window helpers (proposed shape):**
+- `fn build_nan_mask<T: SeriesElement>(data: &[T]) -> Vec<u8>` where `1` indicates NaN or +/-inf.
+- `fn init_nan_count(mask: &[u8], start: usize, period: usize) -> usize`
+- `fn update_nan_count(count: &mut usize, old_is_nan: bool, new_is_nan: bool)`
+
+**Cumulative helpers (proposed shape):**
+- `struct NanActive { active: bool }` with `fn step(&mut self, input_has_nan: bool) -> bool` returning whether output should be NaN.
+
+**SIMD note:**
+- SIMD paths are always active unless a per-period scalar fast path is demonstrably faster.
+- SIMD NaN detection uses lane masks; any-lane NaN (or +/-inf) marks the window as invalid.
 
 ## Input Validation and Errors
 - Use `validate_indicator_input` for single-series indicators.

@@ -58,3 +58,7 @@ harness = false
 [[bench]]
 name = "workload"
 harness = false
+
+[[bench]]
+name = "simd_comparison"
+harness = false

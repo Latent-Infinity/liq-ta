@@ -14,6 +14,7 @@
 //! - `trendline` - Adaptive trendline (used by `HT_TRENDLINE`)
 
 use crate::traits::SeriesElement;
+use crate::utils::is_invalid;
 use std::f64::consts::PI;
 
 /// Hilbert Transform state containing all computed values.
@@ -217,7 +218,8 @@ pub fn hilbert_transform<T: SeriesElement>(data: &[T]) -> crate::error::Result<H
 
             // Trend Mode: 1 if trending, 0 if cycling
             let trend_diff = (trendline[i] - trend_line_prev).abs();
-            let delta_phase = if i > 0 && !phase[i].is_nan() && !phase[i - 1].is_nan() {
+            let delta_phase =
+                if i > 0 && !is_invalid(phase[i]) && !is_invalid(phase[i - 1]) {
                 let diff = phase[i] - phase[i - 1];
                 if diff < T::zero() {
                     diff + T::from_f64(360.0)?

@@ -23,10 +23,8 @@
 //!
 //! # NaN Handling
 //!
-//! - If any OHLC value is NaN, typical price is NaN and bar is skipped
-//! - If volume is NaN, the bar is skipped
-//! - VWAP continues from previous cumulative values
-//! - The first value is always valid (no lookback period)
+//! - If any input at an index is NaN, the output at that index is NaN.
+//! - Because VWAP is cumulative, once NaN appears, subsequent values remain NaN.
 //!
 //! # Note
 //!
@@ -54,6 +52,7 @@
 
 use crate::error::{Error, Result};
 use crate::traits::SeriesElement;
+use crate::utils::is_invalid;
 
 /// Returns the lookback period for VWAP.
 ///
@@ -253,6 +252,7 @@ fn compute_vwap_core<T: SeriesElement>(
     let mut cumulative_tp_vol = T::zero();
     let mut cumulative_vol = T::zero();
     let mut last_valid_vwap = T::nan();
+    let mut nan_active = false;
 
     for i in 0..n {
         let h = high[i];
@@ -260,9 +260,14 @@ fn compute_vwap_core<T: SeriesElement>(
         let c = close[i];
         let v = volume[i];
 
-        // Skip if any value is NaN
-        if h.is_nan() || l.is_nan() || c.is_nan() || v.is_nan() {
-            output.push(last_valid_vwap);
+        if nan_active
+            || is_invalid(h)
+            || is_invalid(l)
+            || is_invalid(c)
+            || is_invalid(v)
+        {
+            nan_active = true;
+            output.push(T::nan());
             continue;
         }
 
@@ -305,6 +310,7 @@ fn compute_vwap_core_into<T: SeriesElement>(
     let mut cumulative_tp_vol = T::zero();
     let mut cumulative_vol = T::zero();
     let mut last_valid_vwap = T::nan();
+    let mut nan_active = false;
 
     for i in 0..n {
         let h = high[i];
@@ -312,9 +318,14 @@ fn compute_vwap_core_into<T: SeriesElement>(
         let c = close[i];
         let v = volume[i];
 
-        // Skip if any value is NaN
-        if h.is_nan() || l.is_nan() || c.is_nan() || v.is_nan() {
-            output[i] = last_valid_vwap;
+        if nan_active
+            || is_invalid(h)
+            || is_invalid(l)
+            || is_invalid(c)
+            || is_invalid(v)
+        {
+            nan_active = true;
+            output[i] = T::nan();
             continue;
         }
 
@@ -533,9 +544,8 @@ mod tests {
         let result = vwap(&high, &low, &close, &volume).unwrap();
 
         assert!(!result[0].is_nan());
-        // NaN high → use previous VWAP
-        assert!(approx_eq(result[1], result[0], EPSILON));
-        assert!(!result[2].is_nan());
+        assert!(result[1].is_nan());
+        assert!(result[2].is_nan());
     }
 
     #[test]
@@ -548,9 +558,8 @@ mod tests {
         let result = vwap(&high, &low, &close, &volume).unwrap();
 
         assert!(!result[0].is_nan());
-        // NaN volume → use previous VWAP
-        assert!(approx_eq(result[1], result[0], EPSILON));
-        assert!(!result[2].is_nan());
+        assert!(result[1].is_nan());
+        assert!(result[2].is_nan());
     }
 
     #[test]
@@ -564,8 +573,7 @@ mod tests {
 
         // First bar NaN → result is NaN
         assert!(result[0].is_nan());
-        // Second bar calculates VWAP from its own TP
-        assert!(!result[1].is_nan());
+        assert!(result[1].is_nan());
     }
 
     // ==================== Zero Volume Tests ====================

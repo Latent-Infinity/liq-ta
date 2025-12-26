@@ -25,9 +25,9 @@
 //!
 //! # NaN Handling
 //!
-//! - If `close[i]` or `close[i-1]` is NaN, OBV remains unchanged from previous value
-//! - If `volume[i]` is NaN, OBV remains unchanged from previous value
-//! - The first value is always `volume[0]` (no lookback period)
+//! - If any input for the current step is NaN, the output at that index is NaN.
+//! - Because OBV is cumulative, once NaN appears, subsequent values remain NaN.
+//! - The first value is `volume[0]` unless `close[0]` or `volume[0]` is NaN.
 //!
 //! # Example
 //!
@@ -49,6 +49,7 @@
 
 use crate::error::{Error, Result};
 use crate::traits::SeriesElement;
+use crate::utils::is_invalid;
 
 /// Returns the lookback period for OBV.
 ///
@@ -217,8 +218,9 @@ fn compute_obv_core<T: SeriesElement>(close: &[T], volume: &[T], output: &mut Ve
 
     // First OBV value is the first volume
     let first_vol = volume[0];
-    if first_vol.is_nan() {
-        output.push(T::zero());
+    let first_close = close[0];
+    if is_invalid(first_vol) || is_invalid(first_close) {
+        output.push(T::nan());
     } else {
         output.push(first_vol);
     }
@@ -245,8 +247,9 @@ fn compute_obv_core_into<T: SeriesElement>(close: &[T], volume: &[T], output: &m
 
     // First OBV value is the first volume
     let first_vol = volume[0];
-    output[0] = if first_vol.is_nan() {
-        T::zero()
+    let first_close = close[0];
+    output[0] = if is_invalid(first_vol) || is_invalid(first_close) {
+        T::nan()
     } else {
         first_vol
     };
@@ -265,9 +268,13 @@ fn compute_obv_core_into<T: SeriesElement>(close: &[T], volume: &[T], output: &m
 /// Compute single OBV step.
 #[inline]
 fn compute_obv_step<T: SeriesElement>(prev_obv: T, prev_close: T, curr_close: T, curr_vol: T) -> T {
-    // If any value is NaN, keep previous OBV
-    if curr_close.is_nan() || prev_close.is_nan() || curr_vol.is_nan() {
-        return prev_obv;
+    // If any value is NaN, output stays NaN for cumulative consistency.
+    if is_invalid(prev_obv)
+        || is_invalid(curr_close)
+        || is_invalid(prev_close)
+        || is_invalid(curr_vol)
+    {
+        return T::nan();
     }
 
     if curr_close > prev_close {
@@ -458,42 +465,41 @@ mod tests {
 
     #[test]
     fn test_obv_nan_close_current() {
-        // NaN in current close: OBV unchanged
+        // NaN in current close: OBV becomes NaN and stays NaN
         let close = vec![10.0_f64, f64::NAN, 12.0];
         let volume = vec![100.0, 200.0, 300.0];
 
         let result = obv(&close, &volume).unwrap();
 
         assert!(approx_eq(result[0], 100.0, EPSILON));
-        assert!(approx_eq(result[1], 100.0, EPSILON)); // Unchanged due to NaN
-                                                       // The next comparison uses NaN as prev_close, so OBV stays unchanged
-        assert!(approx_eq(result[2], 100.0, EPSILON));
+        assert!(result[1].is_nan());
+        assert!(result[2].is_nan());
     }
 
     #[test]
     fn test_obv_nan_volume() {
-        // NaN in volume: OBV unchanged
+        // NaN in volume: OBV becomes NaN and stays NaN
         let close = vec![10.0_f64, 11.0, 12.0];
         let volume = vec![100.0, f64::NAN, 300.0];
 
         let result = obv(&close, &volume).unwrap();
 
         assert!(approx_eq(result[0], 100.0, EPSILON));
-        assert!(approx_eq(result[1], 100.0, EPSILON)); // Unchanged due to NaN volume
-        assert!(approx_eq(result[2], 400.0, EPSILON)); // 100 + 300
+        assert!(result[1].is_nan());
+        assert!(result[2].is_nan());
     }
 
     #[test]
     fn test_obv_nan_first_volume() {
-        // NaN in first volume: use 0
+        // NaN in first volume: OBV starts as NaN and stays NaN
         let close = vec![10.0_f64, 11.0, 12.0];
         let volume = vec![f64::NAN, 200.0, 300.0];
 
         let result = obv(&close, &volume).unwrap();
 
-        assert!(approx_eq(result[0], 0.0, EPSILON)); // NaN → 0
-        assert!(approx_eq(result[1], 200.0, EPSILON)); // 0 + 200
-        assert!(approx_eq(result[2], 500.0, EPSILON)); // 200 + 300
+        assert!(result[0].is_nan());
+        assert!(result[1].is_nan());
+        assert!(result[2].is_nan());
     }
 
     // ==================== obv_into Tests ====================

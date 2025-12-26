@@ -16,6 +16,7 @@
 
 use crate::error::{Error, Result};
 use crate::traits::SeriesElement;
+use crate::utils::is_invalid;
 
 // =============================================================================
 // AVGPRICE (Average Price)
@@ -91,7 +92,15 @@ pub fn avgprice_into<T: SeriesElement>(
     let four = T::from_i32(4)?;
 
     for i in 0..n {
-        output[i] = (open[i] + high[i] + low[i] + close[i]) / four;
+        if is_invalid(open[i])
+            || is_invalid(high[i])
+            || is_invalid(low[i])
+            || is_invalid(close[i])
+        {
+            output[i] = T::nan();
+        } else {
+            output[i] = (open[i] + high[i] + low[i] + close[i]) / four;
+        }
     }
 
     Ok(())
@@ -193,7 +202,11 @@ pub fn medprice_into<T: SeriesElement>(high: &[T], low: &[T], output: &mut [T]) 
     let two = T::from_i32(2)?;
 
     for i in 0..n {
-        output[i] = (high[i] + low[i]) / two;
+        if is_invalid(high[i]) || is_invalid(low[i]) {
+            output[i] = T::nan();
+        } else {
+            output[i] = (high[i] + low[i]) / two;
+        }
     }
 
     Ok(())
@@ -291,7 +304,11 @@ pub fn typprice_into<T: SeriesElement>(
     let three = T::from_i32(3)?;
 
     for i in 0..n {
-        output[i] = (high[i] + low[i] + close[i]) / three;
+        if is_invalid(high[i]) || is_invalid(low[i]) || is_invalid(close[i]) {
+            output[i] = T::nan();
+        } else {
+            output[i] = (high[i] + low[i] + close[i]) / three;
+        }
     }
 
     Ok(())
@@ -391,7 +408,11 @@ pub fn wclprice_into<T: SeriesElement>(
     let four = T::from_i32(4)?;
 
     for i in 0..n {
-        output[i] = (high[i] + low[i] + close[i] * two) / four;
+        if is_invalid(high[i]) || is_invalid(low[i]) || is_invalid(close[i]) {
+            output[i] = T::nan();
+        } else {
+            output[i] = (high[i] + low[i] + close[i] * two) / four;
+        }
     }
 
     Ok(())

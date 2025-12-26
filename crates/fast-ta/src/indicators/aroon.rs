@@ -28,6 +28,7 @@
 
 use crate::error::{Error, Result};
 use crate::traits::SeriesElement;
+use crate::utils::is_invalid;
 
 /// Output structure for AROON indicator.
 #[derive(Debug, Clone)]
@@ -140,21 +141,38 @@ pub fn aroon_into<T: SeriesElement>(
         let start = i - period;
         let end = i + 1; // inclusive of current bar
 
-        // Find index of highest high and lowest low in the window
+        // Find index of highest high and lowest low in the window, propagating NaNs.
+        let mut nan_in_window = false;
         let mut highest_idx = start;
         let mut lowest_idx = start;
         let mut highest_val = high[start];
         let mut lowest_val = low[start];
 
-        for j in (start + 1)..end {
-            if high[j] >= highest_val {
-                highest_val = high[j];
-                highest_idx = j;
+        if is_invalid(highest_val) || is_invalid(lowest_val) {
+            nan_in_window = true;
+        } else {
+            for j in (start + 1)..end {
+                let high_val = high[j];
+                let low_val = low[j];
+                if is_invalid(high_val) || is_invalid(low_val) {
+                    nan_in_window = true;
+                    break;
+                }
+                if high_val >= highest_val {
+                    highest_val = high_val;
+                    highest_idx = j;
+                }
+                if low_val <= lowest_val {
+                    lowest_val = low_val;
+                    lowest_idx = j;
+                }
             }
-            if low[j] <= lowest_val {
-                lowest_val = low[j];
-                lowest_idx = j;
-            }
+        }
+
+        if nan_in_window {
+            aroon_up_output[i] = T::nan();
+            aroon_down_output[i] = T::nan();
+            continue;
         }
 
         // Periods since highest high and lowest low

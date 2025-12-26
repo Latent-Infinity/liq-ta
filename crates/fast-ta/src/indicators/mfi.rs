@@ -28,6 +28,7 @@
 
 use crate::error::{Error, Result};
 use crate::traits::SeriesElement;
+use crate::utils::is_invalid;
 
 /// Computes the lookback period for MFI.
 #[inline]
@@ -113,47 +114,95 @@ pub fn mfi_into<T: SeriesElement>(
     }
 
     let lookback = mfi_lookback(period);
-    let three = T::from_f64(3.0)?;
+    let inv_three = T::from_f64(1.0 / 3.0)?;
     let hundred = T::from_f64(100.0)?;
     let one = T::from_f64(1.0)?;
-
-    // Calculate typical prices
-    let mut tp = vec![T::zero(); n];
-    for i in 0..n {
-        tp[i] = (high[i] + low[i] + close[i]) / three;
-    }
+    let zero = T::zero();
 
     // Fill lookback period with NaN
-    for i in 0..lookback {
-        output[i] = T::nan();
+    for out in output.iter_mut().take(lookback) {
+        *out = T::nan();
     }
 
-    // Calculate MFI for each bar after lookback
-    for i in lookback..n {
-        let start = i - period + 1;
+    // Pre-compute positive and negative money flows separately.
+    let mut positive_mf = vec![zero; n];
+    let mut negative_mf = vec![zero; n];
+    let mut nan_flags = vec![false; n];
 
-        let mut positive_mf = T::zero();
-        let mut negative_mf = T::zero();
-
-        for j in start..=i {
-            let raw_mf = tp[j] * volume[j];
-
-            if tp[j] > tp[j - 1] {
-                positive_mf = positive_mf + raw_mf;
-            } else if tp[j] < tp[j - 1] {
-                negative_mf = negative_mf + raw_mf;
-            }
-            // If TP unchanged, money flow is neither positive nor negative
+    let mut prev_tp = (high[0] + low[0] + close[0]) * inv_three;
+    if is_invalid(high[0]) || is_invalid(low[0]) || is_invalid(close[0]) || is_invalid(volume[0]) {
+        nan_flags[0] = true;
+    }
+    for i in 1..n {
+        if is_invalid(high[i]) || is_invalid(low[i]) || is_invalid(close[i]) || is_invalid(volume[i])
+        {
+            nan_flags[i] = true;
+            prev_tp = (high[i] + low[i] + close[i]) * inv_three;
+            continue;
         }
 
-        if negative_mf == T::zero() {
-            // All positive or no flow - MFI = 100
+        let tp = (high[i] + low[i] + close[i]) * inv_three;
+        if is_invalid(prev_tp) {
+            nan_flags[i] = true;
+            prev_tp = tp;
+            continue;
+        }
+
+        let raw_mf = tp * volume[i];
+        if tp > prev_tp {
+            positive_mf[i] = raw_mf;
+        } else if tp < prev_tp {
+            negative_mf[i] = raw_mf;
+        }
+        prev_tp = tp;
+    }
+
+    // Calculate initial sums for first window (indices 1..=period)
+    let mut sum_positive = zero;
+    let mut sum_negative = zero;
+    let mut nan_count = 0usize;
+    for i in 1..=period {
+        if nan_flags[i] {
+            nan_count += 1;
+        }
+        sum_positive = sum_positive + positive_mf[i];
+        sum_negative = sum_negative + negative_mf[i];
+    }
+
+    // Calculate first MFI at index = period
+    if nan_count > 0 {
+        output[lookback] = T::nan();
+    } else if sum_negative == zero {
+        output[lookback] = hundred;
+    } else if sum_positive == zero {
+        output[lookback] = zero;
+    } else {
+        let mfr = sum_positive / sum_negative;
+        output[lookback] = hundred - (hundred / (one + mfr));
+    }
+
+    // Rolling calculation for remaining values
+    // Use simple add/subtract - no conditionals needed since arrays store 0 for unchanged
+    for i in (lookback + 1)..n {
+        let old_idx = i - period;
+        sum_positive = sum_positive - positive_mf[old_idx] + positive_mf[i];
+        sum_negative = sum_negative - negative_mf[old_idx] + negative_mf[i];
+        if nan_flags[old_idx] {
+            nan_count -= 1;
+        }
+        if nan_flags[i] {
+            nan_count += 1;
+        }
+
+        // Calculate MFI
+        if nan_count > 0 {
+            output[i] = T::nan();
+        } else if sum_negative == zero {
             output[i] = hundred;
-        } else if positive_mf == T::zero() {
-            // All negative - MFI = 0
-            output[i] = T::zero();
+        } else if sum_positive == zero {
+            output[i] = zero;
         } else {
-            let mfr = positive_mf / negative_mf;
+            let mfr = sum_positive / sum_negative;
             output[i] = hundred - (hundred / (one + mfr));
         }
     }

@@ -47,6 +47,7 @@
 
 use crate::error::{Error, Result};
 use crate::traits::SeriesElement;
+use crate::utils::is_invalid;
 
 /// Returns the lookback period for EMA.
 ///
@@ -385,7 +386,7 @@ fn compute_ema_core<T: SeriesElement>(data: &[T], period: usize, alpha: T, outpu
     let mut sum = T::zero();
     let mut nan_count = 0usize;
     for &value in data.iter().take(period) {
-        if value.is_nan() {
+        if is_invalid(value) {
             nan_count += 1;
         } else {
             sum = sum + value;
@@ -406,7 +407,7 @@ fn compute_ema_core<T: SeriesElement>(data: &[T], period: usize, alpha: T, outpu
     // EMA[i] = α × Price[i] + (1 - α) × EMA[i-1]
     for i in period..data.len() {
         let value = data[i];
-        if ema_prev.is_nan() || value.is_nan() {
+        if is_invalid(ema_prev) || is_invalid(value) {
             output[i] = T::nan();
             ema_prev = T::nan();
         } else {
@@ -705,8 +706,8 @@ mod tests {
         let data = vec![1.0_f64, f64::INFINITY, 3.0, 4.0, 5.0];
         let result = ema(&data, 3).unwrap();
 
-        // Window contains infinity, so EMA will be infinite
-        assert!(result[2].is_infinite());
+        // Window contains infinity, so EMA will be NaN
+        assert!(result[2].is_nan());
     }
 
     // ==================== Error Handling Tests ====================

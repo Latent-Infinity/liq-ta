@@ -33,6 +33,43 @@ pub const EPSILON: f64 = 1e-10;
 /// accumulated operations or when absolute precision is less critical.
 pub const LOOSE_EPSILON: f64 = 1e-6;
 
+#[inline]
+#[must_use]
+pub(crate) fn is_invalid<T: SeriesElement>(value: T) -> bool {
+    value.is_nan() || value.is_infinite()
+}
+
+#[inline]
+#[must_use]
+#[allow(dead_code)]
+pub(crate) fn build_invalid_mask<T: SeriesElement>(data: &[T]) -> Vec<u8> {
+    data.iter()
+        .map(|&value| if is_invalid(value) { 1 } else { 0 })
+        .collect()
+}
+
+#[inline]
+#[must_use]
+#[allow(dead_code)]
+pub(crate) fn init_invalid_count(mask: &[u8], start: usize, period: usize) -> usize {
+    mask.iter()
+        .skip(start)
+        .take(period)
+        .map(|&value| usize::from(value))
+        .sum()
+}
+
+#[inline]
+#[allow(dead_code)]
+pub(crate) fn update_invalid_count(count: &mut usize, old_invalid: bool, new_invalid: bool) {
+    if new_invalid {
+        *count += 1;
+    }
+    if old_invalid {
+        *count -= 1;
+    }
+}
+
 /// Approximate equality check for floating-point values.
 ///
 /// Returns `true` if `a` and `b` are within `tolerance` of each other,

@@ -76,6 +76,7 @@
 
 use crate::error::{Error, Result};
 use crate::traits::SeriesElement;
+use crate::utils::is_invalid;
 
 /// Output structure for ADX indicator containing ADX, +DI, and -DI.
 #[derive(Debug, Clone)]
@@ -377,7 +378,7 @@ fn validate_adx_inputs<T: SeriesElement>(
 /// Computes True Range for a single bar.
 #[inline]
 fn compute_true_range<T: SeriesElement>(high: T, low: T, prev_close: T) -> T {
-    if high.is_nan() || low.is_nan() || prev_close.is_nan() {
+    if is_invalid(high) || is_invalid(low) || is_invalid(prev_close) {
         return T::nan();
     }
 
@@ -396,7 +397,7 @@ fn compute_directional_movement<T: SeriesElement>(
     low: T,
     prev_low: T,
 ) -> (T, T) {
-    if high.is_nan() || prev_high.is_nan() || low.is_nan() || prev_low.is_nan() {
+    if is_invalid(high) || is_invalid(prev_high) || is_invalid(low) || is_invalid(prev_low) {
         return (T::nan(), T::nan());
     }
 
@@ -453,13 +454,21 @@ fn compute_adx_core<T: SeriesElement>(
     let mut smoothed_plus_dm = sum_plus_dm;
     let mut smoothed_minus_dm = sum_minus_dm;
 
+    let mut nan_active = is_invalid(smoothed_tr)
+        || is_invalid(smoothed_plus_dm)
+        || is_invalid(smoothed_minus_dm);
+
     // Calculate first +DI and -DI at index = period
-    let plus_di_val = if smoothed_tr > T::zero() {
+    let plus_di_val = if nan_active {
+        T::nan()
+    } else if smoothed_tr > T::zero() {
         hundred * smoothed_plus_dm / smoothed_tr
     } else {
         T::zero()
     };
-    let minus_di_val = if smoothed_tr > T::zero() {
+    let minus_di_val = if nan_active {
+        T::nan()
+    } else if smoothed_tr > T::zero() {
         hundred * smoothed_minus_dm / smoothed_tr
     } else {
         T::zero()
@@ -469,12 +478,17 @@ fn compute_adx_core<T: SeriesElement>(
     minus_di_out[period] = minus_di_val;
 
     // Calculate first DX
-    let di_sum = plus_di_val + minus_di_val;
-    let di_diff = (plus_di_val - minus_di_val).abs();
-    let first_dx = if di_sum > T::zero() {
-        hundred * di_diff / di_sum
+    let first_dx = if is_invalid(plus_di_val) || is_invalid(minus_di_val) {
+        nan_active = true;
+        T::nan()
     } else {
-        T::zero()
+        let di_sum = plus_di_val + minus_di_val;
+        let di_diff = (plus_di_val - minus_di_val).abs();
+        if di_sum > T::zero() {
+            hundred * di_diff / di_sum
+        } else {
+            T::zero()
+        }
     };
 
     // Continue with Wilder smoothing for +DI and -DI, accumulating DX values
@@ -484,6 +498,14 @@ fn compute_adx_core<T: SeriesElement>(
         let tr = compute_true_range(high[i], low[i], close[i - 1]);
         let (plus_dm, minus_dm) =
             compute_directional_movement(high[i], high[i - 1], low[i], low[i - 1]);
+
+        if nan_active || is_invalid(tr) || is_invalid(plus_dm) || is_invalid(minus_dm) {
+            nan_active = true;
+            plus_di_out[i] = T::nan();
+            minus_di_out[i] = T::nan();
+            dx_sum = T::nan();
+            continue;
+        }
 
         // Wilder smoothing: smoothed = (prev * (period-1) + current) / period
         // Equivalent to: smoothed = prev - prev/period + current
@@ -519,6 +541,10 @@ fn compute_adx_core<T: SeriesElement>(
     // This is at index 2 * period - 1
     let adx_start = 2 * period - 1;
     let mut prev_adx = dx_sum / period_t;
+    if nan_active || is_invalid(prev_adx) {
+        nan_active = true;
+        prev_adx = T::nan();
+    }
     adx_out[adx_start] = prev_adx;
 
     // Continue computing +DI, -DI, and apply Wilder smoothing to ADX
@@ -526,6 +552,15 @@ fn compute_adx_core<T: SeriesElement>(
         let tr = compute_true_range(high[i], low[i], close[i - 1]);
         let (plus_dm, minus_dm) =
             compute_directional_movement(high[i], high[i - 1], low[i], low[i - 1]);
+
+        if nan_active || is_invalid(tr) || is_invalid(plus_dm) || is_invalid(minus_dm) {
+            nan_active = true;
+            plus_di_out[i] = T::nan();
+            minus_di_out[i] = T::nan();
+            adx_out[i] = T::nan();
+            prev_adx = T::nan();
+            continue;
+        }
 
         // Wilder smoothing for TR, +DM, -DM
         smoothed_tr = smoothed_tr - smoothed_tr / period_t + tr;

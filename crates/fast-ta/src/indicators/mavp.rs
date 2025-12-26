@@ -21,6 +21,7 @@
 
 use crate::error::{Error, Result};
 use crate::traits::SeriesElement;
+use crate::utils::is_invalid;
 
 /// Returns the lookback period for MAVP.
 ///
@@ -130,7 +131,7 @@ pub fn mavp_into<T: SeriesElement>(
         let period_val = periods[i];
 
         // Check if period is valid
-        if period_val.is_nan() || period_val < min_period_t || period_val > max_period_t {
+        if is_invalid(period_val) || period_val < min_period_t || period_val > max_period_t {
             output[i] = T::nan();
             continue;
         }
@@ -158,7 +159,7 @@ pub fn mavp_into<T: SeriesElement>(
         let mut has_nan = false;
 
         for j in start..=i {
-            if data[j].is_nan() {
+            if is_invalid(data[j]) {
                 has_nan = true;
                 break;
             }

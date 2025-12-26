@@ -26,6 +26,7 @@
 use crate::error::{Error, Result};
 use crate::indicators::ema::ema_lookback;
 use crate::traits::SeriesElement;
+use crate::utils::is_invalid;
 
 /// Computes the lookback period for TRIX.
 #[inline]
@@ -98,12 +99,25 @@ pub fn trix_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) 
     let mut ema1 = vec![T::nan(); n];
     // First valid EMA1 is at index ema_lb, using SMA of first `period` values
     let mut sum = T::zero();
+    let mut invalid_count = 0usize;
     for i in 0..period {
-        sum = sum + data[i];
+        if is_invalid(data[i]) {
+            invalid_count += 1;
+        } else {
+            sum = sum + data[i];
+        }
     }
-    ema1[ema_lb] = sum / T::from_usize(period)?;
+    ema1[ema_lb] = if invalid_count > 0 {
+        T::nan()
+    } else {
+        sum / T::from_usize(period)?
+    };
     for i in (ema_lb + 1)..n {
-        ema1[i] = alpha * data[i] + one_minus_alpha * ema1[i - 1];
+        if is_invalid(data[i]) || is_invalid(ema1[i - 1]) {
+            ema1[i] = T::nan();
+        } else {
+            ema1[i] = alpha * data[i] + one_minus_alpha * ema1[i - 1];
+        }
     }
 
     // Calculate second EMA (of EMA1)
@@ -111,12 +125,26 @@ pub fn trix_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) 
     let mut ema2 = vec![T::nan(); n];
     // First valid EMA2 at index 2*ema_lb
     let mut sum2 = T::zero();
+    let mut invalid_count2 = 0usize;
     for i in 0..period {
-        sum2 = sum2 + ema1[ema_lb + i];
+        let value = ema1[ema_lb + i];
+        if is_invalid(value) {
+            invalid_count2 += 1;
+        } else {
+            sum2 = sum2 + value;
+        }
     }
-    ema2[ema2_start] = sum2 / T::from_usize(period)?;
+    ema2[ema2_start] = if invalid_count2 > 0 {
+        T::nan()
+    } else {
+        sum2 / T::from_usize(period)?
+    };
     for i in (ema2_start + 1)..n {
-        ema2[i] = alpha * ema1[i] + one_minus_alpha * ema2[i - 1];
+        if is_invalid(ema1[i]) || is_invalid(ema2[i - 1]) {
+            ema2[i] = T::nan();
+        } else {
+            ema2[i] = alpha * ema1[i] + one_minus_alpha * ema2[i - 1];
+        }
     }
 
     // Calculate third EMA (of EMA2)
@@ -124,12 +152,26 @@ pub fn trix_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) 
     let mut ema3 = vec![T::nan(); n];
     // First valid EMA3 at index 3*ema_lb
     let mut sum3 = T::zero();
+    let mut invalid_count3 = 0usize;
     for i in 0..period {
-        sum3 = sum3 + ema2[ema2_start + i];
+        let value = ema2[ema2_start + i];
+        if is_invalid(value) {
+            invalid_count3 += 1;
+        } else {
+            sum3 = sum3 + value;
+        }
     }
-    ema3[ema3_start] = sum3 / T::from_usize(period)?;
+    ema3[ema3_start] = if invalid_count3 > 0 {
+        T::nan()
+    } else {
+        sum3 / T::from_usize(period)?
+    };
     for i in (ema3_start + 1)..n {
-        ema3[i] = alpha * ema2[i] + one_minus_alpha * ema3[i - 1];
+        if is_invalid(ema2[i]) || is_invalid(ema3[i - 1]) {
+            ema3[i] = T::nan();
+        } else {
+            ema3[i] = alpha * ema2[i] + one_minus_alpha * ema3[i - 1];
+        }
     }
 
     // Fill lookback period with NaN
@@ -141,8 +183,11 @@ pub fn trix_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) 
     // First valid TRIX at lookback = 3*ema_lb + 1
     for i in lookback..n {
         let prev = ema3[i - 1];
-        if prev != T::zero() && !prev.is_nan() {
-            output[i] = hundred * (ema3[i] - prev) / prev;
+        let curr = ema3[i];
+        if is_invalid(prev) || is_invalid(curr) {
+            output[i] = T::nan();
+        } else if prev != T::zero() {
+            output[i] = hundred * (curr - prev) / prev;
         } else {
             output[i] = T::zero();
         }

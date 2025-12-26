@@ -22,6 +22,7 @@
 
 use crate::error::{Error, Result};
 use crate::traits::SeriesElement;
+use crate::utils::is_invalid;
 
 /// Computes the lookback period for BOP.
 #[inline]
@@ -93,6 +94,14 @@ pub fn bop_into<T: SeriesElement>(
 
     // Calculate BOP for each bar
     for i in 0..n {
+        if is_invalid(open[i])
+            || is_invalid(high[i])
+            || is_invalid(low[i])
+            || is_invalid(close[i])
+        {
+            output[i] = T::nan();
+            continue;
+        }
         let range = high[i] - low[i];
         if range == T::zero() {
             // When high == low, use 0 (no directional pressure)

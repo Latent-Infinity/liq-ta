@@ -11,6 +11,7 @@
 use crate::error::{Error, Result};
 use crate::indicators::adx::{adx, adx_lookback};
 use crate::traits::SeriesElement;
+use crate::utils::is_invalid;
 
 // =============================================================================
 // ADXR (ADX Rating)
@@ -98,7 +99,7 @@ pub fn adxr_into<T: SeriesElement>(
         let current_adx = adx_values[i];
         let past_adx = adx_values[i - period];
 
-        if !current_adx.is_nan() && !past_adx.is_nan() {
+        if !is_invalid(current_adx) && !is_invalid(past_adx) {
             output[i] = (current_adx + past_adx) / two;
         } else {
             output[i] = T::nan();
@@ -221,7 +222,7 @@ pub fn dx_into<T: SeriesElement>(
 
         // DX = 100 * |+DI - -DI| / (+DI + -DI)
         for i in period..n {
-            if !plus_di[i].is_nan() && !minus_di[i].is_nan() {
+            if !is_invalid(plus_di[i]) && !is_invalid(minus_di[i]) {
                 let di_sum = plus_di[i] + minus_di[i];
                 let di_diff = (plus_di[i] - minus_di[i]).abs();
                 if di_sum > T::zero() {
@@ -346,7 +347,16 @@ pub fn plus_dm_into<T: SeriesElement>(
 
     // Calculate initial sum of +DM for the first period
     let mut sum_plus_dm = T::zero();
+    let mut nan_active = false;
     for i in 1..=period {
+        if is_invalid(high[i])
+            || is_invalid(high[i - 1])
+            || is_invalid(low[i])
+            || is_invalid(low[i - 1])
+        {
+            nan_active = true;
+            continue;
+        }
         let up_move = high[i] - high[i - 1];
         let down_move = low[i - 1] - low[i];
 
@@ -360,10 +370,26 @@ pub fn plus_dm_into<T: SeriesElement>(
 
     // First smoothed value
     let mut smoothed_plus_dm = sum_plus_dm;
-    output[period] = smoothed_plus_dm;
+    if nan_active || is_invalid(smoothed_plus_dm) {
+        nan_active = true;
+        smoothed_plus_dm = T::nan();
+        output[period] = T::nan();
+    } else {
+        output[period] = smoothed_plus_dm;
+    }
 
     // Continue with Wilder smoothing
     for i in (period + 1)..n {
+        if nan_active
+            || is_invalid(high[i])
+            || is_invalid(high[i - 1])
+            || is_invalid(low[i])
+            || is_invalid(low[i - 1])
+        {
+            nan_active = true;
+            output[i] = T::nan();
+            continue;
+        }
         let up_move = high[i] - high[i - 1];
         let down_move = low[i - 1] - low[i];
 
@@ -457,7 +483,16 @@ pub fn minus_dm_into<T: SeriesElement>(
 
     // Calculate initial sum of -DM for the first period
     let mut sum_minus_dm = T::zero();
+    let mut nan_active = false;
     for i in 1..=period {
+        if is_invalid(high[i])
+            || is_invalid(high[i - 1])
+            || is_invalid(low[i])
+            || is_invalid(low[i - 1])
+        {
+            nan_active = true;
+            continue;
+        }
         let up_move = high[i] - high[i - 1];
         let down_move = low[i - 1] - low[i];
 
@@ -471,10 +506,26 @@ pub fn minus_dm_into<T: SeriesElement>(
 
     // First smoothed value
     let mut smoothed_minus_dm = sum_minus_dm;
-    output[period] = smoothed_minus_dm;
+    if nan_active || is_invalid(smoothed_minus_dm) {
+        nan_active = true;
+        smoothed_minus_dm = T::nan();
+        output[period] = T::nan();
+    } else {
+        output[period] = smoothed_minus_dm;
+    }
 
     // Continue with Wilder smoothing
     for i in (period + 1)..n {
+        if nan_active
+            || is_invalid(high[i])
+            || is_invalid(high[i - 1])
+            || is_invalid(low[i])
+            || is_invalid(low[i - 1])
+        {
+            nan_active = true;
+            output[i] = T::nan();
+            continue;
+        }
         let up_move = high[i] - high[i - 1];
         let down_move = low[i - 1] - low[i];
 

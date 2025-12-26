@@ -26,6 +26,7 @@
 use crate::error::{Error, Result};
 use crate::indicators::rsi::{rsi_into, rsi_lookback};
 use crate::traits::SeriesElement;
+use crate::utils::is_invalid;
 
 /// Output structure for Stochastic RSI
 #[derive(Debug, Clone)]
@@ -157,25 +158,39 @@ pub fn stochrsi_into<T: SeriesElement>(
     for i in (rsi_lb + stoch_period - 1)..n {
         let start = i - stoch_period + 1;
 
-        // Find min/max RSI in the stochastic period
+        let mut nan_in_window = false;
         let mut min_rsi = rsi_values[start];
         let mut max_rsi = rsi_values[start];
+        if is_invalid(min_rsi) || is_invalid(max_rsi) {
+            nan_in_window = true;
+        }
 
-        for j in (start + 1)..=i {
-            if rsi_values[j] < min_rsi {
-                min_rsi = rsi_values[j];
-            }
-            if rsi_values[j] > max_rsi {
-                max_rsi = rsi_values[j];
+        if !nan_in_window {
+            for j in (start + 1)..=i {
+                let value = rsi_values[j];
+                if is_invalid(value) {
+                    nan_in_window = true;
+                    break;
+                }
+                if value < min_rsi {
+                    min_rsi = value;
+                }
+                if value > max_rsi {
+                    max_rsi = value;
+                }
             }
         }
 
-        let range = max_rsi - min_rsi;
-        if range == T::zero() {
-            // If range is zero, StochRSI is typically set to 50 (or 0.5)
-            raw_stochrsi[i] = T::from_f64(0.5)?;
+        if nan_in_window {
+            raw_stochrsi[i] = T::nan();
         } else {
-            raw_stochrsi[i] = (rsi_values[i] - min_rsi) / range;
+            let range = max_rsi - min_rsi;
+            if range == T::zero() {
+                // If range is zero, StochRSI is typically set to 50 (or 0.5)
+                raw_stochrsi[i] = T::from_f64(0.5)?;
+            } else {
+                raw_stochrsi[i] = (rsi_values[i] - min_rsi) / range;
+            }
         }
     }
 
@@ -190,10 +205,20 @@ pub fn stochrsi_into<T: SeriesElement>(
         let k_start = rsi_lb + stoch_period - 1 + k_period - 1;
         for i in k_start..n {
             let mut sum = T::zero();
+            let mut nan_in_window = false;
             for j in 0..k_period {
-                sum = sum + raw_stochrsi[i - j];
+                let value = raw_stochrsi[i - j];
+                if is_invalid(value) {
+                    nan_in_window = true;
+                    break;
+                }
+                sum = sum + value;
             }
-            fastk[i] = sum / T::from_usize(k_period)?;
+            if nan_in_window {
+                fastk[i] = T::nan();
+            } else {
+                fastk[i] = sum / T::from_usize(k_period)?;
+            }
         }
     }
 
@@ -205,15 +230,18 @@ pub fn stochrsi_into<T: SeriesElement>(
     } else {
         for i in d_lookback..n {
             let mut sum = T::zero();
-            let mut count = 0usize;
+            let mut nan_in_window = false;
             for j in 0..d_period {
-                let idx = i - j;
-                if !fastk[idx].is_nan() {
-                    sum = sum + fastk[idx];
-                    count += 1;
+                let value = fastk[i - j];
+                if is_invalid(value) {
+                    nan_in_window = true;
+                    break;
                 }
+                sum = sum + value;
             }
-            if count == d_period {
+            if nan_in_window {
+                fastd[i] = T::nan();
+            } else {
                 fastd[i] = sum / T::from_usize(d_period)?;
             }
         }

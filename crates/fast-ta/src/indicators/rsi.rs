@@ -70,6 +70,7 @@
 
 use crate::error::{Error, Result};
 use crate::traits::SeriesElement;
+use crate::utils::is_invalid;
 
 /// Returns the lookback period for RSI.
 ///
@@ -284,7 +285,7 @@ fn compute_rsi_core<T: SeriesElement>(data: &[T], period: usize, output: &mut [T
     let mut has_nan = false;
 
     for i in 1..=period {
-        if data[i].is_nan() || data[i - 1].is_nan() {
+        if is_invalid(data[i]) || is_invalid(data[i - 1]) {
             has_nan = true;
             break;
         }
@@ -318,7 +319,11 @@ fn compute_rsi_core<T: SeriesElement>(data: &[T], period: usize, output: &mut [T
     // Step 2: Apply Wilder's smoothing for remaining values
     // Wilder's formula: Avg = (prev_avg * (period-1) + current) / period
     for i in (period + 1)..data.len() {
-        if data[i].is_nan() || data[i - 1].is_nan() || avg_gain.is_nan() || avg_loss.is_nan() {
+        if is_invalid(data[i])
+            || is_invalid(data[i - 1])
+            || is_invalid(avg_gain)
+            || is_invalid(avg_loss)
+        {
             avg_gain = T::nan();
             avg_loss = T::nan();
             output[i] = T::nan();
@@ -630,8 +635,8 @@ mod tests {
         let data = vec![1.0_f64, 2.0, f64::INFINITY, 4.0, 5.0, 6.0];
         let result = rsi(&data, 3).unwrap();
 
-        // Results involving infinity will be NaN or extreme values
-        assert!(result[3].is_nan() || result[3].is_infinite());
+        // Results involving infinity should be NaN
+        assert!(result[3].is_nan());
     }
 
     // ==================== Error Handling Tests ====================

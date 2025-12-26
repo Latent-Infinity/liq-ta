@@ -37,6 +37,7 @@
 use crate::error::{Error, Result};
 use crate::indicators::ema::{ema, ema_into};
 use crate::traits::SeriesElement;
+use crate::utils::is_invalid;
 
 /// Returns the lookback period for DEMA.
 ///
@@ -170,7 +171,7 @@ pub fn dema<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
 
     // First valid DEMA is at 2*(period-1)
     for i in ema1_lookback..data.len() {
-        if !ema1[i].is_nan() {
+        if !is_invalid(ema1[i]) {
             if i == ema1_lookback {
                 // Seed value - EMA2 equals EMA1 at this point
                 ema2 = ema1[i];
@@ -277,7 +278,7 @@ pub fn dema_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) 
     let mut ema2 = ema1[ema1_lookback];
 
     for i in ema1_lookback..data.len() {
-        if !ema1[i].is_nan() {
+        if !is_invalid(ema1[i]) {
             if i == ema1_lookback {
                 ema2 = ema1[i];
             } else {

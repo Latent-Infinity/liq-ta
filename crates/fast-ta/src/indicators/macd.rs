@@ -54,6 +54,7 @@
 
 use crate::error::{Error, Result};
 use crate::traits::SeriesElement;
+use crate::utils::is_invalid;
 
 /// Returns the lookback period for the MACD line.
 ///
@@ -417,7 +418,7 @@ fn compute_macd_fused<T: SeriesElement>(
 
     // Accumulate for fast EMA seed
     for &value in data.iter().take(fast_period) {
-        if value.is_nan() {
+        if is_invalid(value) {
             fast_nan_count += 1;
         } else {
             fast_sum = fast_sum + value;
@@ -426,7 +427,7 @@ fn compute_macd_fused<T: SeriesElement>(
 
     // Accumulate for slow EMA seed (includes fast_period values already summed)
     for &value in data.iter().take(slow_period) {
-        if value.is_nan() {
+        if is_invalid(value) {
             slow_nan_count += 1;
         } else {
             slow_sum = slow_sum + value;
@@ -457,7 +458,7 @@ fn compute_macd_fused<T: SeriesElement>(
     // Advance fast EMA from first_valid_fast to first_valid_slow - 1
     for i in fast_period..slow_period {
         let value = data[i];
-        if fast_ema.is_nan() || value.is_nan() {
+        if is_invalid(fast_ema) || is_invalid(value) {
             fast_ema = T::nan();
         } else {
             fast_ema = fast_alpha * value + fast_one_minus_alpha * fast_ema;
@@ -466,7 +467,7 @@ fn compute_macd_fused<T: SeriesElement>(
 
     // Now at index first_valid_slow, both EMAs are valid
     // Set first MACD value
-    if !fast_ema.is_nan() && !slow_ema.is_nan() {
+    if !is_invalid(fast_ema) && !is_invalid(slow_ema) {
         macd_output[first_valid_slow] = fast_ema - slow_ema;
     } else {
         macd_output[first_valid_slow] = T::nan();
@@ -477,21 +478,21 @@ fn compute_macd_fused<T: SeriesElement>(
         let value = data[i];
 
         // Update fast EMA
-        if fast_ema.is_nan() || value.is_nan() {
+        if is_invalid(fast_ema) || is_invalid(value) {
             fast_ema = T::nan();
         } else {
             fast_ema = fast_alpha * value + fast_one_minus_alpha * fast_ema;
         }
 
         // Update slow EMA
-        if slow_ema.is_nan() || value.is_nan() {
+        if is_invalid(slow_ema) || is_invalid(value) {
             slow_ema = T::nan();
         } else {
             slow_ema = slow_alpha * value + slow_one_minus_alpha * slow_ema;
         }
 
         // Compute MACD line
-        if !fast_ema.is_nan() && !slow_ema.is_nan() {
+        if !is_invalid(fast_ema) && !is_invalid(slow_ema) {
             macd_output[i] = fast_ema - slow_ema;
         } else {
             macd_output[i] = T::nan();
@@ -536,7 +537,7 @@ fn compute_macd_fused<T: SeriesElement>(
     for i in (first_valid_signal + 1)..n {
         let macd_val = macd_output[i];
 
-        if signal_ema.is_nan() || macd_val.is_nan() {
+        if is_invalid(signal_ema) || is_invalid(macd_val) {
             signal_ema = T::nan();
             signal_output[i] = T::nan();
             histogram_output[i] = T::nan();

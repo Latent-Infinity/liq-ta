@@ -24,6 +24,7 @@
 
 use crate::error::{Error, Result};
 use crate::traits::SeriesElement;
+use crate::utils::is_invalid;
 
 /// Computes the lookback period for CCI.
 #[inline]
@@ -110,53 +111,98 @@ pub fn cci_into<T: SeriesElement>(
     }
 
     let lookback = cci_lookback(period);
-    let period_t = T::from_usize(period)?;
-    let three = T::from_f64(3.0)?;
-    let constant = T::from_f64(0.015)?;
+    let inv_period = T::from_f64(1.0 / period as f64)?;
+    let inv_three = T::from_f64(1.0 / 3.0)?;
+    let inv_constant = T::from_f64(1.0 / 0.015)?;
+    let zero = T::zero();
 
     // Calculate typical prices
-    let mut tp = vec![T::zero(); n];
+    let mut tp = vec![zero; n];
+    let mut invalid_flags = vec![false; n];
     for i in 0..n {
-        tp[i] = (high[i] + low[i] + close[i]) / three;
+        if is_invalid(high[i]) || is_invalid(low[i]) || is_invalid(close[i]) {
+            tp[i] = T::nan();
+            invalid_flags[i] = true;
+        } else {
+            tp[i] = (high[i] + low[i] + close[i]) * inv_three;
+        }
     }
 
     // Fill lookback period with NaN
-    for i in 0..lookback {
-        output[i] = T::nan();
+    for out in output.iter_mut().take(lookback) {
+        *out = T::nan();
     }
 
-    // Calculate CCI for each bar after lookback
-    for i in lookback..n {
-        let start = i + 1 - period;
-        let end = i + 1;
-
-        // Calculate SMA of typical prices
-        let mut tp_sum = T::zero();
-        for j in start..end {
-            tp_sum = tp_sum + tp[j];
+    // Initialize rolling sum for SMA
+    let mut tp_sum = zero;
+    let mut invalid_count = 0usize;
+    for i in 0..period {
+        if invalid_flags[i] {
+            invalid_count += 1;
+        } else {
+            tp_sum = tp_sum + tp[i];
         }
-        let tp_sma = tp_sum / period_t;
+    }
 
-        // Calculate mean deviation
-        let mut deviation_sum = T::zero();
-        for j in start..end {
+    // Calculate first CCI value (at index = lookback = period - 1)
+    if invalid_count > 0 {
+        output[lookback] = T::nan();
+    } else {
+        let tp_sma = tp_sum * inv_period;
+
+        // Calculate mean deviation for first window
+        let mut deviation_sum = zero;
+        for j in 0..period {
             let diff = tp[j] - tp_sma;
-            // Absolute value
-            deviation_sum = deviation_sum
-                + if diff >= T::zero() {
-                    diff
-                } else {
-                    T::zero() - diff
-                };
+            deviation_sum = deviation_sum + diff.abs();
         }
-        let mean_deviation = deviation_sum / period_t;
+        let mean_deviation = deviation_sum * inv_period;
 
         // CCI = (TP - SMA) / (0.015 * Mean Deviation)
-        let denominator = constant * mean_deviation;
-        if denominator == T::zero() {
-            output[i] = T::zero();
+        // Rewritten as: (TP - SMA) * (1/0.015) / Mean Deviation
+        if mean_deviation == zero {
+            output[lookback] = zero;
         } else {
-            output[i] = (tp[i] - tp_sma) / denominator;
+            output[lookback] = (tp[lookback] - tp_sma) * inv_constant / mean_deviation;
+        }
+    }
+
+    // Rolling calculation for remaining values
+    for i in (lookback + 1)..n {
+        // Update rolling sum for SMA
+        let old_idx = i - period;
+        if invalid_flags[old_idx] {
+            invalid_count = invalid_count.saturating_sub(1);
+        } else {
+            tp_sum = tp_sum - tp[old_idx];
+        }
+        if invalid_flags[i] {
+            invalid_count += 1;
+        } else {
+            tp_sum = tp_sum + tp[i];
+        }
+
+        if invalid_count > 0 {
+            output[i] = T::nan();
+            continue;
+        }
+
+        let tp_sma = tp_sum * inv_period;
+
+        // Mean deviation still requires iterating over window
+        // (unavoidable since deviations depend on current window's mean)
+        let start = i + 1 - period;
+        let mut deviation_sum = zero;
+        for j in start..=i {
+            let diff = tp[j] - tp_sma;
+            deviation_sum = deviation_sum + diff.abs();
+        }
+        let mean_deviation = deviation_sum * inv_period;
+
+        if mean_deviation == zero {
+            output[i] = zero;
+        } else {
+            output[i] = (tp[i] - tp_sma) * inv_constant / mean_deviation;
         }
     }
 

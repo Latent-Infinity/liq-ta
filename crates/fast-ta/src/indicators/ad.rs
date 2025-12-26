@@ -32,6 +32,7 @@
 
 use crate::error::{Error, Result};
 use crate::traits::SeriesElement;
+use crate::utils::is_invalid;
 
 /// Returns the lookback period for AD.
 ///
@@ -98,12 +99,19 @@ pub fn ad_into<T: SeriesElement>(
     }
 
     let mut ad_value = T::zero();
+    let mut nan_active = false;
 
     for i in 0..len {
         let h = high[i];
         let l = low[i];
         let c = close[i];
         let v = volume[i];
+
+        if nan_active || is_invalid(h) || is_invalid(l) || is_invalid(c) || is_invalid(v) {
+            nan_active = true;
+            output[i] = T::nan();
+            continue;
+        }
 
         // Money Flow Multiplier = ((close - low) - (high - close)) / (high - low)
         // Simplifies to: (2 * close - high - low) / (high - low)

@@ -13,6 +13,7 @@
 
 use crate::error::{Error, Result};
 use crate::traits::SeriesElement;
+use crate::utils::is_invalid;
 
 /// Computes the lookback period for MIDPRICE.
 ///
@@ -72,6 +73,7 @@ pub const fn midprice_min_len(period: usize) -> usize {
 /// # NaN Handling
 ///
 /// The first `period - 1` elements of the output will be NaN.
+/// If any high/low value in the window is NaN, the output is NaN.
 ///
 /// # Errors
 ///
@@ -132,7 +134,11 @@ pub fn midprice_into<T: SeriesElement>(
     if period == 1 {
         let two = T::from_usize(2)?;
         for i in 0..high.len() {
-            output[i] = (high[i] + low[i]) / two;
+            if is_invalid(high[i]) || is_invalid(low[i]) {
+                output[i] = T::nan();
+            } else {
+                output[i] = (high[i] + low[i]) / two;
+            }
         }
         return Ok(());
     }
@@ -143,17 +149,30 @@ pub fn midprice_into<T: SeriesElement>(
         let window_start = i + 1 - period;
         let mut highest_high = high[window_start];
         let mut lowest_low = low[window_start];
+        let mut nan_in_window = is_invalid(highest_high) || is_invalid(lowest_low);
 
-        for j in (window_start + 1)..=i {
-            if high[j] > highest_high {
-                highest_high = high[j];
-            }
-            if low[j] < lowest_low {
-                lowest_low = low[j];
+        if !nan_in_window {
+            for j in (window_start + 1)..=i {
+                let high_val = high[j];
+                let low_val = low[j];
+                if is_invalid(high_val) || is_invalid(low_val) {
+                    nan_in_window = true;
+                    break;
+                }
+                if high_val > highest_high {
+                    highest_high = high_val;
+                }
+                if low_val < lowest_low {
+                    lowest_low = low_val;
+                }
             }
         }
 
-        output[i] = (highest_high + lowest_low) / two;
+        output[i] = if nan_in_window {
+            T::nan()
+        } else {
+            (highest_high + lowest_low) / two
+        };
     }
 
     Ok(())
@@ -177,6 +196,7 @@ pub fn midprice_into<T: SeriesElement>(
 /// # NaN Handling
 ///
 /// The first `period - 1` elements will be NaN.
+/// If any high/low value in the window is NaN, the output is NaN.
 ///
 /// # Example
 ///

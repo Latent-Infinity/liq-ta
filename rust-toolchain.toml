@@ -1,0 +1,6 @@
+# Nightly toolchain for portable SIMD support
+# This branch uses nightly features for performance optimization
+
+[toolchain]
+channel = "nightly"
+components = ["rustfmt", "clippy"]

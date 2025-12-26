@@ -32,6 +32,7 @@
 
 use crate::error::{Error, Result};
 use crate::traits::SeriesElement;
+use crate::utils::is_invalid;
 
 /// Computes the lookback period for CMO.
 #[inline]
@@ -101,28 +102,85 @@ pub fn cmo_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -
         output[i] = T::nan();
     }
 
-    // Calculate CMO for each bar after lookback
-    for i in lookback..n {
-        let start = i - period;
+    // Pre-compute all price changes with gains positive and losses as positive values.
+    // Track NaN windows to enforce NaN propagation.
+    // changes[i] contains the change from data[i] to data[i+1]
+    // For gains: positive change
+    // For losses: absolute value of negative change
+    let mut gains = vec![T::zero(); n - 1];
+    let mut losses = vec![T::zero(); n - 1];
+    let mut nan_flags = vec![false; n - 1];
 
-        let mut sum_gains = T::zero();
-        let mut sum_losses = T::zero();
-
-        // Calculate gains and losses over the period
-        for j in (start + 1)..=i {
-            let change = data[j] - data[j - 1];
+    for i in 0..n - 1 {
+        if is_invalid(data[i]) || is_invalid(data[i + 1]) {
+            nan_flags[i] = true;
+        } else {
+            let change = data[i + 1] - data[i];
             if change > T::zero() {
-                sum_gains = sum_gains + change;
+                gains[i] = change;
             } else if change < T::zero() {
-                sum_losses = sum_losses - change; // Make positive
+                losses[i] = change.abs();
             }
         }
+    }
 
+    // Calculate initial sums for the first window (indices 0..period in changes)
+    let mut sum_gains = T::zero();
+    let mut sum_losses = T::zero();
+    let mut nan_count = 0usize;
+
+    for i in 0..period {
+        if nan_flags[i] {
+            nan_count += 1;
+        } else {
+            sum_gains = sum_gains + gains[i];
+            sum_losses = sum_losses + losses[i];
+        }
+    }
+
+    // Calculate first CMO value at index = period
+    if nan_count > 0 {
+        output[lookback] = T::nan();
+    } else {
         let total = sum_gains + sum_losses;
         if total == T::zero() {
-            output[i] = T::zero();
+            output[lookback] = T::zero();
         } else {
-            output[i] = ((sum_gains - sum_losses) / total) * hundred;
+            output[lookback] = ((sum_gains - sum_losses) / total) * hundred;
+        }
+    }
+
+    // Rolling calculation for remaining values
+    // Window slides: remove oldest change, add newest change
+    for i in (lookback + 1)..n {
+        // Index of oldest change to remove (change from data[i-period-1] to data[i-period])
+        let old_idx = i - period - 1;
+        // Index of newest change to add (change from data[i-1] to data[i])
+        let new_idx = i - 1;
+
+        if nan_flags[old_idx] {
+            nan_count = nan_count.saturating_sub(1);
+        } else {
+            sum_gains = sum_gains - gains[old_idx];
+            sum_losses = sum_losses - losses[old_idx];
+        }
+
+        if nan_flags[new_idx] {
+            nan_count += 1;
+        } else {
+            sum_gains = sum_gains + gains[new_idx];
+            sum_losses = sum_losses + losses[new_idx];
+        }
+
+        if nan_count > 0 {
+            output[i] = T::nan();
+        } else {
+            let total = sum_gains + sum_losses;
+            if total == T::zero() {
+                output[i] = T::zero();
+            } else {
+                output[i] = ((sum_gains - sum_losses) / total) * hundred;
+            }
         }
     }
 

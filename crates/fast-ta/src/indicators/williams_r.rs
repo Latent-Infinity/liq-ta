@@ -51,6 +51,7 @@
 use crate::error::{Error, Result};
 use crate::kernels::rolling_extrema::{rolling_max, rolling_min};
 use crate::traits::SeriesElement;
+use crate::utils::is_invalid;
 
 /// Returns the lookback period for Williams %R.
 ///
@@ -290,7 +291,7 @@ fn compute_williams_r_core<T: SeriesElement>(
         let ll = lowest_low[i];
         let c = close[i];
 
-        if hh.is_nan() || ll.is_nan() || c.is_nan() {
+        if is_invalid(hh) || is_invalid(ll) || is_invalid(c) {
             output[i] = T::nan();
             continue;
         }

@@ -36,6 +36,7 @@
 use crate::error::{Error, Result};
 use crate::indicators::ema::{ema, ema_into};
 use crate::traits::SeriesElement;
+use crate::utils::is_invalid;
 
 /// Returns the lookback period for TEMA.
 ///
@@ -173,7 +174,7 @@ pub fn tema<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
     let ema3_valid_from = 2 * ema1_lookback;
 
     for i in ema1_lookback..data.len() {
-        if !ema1[i].is_nan() {
+        if !is_invalid(ema1[i]) {
             if i == ema1_lookback {
                 // Seed values
                 ema2 = ema1[i];
@@ -295,7 +296,7 @@ pub fn tema_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) 
     let ema2_valid_from = ema1_lookback;
 
     for i in ema1_lookback..data.len() {
-        if !ema1[i].is_nan() {
+        if !is_invalid(ema1[i]) {
             if i == ema1_lookback {
                 ema2 = ema1[i];
                 ema3 = ema1[i];

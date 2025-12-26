@@ -51,6 +51,7 @@
 use crate::error::{Error, Result};
 use crate::kernels::rolling_extrema::{rolling_max, rolling_min};
 use crate::traits::SeriesElement;
+use crate::utils::is_invalid;
 
 /// Output structure for Donchian Channels containing upper, middle, and lower bands.
 #[derive(Debug, Clone)]
@@ -303,6 +304,7 @@ fn compute_donchian_core<T: SeriesElement>(
     lower: &mut [T],
 ) -> Result<()> {
     let two = T::two();
+    let n = high.len();
 
     // Calculate rolling highest high and lowest low
     let highest_high = rolling_max(high, period)?;
@@ -310,17 +312,47 @@ fn compute_donchian_core<T: SeriesElement>(
 
     // Calculate middle band and copy to output
     let lookback = donchian_lookback(period);
-    for i in lookback..high.len() {
-        let hh = highest_high[i];
-        let ll = lowest_low[i];
+    let mut nan_high = 0usize;
+    let mut nan_low = 0usize;
 
-        upper[i] = hh;
-        lower[i] = ll;
+    for i in 0..period {
+        if is_invalid(high[i]) {
+            nan_high += 1;
+        }
+        if is_invalid(low[i]) {
+            nan_low += 1;
+        }
+    }
 
-        if hh.is_nan() || ll.is_nan() {
+    for i in lookback..n {
+        if nan_high + nan_low > 0 {
+            upper[i] = T::nan();
+            lower[i] = T::nan();
             middle[i] = T::nan();
         } else {
+            let hh = highest_high[i];
+            let ll = lowest_low[i];
+
+            upper[i] = hh;
+            lower[i] = ll;
             middle[i] = (hh + ll) / two;
+        }
+
+        let next = i + 1;
+        if next < n {
+            let out_idx = next - period;
+            if is_invalid(high[out_idx]) {
+                nan_high = nan_high.saturating_sub(1);
+            }
+            if is_invalid(low[out_idx]) {
+                nan_low = nan_low.saturating_sub(1);
+            }
+            if is_invalid(high[next]) {
+                nan_high += 1;
+            }
+            if is_invalid(low[next]) {
+                nan_low += 1;
+            }
         }
     }
 

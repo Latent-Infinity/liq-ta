@@ -76,6 +76,7 @@
 
 use crate::error::{Error, Result};
 use crate::traits::SeriesElement;
+use crate::utils::is_invalid;
 
 /// Returns the lookback period for ATR.
 ///
@@ -465,7 +466,7 @@ fn validate_atr_inputs<T: SeriesElement>(
 /// TR = max(High - Low, |High - Prev Close|, |Low - Prev Close|)
 #[inline]
 fn compute_true_range<T: SeriesElement>(high: T, low: T, prev_close: T) -> T {
-    if high.is_nan() || low.is_nan() || prev_close.is_nan() {
+    if is_invalid(high) || is_invalid(low) || is_invalid(prev_close) {
         return T::nan();
     }
 

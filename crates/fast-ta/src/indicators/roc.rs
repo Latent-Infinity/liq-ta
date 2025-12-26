@@ -21,6 +21,7 @@
 
 use crate::error::{Error, Result};
 use crate::traits::SeriesElement;
+use crate::utils::is_invalid;
 
 // =============================================================================
 // ROC - Rate of Change (percentage * 100)
@@ -99,10 +100,11 @@ pub fn roc_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -
     // Calculate ROC: ((price - price\[n\]) / price\[n\]) * 100
     for i in lookback..n {
         let prev = data[i - period];
-        if prev == T::zero() {
+        let cur = data[i];
+        if is_invalid(prev) || is_invalid(cur) || prev == T::zero() {
             output[i] = T::nan();
         } else {
-            output[i] = ((data[i] - prev) / prev) * hundred;
+            output[i] = ((cur - prev) / prev) * hundred;
         }
     }
 
@@ -212,10 +214,11 @@ pub fn rocp_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) 
     // Calculate ROCP: (price - price\[n\]) / price\[n\]
     for i in lookback..n {
         let prev = data[i - period];
-        if prev == T::zero() {
+        let cur = data[i];
+        if is_invalid(prev) || is_invalid(cur) || prev == T::zero() {
             output[i] = T::nan();
         } else {
-            output[i] = (data[i] - prev) / prev;
+            output[i] = (cur - prev) / prev;
         }
     }
 
@@ -325,10 +328,11 @@ pub fn rocr_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) 
     // Calculate ROCR: price / price\[n\]
     for i in lookback..n {
         let prev = data[i - period];
-        if prev == T::zero() {
+        let cur = data[i];
+        if is_invalid(prev) || is_invalid(cur) || prev == T::zero() {
             output[i] = T::nan();
         } else {
-            output[i] = data[i] / prev;
+            output[i] = cur / prev;
         }
     }
 
@@ -439,10 +443,11 @@ pub fn rocr100_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T
     // Calculate ROCR100: (price / price\[n\]) * 100
     for i in lookback..n {
         let prev = data[i - period];
-        if prev == T::zero() {
+        let cur = data[i];
+        if is_invalid(prev) || is_invalid(cur) || prev == T::zero() {
             output[i] = T::nan();
         } else {
-            output[i] = (data[i] / prev) * hundred;
+            output[i] = (cur / prev) * hundred;
         }
     }
 

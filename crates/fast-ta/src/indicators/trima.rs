@@ -21,6 +21,7 @@
 
 use crate::error::{Error, Result};
 use crate::traits::SeriesElement;
+use crate::utils::is_invalid;
 
 /// Computes the lookback period for TRIMA.
 ///
@@ -148,16 +149,40 @@ pub fn trima_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T])
 
     // First SMA value
     let mut sum = T::zero();
+    let mut invalid_count = 0usize;
     for i in 0..sma1_period {
-        sum = sum + data[i];
+        if is_invalid(data[i]) {
+            invalid_count += 1;
+        } else {
+            sum = sum + data[i];
+        }
     }
     let period1_t = T::from_usize(sma1_period)?;
-    sma1[0] = sum / period1_t;
+    sma1[0] = if invalid_count > 0 {
+        T::nan()
+    } else {
+        sum / period1_t
+    };
 
     // Subsequent SMA1 values using rolling sum
     for i in 1..sma1_len {
-        sum = sum - data[i - 1] + data[i + sma1_period - 1];
-        sma1[i] = sum / period1_t;
+        let old_value = data[i - 1];
+        let new_value = data[i + sma1_period - 1];
+        if is_invalid(old_value) {
+            invalid_count = invalid_count.saturating_sub(1);
+        } else {
+            sum = sum - old_value;
+        }
+        if is_invalid(new_value) {
+            invalid_count += 1;
+        } else {
+            sum = sum + new_value;
+        }
+        sma1[i] = if invalid_count > 0 {
+            T::nan()
+        } else {
+            sum / period1_t
+        };
     }
 
     // Compute second SMA of SMA1
@@ -173,18 +198,42 @@ pub fn trima_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T])
 
     // First SMA2 value
     let mut sum2 = T::zero();
+    let mut invalid_count2 = 0usize;
     for i in 0..sma2_period {
-        sum2 = sum2 + sma1[i];
+        if is_invalid(sma1[i]) {
+            invalid_count2 += 1;
+        } else {
+            sum2 = sum2 + sma1[i];
+        }
     }
     let period2_t = T::from_usize(sma2_period)?;
 
     // The first valid TRIMA is at index (sma1_period - 1) + (sma2_period - 1) = period - 1
-    output[lookback] = sum2 / period2_t;
+    output[lookback] = if invalid_count2 > 0 {
+        T::nan()
+    } else {
+        sum2 / period2_t
+    };
 
     // Subsequent TRIMA values
     for i in 1..sma2_len {
-        sum2 = sum2 - sma1[i - 1] + sma1[i + sma2_period - 1];
-        output[lookback + i] = sum2 / period2_t;
+        let old_value = sma1[i - 1];
+        let new_value = sma1[i + sma2_period - 1];
+        if is_invalid(old_value) {
+            invalid_count2 = invalid_count2.saturating_sub(1);
+        } else {
+            sum2 = sum2 - old_value;
+        }
+        if is_invalid(new_value) {
+            invalid_count2 += 1;
+        } else {
+            sum2 = sum2 + new_value;
+        }
+        output[lookback + i] = if invalid_count2 > 0 {
+            T::nan()
+        } else {
+            sum2 / period2_t
+        };
     }
 
     Ok(())

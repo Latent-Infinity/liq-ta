@@ -70,6 +70,7 @@
 
 use crate::error::{Error, Result};
 use crate::traits::SeriesElement;
+use crate::utils::is_invalid;
 
 /// Computes the Stochastic Oscillator with configurable %K slowing.
 ///
@@ -309,16 +310,34 @@ pub fn stochastic_fast<T: SeriesElement>(
     validate_stochastic_inputs(high, low, close, k_period, d_period)?;
 
     let n = close.len();
-    let mut k = vec![T::nan(); n];
-    let mut d = vec![T::nan(); n];
 
-    // Compute raw %K values
-    compute_raw_k(high, low, close, k_period, &mut k)?;
+    // Fast path: single-pass NaN check (combined to avoid 3 separate iterations)
+    let mut has_nan = false;
+    for i in 0..n {
+        if is_invalid(high[i]) || is_invalid(low[i]) || is_invalid(close[i]) {
+            has_nan = true;
+            break;
+        }
+    }
 
-    // Compute %D as SMA of %K
-    compute_sma_of_series(&k, d_period, k_period - 1, &mut d)?;
-
-    Ok(StochasticOutput { k, d })
+    if has_nan {
+        // Slow path: proper NaN handling using cached extrema
+        let mut k = vec![T::nan(); n];
+        let mut d = vec![T::nan(); n];
+        compute_raw_k(high, low, close, k_period, &mut k)?;
+        compute_sma_of_series(&k, d_period, k_period - 1, &mut d)?;
+        Ok(StochasticOutput { k, d })
+    } else {
+        // Fast path: streaming single-pass implementation with uninit buffers
+        let mut k = Vec::with_capacity(n);
+        let mut d = Vec::with_capacity(n);
+        unsafe {
+            k.set_len(n);
+            d.set_len(n);
+        }
+        compute_stochastic_fast_streaming(high, low, close, k_period, d_period, &mut k, &mut d)?;
+        Ok(StochasticOutput { k, d })
+    }
 }
 
 /// Computes the Fast Stochastic Oscillator into pre-allocated output buffers.
@@ -534,21 +553,46 @@ pub fn stochastic_full<T: SeriesElement>(
     validate_stochastic_full_inputs(high, low, close, k_period, slow_k_period, d_period)?;
 
     let n = close.len();
-    let mut raw_k = vec![T::nan(); n];
-    let mut k = vec![T::nan(); n];
-    let mut d = vec![T::nan(); n];
 
-    // Step 1: Compute raw %K values
-    compute_raw_k(high, low, close, k_period, &mut raw_k)?;
+    // Fast path: single-pass NaN check (combined to avoid 3 separate iterations)
+    let mut has_nan = false;
+    for i in 0..n {
+        if is_invalid(high[i]) || is_invalid(low[i]) || is_invalid(close[i]) {
+            has_nan = true;
+            break;
+        }
+    }
 
-    // Step 2: Compute smoothed %K (SMA of raw %K)
-    compute_sma_of_series(&raw_k, slow_k_period, k_period - 1, &mut k)?;
-
-    // Step 3: Compute %D (SMA of smoothed %K)
-    let k_start_idx = k_period + slow_k_period - 2;
-    compute_sma_of_series(&k, d_period, k_start_idx, &mut d)?;
-
-    Ok(StochasticOutput { k, d })
+    if has_nan {
+        // Slow path: proper NaN handling
+        let mut k = vec![T::nan(); n];
+        let mut d = vec![T::nan(); n];
+        let mut raw_k = vec![T::nan(); n];
+        compute_raw_k(high, low, close, k_period, &mut raw_k)?;
+        compute_sma_of_series(&raw_k, slow_k_period, k_period - 1, &mut k)?;
+        let k_start_idx = k_period + slow_k_period - 2;
+        compute_sma_of_series(&k, d_period, k_start_idx, &mut d)?;
+        Ok(StochasticOutput { k, d })
+    } else {
+        // Fast path: streaming single-pass implementation with uninit buffers
+        let mut k = Vec::with_capacity(n);
+        let mut d = Vec::with_capacity(n);
+        unsafe {
+            k.set_len(n);
+            d.set_len(n);
+        }
+        compute_stochastic_full_streaming(
+            high,
+            low,
+            close,
+            k_period,
+            slow_k_period,
+            d_period,
+            &mut k,
+            &mut d,
+        )?;
+        Ok(StochasticOutput { k, d })
+    }
 }
 
 /// Computes the Full Stochastic Oscillator into pre-allocated output buffers.
@@ -733,13 +777,621 @@ fn validate_stochastic_full_inputs<T: SeriesElement>(
     Ok(())
 }
 
-/// Computes raw %K values using rolling extrema.
+// =============================================================================
+// Streaming Single-Pass Implementation
+// =============================================================================
+
+/// Fixed-capacity ring buffer for monotonic deque indices.
+/// More efficient than VecDeque for tight loops.
+struct IdxRing {
+    buf: Vec<usize>,
+    head: usize,
+    len: usize,
+}
+
+impl IdxRing {
+    #[inline]
+    fn new(cap: usize) -> Self {
+        Self {
+            buf: vec![0; cap.max(1)],
+            head: 0,
+            len: 0,
+        }
+    }
+
+    #[inline]
+    fn cap(&self) -> usize {
+        self.buf.len()
+    }
+
+    #[inline]
+    fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    #[inline]
+    fn front(&self) -> usize {
+        debug_assert!(!self.is_empty());
+        self.buf[self.head]
+    }
+
+    #[inline]
+    fn back_pos(&self) -> usize {
+        (self.head + self.len - 1) % self.cap()
+    }
+
+    #[inline]
+    fn back(&self) -> usize {
+        debug_assert!(!self.is_empty());
+        self.buf[self.back_pos()]
+    }
+
+    #[inline]
+    fn pop_front(&mut self) {
+        debug_assert!(!self.is_empty());
+        self.head = (self.head + 1) % self.cap();
+        self.len -= 1;
+    }
+
+    #[inline]
+    fn pop_back(&mut self) {
+        debug_assert!(!self.is_empty());
+        self.len -= 1;
+    }
+
+    #[inline]
+    fn push_back(&mut self, i: usize) {
+        debug_assert!(self.len < self.cap());
+        let pos = (self.head + self.len) % self.cap();
+        self.buf[pos] = i;
+        self.len += 1;
+    }
+}
+
+/// Rolling SMA using a ring buffer and running sum.
+/// O(1) per update, no recomputation.
+struct RollingSma<T: SeriesElement> {
+    buf: Vec<T>,
+    head: usize,
+    len: usize,
+    sum: T,
+    inv_period: T,
+}
+
+impl<T: SeriesElement> RollingSma<T> {
+    #[inline]
+    fn new(period: usize, inv_period: T) -> Self {
+        Self {
+            buf: vec![T::zero(); period.max(1)],
+            head: 0,
+            len: 0,
+            sum: T::zero(),
+            inv_period,
+        }
+    }
+
+    /// Push a value, returns Some(sma) when window is full.
+    #[inline]
+    fn push(&mut self, x: T) -> Option<T> {
+        let p = self.buf.len();
+        if self.len < p {
+            // Filling up
+            let pos = (self.head + self.len) % p;
+            self.buf[pos] = x;
+            self.sum = self.sum + x;
+            self.len += 1;
+            if self.len == p {
+                Some(self.sum * self.inv_period)
+            } else {
+                None
+            }
+        } else {
+            // Rolling
+            let old = self.buf[self.head];
+            self.buf[self.head] = x;
+            self.head = (self.head + 1) % p;
+            self.sum = self.sum + x - old;
+            Some(self.sum * self.inv_period)
+        }
+    }
+}
+
+/// Push index to min queue, maintaining monotonic increasing values.
+#[inline]
+fn push_min_queue<T: SeriesElement>(q: &mut IdxRing, i: usize, vals: &[T]) {
+    unsafe {
+        while !q.is_empty() {
+            let b = q.back();
+            if *vals.get_unchecked(b) <= *vals.get_unchecked(i) {
+                break;
+            }
+            q.pop_back();
+        }
+        q.push_back(i);
+    }
+}
+
+/// Push index to max queue, maintaining monotonic decreasing values.
+#[inline]
+fn push_max_queue<T: SeriesElement>(q: &mut IdxRing, i: usize, vals: &[T]) {
+    unsafe {
+        while !q.is_empty() {
+            let b = q.back();
+            if *vals.get_unchecked(b) >= *vals.get_unchecked(i) {
+                break;
+            }
+            q.pop_back();
+        }
+        q.push_back(i);
+    }
+}
+
+/// Remove expired indices from front of queue.
+#[inline]
+fn pop_expired(q: &mut IdxRing, window_start: usize) {
+    while !q.is_empty() && q.front() < window_start {
+        q.pop_front();
+    }
+}
+
+/// Streaming single-pass Fast Stochastic implementation.
+/// Uses monotonic deques for O(n) rolling min/max + streaming SMA for %D.
+/// No intermediate allocations.
+#[inline(never)]
+fn compute_stochastic_fast_streaming<T: SeriesElement>(
+    high: &[T],
+    low: &[T],
+    close: &[T],
+    k_period: usize,
+    d_period: usize,
+    k_out: &mut [T],
+    d_out: &mut [T],
+) -> Result<()> {
+    let n = close.len();
+    let fifty = T::from_f64(50.0)?;
+    let inv_d_period = T::from_f64(1.0 / d_period as f64)?;
+
+    // Fill initial NaN values
+    let k_start = k_period - 1;
+    let d_start = k_start + d_period - 1;
+    k_out[..k_start].fill(T::nan());
+    d_out[..d_start.min(n)].fill(T::nan());
+
+    // Initialize monotonic deques
+    let mut min_q = IdxRing::new(k_period);
+    let mut max_q = IdxRing::new(k_period);
+
+    // Initialize rolling SMA for %D
+    let mut sma_d = RollingSma::new(d_period, inv_d_period);
+
+    // Single pass through data
+    for i in 0..n {
+        // Expire old indices from front
+        if i >= k_period {
+            let ws = i + 1 - k_period;
+            pop_expired(&mut min_q, ws);
+            pop_expired(&mut max_q, ws);
+        }
+
+        // Push current index to deques
+        push_min_queue(&mut min_q, i, low);
+        push_max_queue(&mut max_q, i, high);
+
+        // Emit %K when window is ready
+        if i >= k_start {
+            // Ensure we've expired old indices
+            if i >= k_period {
+                let ws = i + 1 - k_period;
+                pop_expired(&mut min_q, ws);
+                pop_expired(&mut max_q, ws);
+            }
+
+            unsafe {
+                let ll = *low.get_unchecked(min_q.front());
+                let hh = *high.get_unchecked(max_q.front());
+                let range = hh - ll;
+
+                let fk = if range > T::zero() {
+                    (*close.get_unchecked(i) - ll) / range * T::from_f64(100.0)?
+                } else {
+                    fifty
+                };
+
+                *k_out.get_unchecked_mut(i) = fk;
+
+                // Stream into SMA for %D
+                if let Some(fd) = sma_d.push(fk) {
+                    let d_idx = i;
+                    *d_out.get_unchecked_mut(d_idx) = fd;
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Streaming single-pass Full Stochastic implementation.
+/// Uses monotonic deques for rolling min/max + cascaded SMAs.
+#[inline(never)]
+fn compute_stochastic_full_streaming<T: SeriesElement>(
+    high: &[T],
+    low: &[T],
+    close: &[T],
+    k_period: usize,
+    slow_k_period: usize,
+    d_period: usize,
+    k_out: &mut [T],
+    d_out: &mut [T],
+) -> Result<()> {
+    let n = close.len();
+    let fifty = T::from_f64(50.0)?;
+    let inv_slow_k = T::from_f64(1.0 / slow_k_period as f64)?;
+    let inv_d_period = T::from_f64(1.0 / d_period as f64)?;
+
+    // Compute output start indices
+    let k_start = k_period - 1;
+    let slow_k_start = k_start + slow_k_period - 1;
+    let d_start = slow_k_start + d_period - 1;
+
+    // Fill initial NaN values
+    k_out[..slow_k_start.min(n)].fill(T::nan());
+    d_out[..d_start.min(n)].fill(T::nan());
+
+    // Initialize monotonic deques for rolling min/max
+    let mut min_q = IdxRing::new(k_period);
+    let mut max_q = IdxRing::new(k_period);
+
+    // Initialize cascaded rolling SMAs
+    let mut sma_slow_k = RollingSma::new(slow_k_period, inv_slow_k);
+    let mut sma_d = RollingSma::new(d_period, inv_d_period);
+
+    // Single pass through data
+    for i in 0..n {
+        // Expire old indices
+        if i >= k_period {
+            let ws = i + 1 - k_period;
+            pop_expired(&mut min_q, ws);
+            pop_expired(&mut max_q, ws);
+        }
+
+        // Push current index to deques
+        push_min_queue(&mut min_q, i, low);
+        push_max_queue(&mut max_q, i, high);
+
+        // Compute fastK when window is ready
+        if i >= k_start {
+            if i >= k_period {
+                let ws = i + 1 - k_period;
+                pop_expired(&mut min_q, ws);
+                pop_expired(&mut max_q, ws);
+            }
+
+            unsafe {
+                let ll = *low.get_unchecked(min_q.front());
+                let hh = *high.get_unchecked(max_q.front());
+                let range = hh - ll;
+
+                let fast_k = if range > T::zero() {
+                    (*close.get_unchecked(i) - ll) / range * T::from_f64(100.0)?
+                } else {
+                    fifty
+                };
+
+                // Stream fastK into slow_k SMA
+                if let Some(slow_k) = sma_slow_k.push(fast_k) {
+                    *k_out.get_unchecked_mut(i) = slow_k;
+
+                    // Stream slow_k into %D SMA
+                    if let Some(d) = sma_d.push(slow_k) {
+                        *d_out.get_unchecked_mut(i) = d;
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Fused computation of Full Stochastic (raw %K → Slow %K → %D).
+///
+/// Three passes: raw %K, SMA for slow %K, SMA for %D.
+/// Uses inverse multiply for SMA, no per-element NaN checks.
+/// Note: Kept for reference; streaming version is used in production.
+#[allow(dead_code)]
+#[inline(never)]
+fn compute_stochastic_full_fused<T: SeriesElement>(
+    high: &[T],
+    low: &[T],
+    close: &[T],
+    k_period: usize,
+    slow_k_period: usize,
+    d_period: usize,
+    k_out: &mut [T],
+    d_out: &mut [T],
+) -> Result<()> {
+    let n = close.len();
+    let inv_hundred = T::from_f64(0.01)?;
+    let inv_slow_k = T::from_f64(1.0 / slow_k_period as f64)?;
+    let inv_d_period = T::from_f64(1.0 / d_period as f64)?;
+    let fifty = T::from_f64(50.0)?;
+
+    // We need a temp buffer for raw %K values
+    // Use uninit - we only read indices that we write to (k_start..n)
+    let mut raw_k = Vec::with_capacity(n);
+    unsafe { raw_k.set_len(n); }
+
+    // ===== Pass 1: Compute raw %K using TA-Lib cached extrema =====
+    let mut highest_idx = 0usize;
+    let mut lowest_idx = 0usize;
+    let mut highest = high[0];
+    let mut lowest = low[0];
+
+    for j in 1..k_period {
+        if high[j] > highest {
+            highest = high[j];
+            highest_idx = j;
+        }
+        if low[j] < lowest {
+            lowest = low[j];
+            lowest_idx = j;
+        }
+    }
+
+    let mut diff = (highest - lowest) * inv_hundred;
+    let k_start = k_period - 1;
+
+    if diff > T::zero() {
+        raw_k[k_start] = (close[k_start] - lowest) / diff;
+    } else {
+        raw_k[k_start] = fifty;
+    }
+
+    for today in k_period..n {
+        let trailing_idx = today + 1 - k_period;
+
+        let tmp_low = low[today];
+        if lowest_idx < trailing_idx {
+            lowest_idx = trailing_idx;
+            lowest = low[lowest_idx];
+            for j in (trailing_idx + 1)..=today {
+                if low[j] < lowest {
+                    lowest = low[j];
+                    lowest_idx = j;
+                }
+            }
+            diff = (highest - lowest) * inv_hundred;
+        } else if tmp_low <= lowest {
+            lowest_idx = today;
+            lowest = tmp_low;
+            diff = (highest - lowest) * inv_hundred;
+        }
+
+        let tmp_high = high[today];
+        if highest_idx < trailing_idx {
+            highest_idx = trailing_idx;
+            highest = high[highest_idx];
+            for j in (trailing_idx + 1)..=today {
+                if high[j] > highest {
+                    highest = high[j];
+                    highest_idx = j;
+                }
+            }
+            diff = (highest - lowest) * inv_hundred;
+        } else if tmp_high >= highest {
+            highest_idx = today;
+            highest = tmp_high;
+            diff = (highest - lowest) * inv_hundred;
+        }
+
+        if diff > T::zero() {
+            raw_k[today] = (close[today] - lowest) / diff;
+        } else {
+            raw_k[today] = fifty;
+        }
+    }
+
+    // ===== Pass 2: Compute Slow %K = SMA(raw_k, slow_k_period) =====
+    let slow_k_start = k_start + slow_k_period - 1;
+
+    // Set initial NaN values for k_out
+    k_out[..slow_k_start.min(n)].fill(T::nan());
+
+    if slow_k_start >= n {
+        return Ok(());
+    }
+
+    let mut sum = T::zero();
+    for j in k_start..=slow_k_start {
+        sum = sum + raw_k[j];
+    }
+    k_out[slow_k_start] = sum * inv_slow_k;
+
+    for i in (slow_k_start + 1)..n {
+        let old_value = raw_k[i - slow_k_period];
+        let new_value = raw_k[i];
+        sum = sum + new_value - old_value;
+        k_out[i] = sum * inv_slow_k;
+    }
+
+    // ===== Pass 3: Compute %D = SMA(slow_k, d_period) =====
+    let d_start = slow_k_start + d_period - 1;
+
+    // Set initial NaN values for d_out
+    d_out[..d_start.min(n)].fill(T::nan());
+
+    if d_start >= n {
+        return Ok(());
+    }
+
+    let mut sum_d = T::zero();
+    for j in slow_k_start..=d_start {
+        sum_d = sum_d + k_out[j];
+    }
+    d_out[d_start] = sum_d * inv_d_period;
+
+    for i in (d_start + 1)..n {
+        let old_value = k_out[i - d_period];
+        let new_value = k_out[i];
+        sum_d = sum_d + new_value - old_value;
+        d_out[i] = sum_d * inv_d_period;
+    }
+
+    Ok(())
+}
+
+/// Fused computation of Fast Stochastic (%K and %D).
+///
+/// Combines raw %K computation with SMA for %D in a single optimized flow.
+/// Uses TA-Lib style cached extrema for O(n) amortized performance.
+/// No per-element NaN checks in the hot path - uses inverse multiply for SMA.
+/// Note: Kept for reference; streaming version is used in production.
+#[allow(dead_code)]
+#[inline(never)]
+fn compute_stochastic_fast_fused<T: SeriesElement>(
+    high: &[T],
+    low: &[T],
+    close: &[T],
+    k_period: usize,
+    d_period: usize,
+    k_out: &mut [T],
+    d_out: &mut [T],
+) -> Result<()> {
+    let n = close.len();
+    let inv_hundred = T::from_f64(0.01)?;
+    let inv_d_period = T::from_f64(1.0 / d_period as f64)?;
+    let fifty = T::from_f64(50.0)?;
+
+    // ===== Pass 1: Compute raw %K using TA-Lib cached extrema =====
+
+    // Set initial NaN values for lookback period
+    let k_start = k_period - 1;
+    k_out[..k_start].fill(T::nan());
+
+    // Initialize by scanning the first k_period window
+    let mut highest_idx = 0usize;
+    let mut lowest_idx = 0usize;
+    let mut highest = high[0];
+    let mut lowest = low[0];
+
+    for j in 1..k_period {
+        if high[j] > highest {
+            highest = high[j];
+            highest_idx = j;
+        }
+        if low[j] < lowest {
+            lowest = low[j];
+            lowest_idx = j;
+        }
+    }
+
+    // Precompute diff = (highest - lowest) / 100 like TA-Lib
+    let mut diff = (highest - lowest) * inv_hundred;
+
+    // First %K value
+    let k_start = k_period - 1;
+    if diff > T::zero() {
+        k_out[k_start] = (close[k_start] - lowest) / diff;
+    } else {
+        k_out[k_start] = fifty;
+    }
+
+    // Compute remaining %K values using unchecked access for performance
+    // SAFETY: All indices are guaranteed in bounds by loop construction
+    unsafe {
+        for today in k_period..n {
+            let trailing_idx = today + 1 - k_period;
+
+            // Update lowest low (check if cached min fell out of window)
+            let tmp_low = *low.get_unchecked(today);
+            if lowest_idx < trailing_idx {
+                lowest_idx = trailing_idx;
+                lowest = *low.get_unchecked(lowest_idx);
+                for j in (trailing_idx + 1)..=today {
+                    let val = *low.get_unchecked(j);
+                    if val < lowest {
+                        lowest = val;
+                        lowest_idx = j;
+                    }
+                }
+                diff = (highest - lowest) * inv_hundred;
+            } else if tmp_low <= lowest {
+                lowest_idx = today;
+                lowest = tmp_low;
+                diff = (highest - lowest) * inv_hundred;
+            }
+
+            // Update highest high (check if cached max fell out of window)
+            let tmp_high = *high.get_unchecked(today);
+            if highest_idx < trailing_idx {
+                highest_idx = trailing_idx;
+                highest = *high.get_unchecked(highest_idx);
+                for j in (trailing_idx + 1)..=today {
+                    let val = *high.get_unchecked(j);
+                    if val > highest {
+                        highest = val;
+                        highest_idx = j;
+                    }
+                }
+                diff = (highest - lowest) * inv_hundred;
+            } else if tmp_high >= highest {
+                highest_idx = today;
+                highest = tmp_high;
+                diff = (highest - lowest) * inv_hundred;
+            }
+
+            // Compute %K
+            if diff > T::zero() {
+                *k_out.get_unchecked_mut(today) = (*close.get_unchecked(today) - lowest) / diff;
+            } else {
+                *k_out.get_unchecked_mut(today) = fifty;
+            }
+        }
+    }
+
+    // ===== Pass 2: Compute %D as SMA of %K using inverse multiply =====
+
+    let d_start = k_start + d_period - 1; // First valid %D index
+
+    // Set initial NaN values for %D lookback period
+    d_out[..d_start.min(n)].fill(T::nan());
+
+    if d_start >= n {
+        return Ok(());
+    }
+
+    // Compute initial sum for first %D window
+    // SAFETY: Indices are in bounds (k_start..=d_start and d_start < n verified above)
+    let mut sum = T::zero();
+    unsafe {
+        for j in k_start..=d_start {
+            sum = sum + *k_out.get_unchecked(j);
+        }
+        *d_out.get_unchecked_mut(d_start) = sum * inv_d_period;
+
+        // Rolling SMA for remaining %D values
+        for i in (d_start + 1)..n {
+            let old_value = *k_out.get_unchecked(i - d_period);
+            let new_value = *k_out.get_unchecked(i);
+            sum = sum + new_value - old_value;
+            *d_out.get_unchecked_mut(i) = sum * inv_d_period;
+        }
+    }
+
+    Ok(())
+}
+
+/// Computes raw %K values using cached extrema (TA-Lib style).
 ///
 /// %K = 100 * (Close - Lowest Low) / (Highest High - Lowest Low)
 ///
-/// Uses a fused O(n×k) approach computing both highest high and lowest low in
-/// a single pass through each window. This is more efficient than two separate
-/// passes through `rolling_max` and `rolling_min`.
+/// Uses a cached extrema approach with conditional rescanning (like TA-Lib):
+/// - Track the index/value of current highest high and lowest low
+/// - When extremum falls out of window, rescan the window
+/// - Otherwise, just compare new value with cached extremum
+///
+/// This achieves amortized O(n) performance on typical market data.
 fn compute_raw_k<T: SeriesElement>(
     high: &[T],
     low: &[T],
@@ -748,50 +1400,119 @@ fn compute_raw_k<T: SeriesElement>(
     output: &mut [T],
 ) -> Result<()> {
     let hundred = T::from_f64(100.0)?;
+    let fifty = T::from_f64(50.0)?;
     let n = close.len();
 
-    // For each position starting from k_period - 1
-    for i in (k_period - 1)..n {
-        let window_start = i + 1 - k_period;
+    // Initialize by scanning the first window
+    let mut highest_idx = 0usize;
+    let mut lowest_idx = 0usize;
+    let mut highest = high[0];
+    let mut lowest = low[0];
+    let mut has_nan = is_invalid(high[0]) || is_invalid(low[0]);
 
-        if close[i].is_nan() {
-            output[i] = T::nan();
-            continue;
+    for j in 1..k_period {
+        if is_invalid(high[j]) || is_invalid(low[j]) {
+            has_nan = true;
+        } else if !has_nan {
+            if high[j] > highest {
+                highest = high[j];
+                highest_idx = j;
+            }
+            if low[j] < lowest {
+                lowest = low[j];
+                lowest_idx = j;
+            }
         }
+    }
 
-        // Find highest high and lowest low in the window, tracking NaNs
-        let mut highest_high = high[window_start];
-        let mut lowest_low = low[window_start];
-        let mut has_nan = highest_high.is_nan() || lowest_low.is_nan();
+    // Compute first %K
+    let first_idx = k_period - 1;
+    if has_nan || is_invalid(close[first_idx]) {
+        output[first_idx] = T::nan();
+    } else {
+        let range = highest - lowest;
+        if range > T::zero() {
+            output[first_idx] = hundred * (close[first_idx] - lowest) / range;
+        } else {
+            output[first_idx] = fifty;
+        }
+    }
 
-        for j in (window_start + 1)..=i {
-            let high_value = high[j];
-            let low_value = low[j];
-            if high_value.is_nan() || low_value.is_nan() {
-                has_nan = true;
-                break;
+    // Process remaining values
+    for today in k_period..n {
+        let trailing_idx = today + 1 - k_period;
+        let prev_trailing = trailing_idx - 1;
+
+        // Check if old extrema are still valid
+        let rescan_high = highest_idx < trailing_idx;
+        let rescan_low = lowest_idx < trailing_idx;
+
+        // Track NaN: check if leaving value was NaN or new value is NaN
+        let leaving_was_nan =
+            is_invalid(high[prev_trailing]) || is_invalid(low[prev_trailing]);
+        let entering_is_nan = is_invalid(high[today]) || is_invalid(low[today]);
+
+        if leaving_was_nan && !entering_is_nan {
+            // Might need rescan if window was tainted by NaN
+            has_nan = false;
+            for j in trailing_idx..=today {
+                if is_invalid(high[j]) || is_invalid(low[j]) {
+                    has_nan = true;
+                    break;
+                }
             }
-            if high_value > highest_high {
-                highest_high = high_value;
-            }
-            if low_value < lowest_low {
-                lowest_low = low_value;
-            }
+        } else if entering_is_nan {
+            has_nan = true;
         }
 
         if has_nan {
-            output[i] = T::nan();
+            output[today] = T::nan();
+            // We need to rescan next time since we don't know extrema
+            highest_idx = 0;
+            lowest_idx = 0;
             continue;
         }
 
+        // Update highest high
+        if rescan_high {
+            highest_idx = trailing_idx;
+            highest = high[trailing_idx];
+            for j in (trailing_idx + 1)..=today {
+                if high[j] > highest {
+                    highest = high[j];
+                    highest_idx = j;
+                }
+            }
+        } else if high[today] >= highest {
+            highest_idx = today;
+            highest = high[today];
+        }
+
+        // Update lowest low
+        if rescan_low {
+            lowest_idx = trailing_idx;
+            lowest = low[trailing_idx];
+            for j in (trailing_idx + 1)..=today {
+                if low[j] < lowest {
+                    lowest = low[j];
+                    lowest_idx = j;
+                }
+            }
+        } else if low[today] <= lowest {
+            lowest_idx = today;
+            lowest = low[today];
+        }
+
         // Compute %K
-        let range = highest_high - lowest_low;
-        if range > T::zero() {
-            output[i] = hundred * (close[i] - lowest_low) / range;
+        if is_invalid(close[today]) {
+            output[today] = T::nan();
         } else {
-            // If high == low for the entire period, price hasn't moved
-            // Return 50 (neutral) as is common practice
-            output[i] = T::from_f64(50.0)?;
+            let range = highest - lowest;
+            if range > T::zero() {
+                output[today] = hundred * (close[today] - lowest) / range;
+            } else {
+                output[today] = fifty;
+            }
         }
     }
 
@@ -822,7 +1543,7 @@ fn compute_sma_of_series<T: SeriesElement>(
     let mut sum = T::zero();
     let mut nan_count = 0usize;
     for &value in input.iter().skip(start_idx).take(period) {
-        if value.is_nan() {
+        if is_invalid(value) {
             nan_count += 1;
         } else {
             sum = sum + value;
@@ -839,13 +1560,13 @@ fn compute_sma_of_series<T: SeriesElement>(
         let old_value = input[i - period];
         let new_value = input[i];
 
-        if new_value.is_nan() {
+        if is_invalid(new_value) {
             nan_count += 1;
         } else {
             sum = sum + new_value;
         }
 
-        if old_value.is_nan() {
+        if is_invalid(old_value) {
             nan_count -= 1;
         } else {
             sum = sum - old_value;

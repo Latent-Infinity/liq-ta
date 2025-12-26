@@ -13,6 +13,7 @@
 
 use crate::error::{Error, Result};
 use crate::traits::SeriesElement;
+use crate::utils::is_invalid;
 
 /// Computes the lookback period for MIDPOINT.
 ///
@@ -133,17 +134,27 @@ pub fn midpoint_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [
         let window_start = i + 1 - period;
         let mut highest = data[window_start];
         let mut lowest = data[window_start];
+        let mut has_nan = is_invalid(highest) || is_invalid(lowest);
 
         for j in (window_start + 1)..=i {
-            if data[j] > highest {
-                highest = data[j];
+            let value = data[j];
+            if is_invalid(value) {
+                has_nan = true;
+                break;
             }
-            if data[j] < lowest {
-                lowest = data[j];
+            if value > highest {
+                highest = value;
+            }
+            if value < lowest {
+                lowest = value;
             }
         }
 
-        output[i] = (highest + lowest) / two;
+        if has_nan {
+            output[i] = T::nan();
+        } else {
+            output[i] = (highest + lowest) / two;
+        }
     }
 
     Ok(())

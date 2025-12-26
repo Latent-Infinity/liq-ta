@@ -20,6 +20,7 @@
 
 use crate::error::{Error, Result};
 use crate::traits::SeriesElement;
+use crate::utils::is_invalid;
 
 // =============================================================================
 // VAR (Variance)
@@ -91,24 +92,55 @@ pub fn var_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -
         output[i] = T::nan();
     }
 
-    // Calculate variance using sum of squares method
-    for i in lookback..n {
-        let start = i + 1 - period;
+    // Use rolling variance: Var(X) = E[X²] - E[X]²
+    // Maintain sum and sum of squares, update incrementally
 
-        // Calculate mean
-        let mut sum = T::zero();
-        for j in start..=i {
-            sum = sum + data[j];
+    // Calculate initial sums for first window
+    let mut sum = T::zero();
+    let mut sum_sq = T::zero();
+    let mut invalid_count = 0usize;
+    for i in 0..period {
+        if is_invalid(data[i]) {
+            invalid_count += 1;
+        } else {
+            sum = sum + data[i];
+            sum_sq = sum_sq + data[i] * data[i];
         }
+    }
+
+    // Calculate first variance: Var = (sum_sq / n) - (sum / n)²
+    if invalid_count > 0 {
+        output[lookback] = T::nan();
+    } else {
         let mean = sum / period_t;
+        output[lookback] = sum_sq / period_t - mean * mean;
+    }
 
-        // Calculate variance
-        let mut var_sum = T::zero();
-        for j in start..=i {
-            let diff = data[j] - mean;
-            var_sum = var_sum + diff * diff;
+    // Rolling calculation for remaining values
+    for i in (lookback + 1)..n {
+        let old_val = data[i - period];
+        let new_val = data[i];
+
+        if is_invalid(old_val) {
+            invalid_count = invalid_count.saturating_sub(1);
+        } else {
+            sum = sum - old_val;
+            sum_sq = sum_sq - old_val * old_val;
         }
-        output[i] = var_sum / period_t;
+        if is_invalid(new_val) {
+            invalid_count += 1;
+        } else {
+            sum = sum + new_val;
+            sum_sq = sum_sq + new_val * new_val;
+        }
+
+        if invalid_count > 0 {
+            output[i] = T::nan();
+            continue;
+        }
+
+        let mean = sum / period_t;
+        output[i] = sum_sq / period_t - mean * mean;
     }
 
     Ok(())
@@ -216,9 +248,18 @@ pub fn correl_into<T: SeriesElement>(
         // Calculate means
         let mut sum_x = T::zero();
         let mut sum_y = T::zero();
+        let mut has_invalid = false;
         for j in start..=i {
+            if is_invalid(data0[j]) || is_invalid(data1[j]) {
+                has_invalid = true;
+                break;
+            }
             sum_x = sum_x + data0[j];
             sum_y = sum_y + data1[j];
+        }
+        if has_invalid {
+            output[i] = T::nan();
+            continue;
         }
         let mean_x = sum_x / period_t;
         let mean_y = sum_y / period_t;
@@ -348,9 +389,18 @@ pub fn beta_into<T: SeriesElement>(
         // Calculate means
         let mut sum_x = T::zero();
         let mut sum_y = T::zero();
+        let mut has_invalid = false;
         for j in start..=i {
+            if is_invalid(data0[j]) || is_invalid(data1[j]) {
+                has_invalid = true;
+                break;
+            }
             sum_x = sum_x + data0[j];
             sum_y = sum_y + data1[j];
+        }
+        if has_invalid {
+            output[i] = T::nan();
+            continue;
         }
         let mean_x = sum_x / period_t;
         let mean_y = sum_y / period_t;
@@ -454,10 +504,20 @@ fn linear_regression_core<T: SeriesElement>(
         // Calculate Σy and Σxy
         let mut sum_y = T::zero();
         let mut sum_xy = T::zero();
+        let mut has_invalid = false;
         for (x_idx, j) in (start..=i).enumerate() {
+            if is_invalid(data[j]) {
+                has_invalid = true;
+                break;
+            }
             let x = T::from_usize(x_idx)?;
             sum_y = sum_y + data[j];
             sum_xy = sum_xy + x * data[j];
+        }
+        if has_invalid {
+            slope_out[i] = T::nan();
+            intercept_out[i] = T::nan();
+            continue;
         }
 
         // slope = (n * Σxy - Σx * Σy) / denom

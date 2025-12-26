@@ -144,10 +144,12 @@ pub fn kama_full_into<T: SeriesElement>(
     }
 
     let lookback = kama_lookback(period);
+    let n = data.len();
+    let zero = T::zero();
 
     // Fill lookback period with NaN
-    for i in 0..lookback {
-        output[i] = T::nan();
+    for out in output.iter_mut().take(lookback) {
+        *out = T::nan();
     }
 
     // Calculate smoothing constants
@@ -156,26 +158,39 @@ pub fn kama_full_into<T: SeriesElement>(
     let slow_sc = two / T::from_usize(slow_period + 1)?;
     let sc_diff = fast_sc - slow_sc;
 
+    // Pre-compute all absolute changes (volatility components)
+    // abs_changes[i] = |data[i] - data[i-1]| for i >= 1
+    let mut abs_changes = vec![zero; n];
+    for i in 1..n {
+        abs_changes[i] = (data[i] - data[i - 1]).abs();
+    }
+
     // Initialize KAMA with first valid value
     let mut kama = data[lookback];
     output[lookback] = kama;
 
+    // Early exit if only one valid output
+    if lookback + 1 >= n {
+        return Ok(());
+    }
+
+    // Initialize volatility for first calculation (at lookback + 1)
+    // Volatility window for i = lookback + 1 = period is [1, period]
+    let mut volatility = zero;
+    for j in 1..=period {
+        volatility = volatility + abs_changes[j];
+    }
+
     // Calculate KAMA for remaining values
-    for i in (lookback + 1)..data.len() {
+    for i in (lookback + 1)..n {
         // Calculate change (direction)
         let change = (data[i] - data[i - period]).abs();
 
-        // Calculate volatility (sum of absolute changes)
-        let mut volatility = T::zero();
-        for j in (i - period + 1)..=i {
-            volatility = volatility + (data[j] - data[j - 1]).abs();
-        }
-
         // Calculate Efficiency Ratio
-        let er = if volatility > T::zero() {
+        let er = if volatility > zero {
             change / volatility
         } else {
-            T::zero()
+            zero
         };
 
         // Calculate Smoothing Constant
@@ -185,6 +200,15 @@ pub fn kama_full_into<T: SeriesElement>(
         // Update KAMA
         kama = kama + sc * (data[i] - kama);
         output[i] = kama;
+
+        // Update volatility for next iteration (if not last)
+        if i + 1 < n {
+            // Window slides: remove oldest, add newest
+            // Current window was [i - period + 1, i]
+            // Next window is [i - period + 2, i + 1]
+            let old_idx = i - period + 1;
+            volatility = volatility - abs_changes[old_idx] + abs_changes[i + 1];
+        }
     }
 
     Ok(())

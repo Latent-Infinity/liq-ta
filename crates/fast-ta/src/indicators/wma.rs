@@ -38,6 +38,7 @@
 
 use crate::error::{Error, Result};
 use crate::traits::SeriesElement;
+use crate::utils::is_invalid;
 
 /// Returns the lookback period for WMA.
 ///
@@ -145,7 +146,7 @@ pub fn wma<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
     let mut has_nan = false;
 
     for (i, &value) in data.iter().take(period).enumerate() {
-        if value.is_nan() {
+        if is_invalid(value) {
             has_nan = true;
         }
         let weight = T::from_usize(i + 1)?; // Weight 1 for oldest, period for newest
@@ -166,8 +167,8 @@ pub fn wma<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
         let old_value = data[i - period];
 
         // Check if NaN is entering or exiting the window
-        let nan_entering = new_value.is_nan();
-        let nan_exiting = old_value.is_nan();
+        let nan_entering = is_invalid(new_value);
+        let nan_exiting = is_invalid(old_value);
 
         if nan_entering {
             has_nan = true;
@@ -177,7 +178,7 @@ pub fn wma<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
             // Window had NaN - check if it's clear now
             if nan_exiting && !nan_entering {
                 // The exiting value was NaN - check if window is now NaN-free
-                has_nan = data[i - period + 1..=i].iter().any(|v| v.is_nan());
+                has_nan = data[i - period + 1..=i].iter().any(|&v| is_invalid(v));
 
                 if !has_nan {
                     // Window is now clean - recompute sums from scratch
@@ -274,7 +275,7 @@ pub fn wma_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -
     let mut has_nan = false;
 
     for (i, &value) in data.iter().take(period).enumerate() {
-        if value.is_nan() {
+        if is_invalid(value) {
             has_nan = true;
         }
         let weight = T::from_usize(i + 1)?;
@@ -296,8 +297,8 @@ pub fn wma_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -
         let new_value = data[i];
         let old_value = data[i - period];
 
-        let nan_entering = new_value.is_nan();
-        let nan_exiting = old_value.is_nan();
+        let nan_entering = is_invalid(new_value);
+        let nan_exiting = is_invalid(old_value);
 
         if nan_entering {
             has_nan = true;
@@ -305,7 +306,7 @@ pub fn wma_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -
 
         if has_nan {
             if nan_exiting && !nan_entering {
-                has_nan = data[i - period + 1..=i].iter().any(|v| v.is_nan());
+                has_nan = data[i - period + 1..=i].iter().any(|&v| is_invalid(v));
 
                 if !has_nan {
                     weighted_sum = T::zero();
@@ -532,7 +533,7 @@ mod tests {
         let data = vec![1.0_f64, f64::INFINITY, 3.0, 4.0, 5.0];
         let result = wma(&data, 3).unwrap();
 
-        assert!(result[2].is_infinite()); // Window contains infinity
+        assert!(result[2].is_nan()); // Window contains infinity
     }
 
     // ==================== Error Handling Tests ====================
