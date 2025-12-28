@@ -163,6 +163,7 @@ pub mod batch;
 pub mod error;
 pub mod indicators;
 pub mod kernels;
+pub mod precision;
 pub mod prelude;
 pub mod traits;
 pub mod utils;
@@ -170,6 +171,7 @@ pub mod utils;
 // Re-export commonly used types at crate root
 pub use error::{Error, Result};
 pub use indicators::sma;
+pub use precision::{current_precision_mode, set_precision_mode, with_precision_mode, PrecisionMode};
 pub use traits::{SeriesElement, ValidatedInput};
 pub use utils::{
     approx_eq, approx_eq_relative, count_nan_prefix, count_nans, EPSILON, LOOSE_EPSILON,

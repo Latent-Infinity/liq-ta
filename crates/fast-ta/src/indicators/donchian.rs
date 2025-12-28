@@ -51,7 +51,6 @@
 use crate::error::{Error, Result};
 use crate::kernels::rolling_extrema::{rolling_max, rolling_min};
 use crate::traits::SeriesElement;
-use crate::utils::is_invalid;
 
 /// Output structure for Donchian Channels containing upper, middle, and lower bands.
 #[derive(Debug, Clone)]
@@ -316,10 +315,10 @@ fn compute_donchian_core<T: SeriesElement>(
     let mut nan_low = 0usize;
 
     for i in 0..period {
-        if is_invalid(high[i]) {
+        if !high[i].is_finite() {
             nan_high += 1;
         }
-        if is_invalid(low[i]) {
+        if !low[i].is_finite() {
             nan_low += 1;
         }
     }
@@ -341,16 +340,16 @@ fn compute_donchian_core<T: SeriesElement>(
         let next = i + 1;
         if next < n {
             let out_idx = next - period;
-            if is_invalid(high[out_idx]) {
+            if !high[out_idx].is_finite() {
                 nan_high = nan_high.saturating_sub(1);
             }
-            if is_invalid(low[out_idx]) {
+            if !low[out_idx].is_finite() {
                 nan_low = nan_low.saturating_sub(1);
             }
-            if is_invalid(high[next]) {
+            if !high[next].is_finite() {
                 nan_high += 1;
             }
-            if is_invalid(low[next]) {
+            if !low[next].is_finite() {
                 nan_low += 1;
             }
         }

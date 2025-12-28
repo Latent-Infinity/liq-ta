@@ -16,7 +16,6 @@
 
 use crate::error::{Error, Result};
 use crate::traits::SeriesElement;
-use crate::utils::is_invalid;
 
 /// Computes the lookback period for MOM.
 ///
@@ -92,17 +91,16 @@ pub fn mom_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -
     }
 
     // Calculate MOM: current price - price N periods ago
-    // Use contiguous slices with iterator pattern for auto-vectorization
+    // Optimization: do subtraction first, then check result.is_finite()
+    // This catches NaN/Inf in either operand with a single check instead of 4
+    // IEEE 754: NaN - x = NaN, x - NaN = NaN, Inf - finite = Inf, finite - Inf = -Inf
     let lagged = &data[..n - period];
     let current = &data[period..];
     let out_slice = &mut output[lookback..n];
 
     for ((out, cur), lag) in out_slice.iter_mut().zip(current.iter()).zip(lagged.iter()) {
-        if is_invalid(*cur) || is_invalid(*lag) {
-            *out = T::nan();
-        } else {
-            *out = *cur - *lag;
-        }
+        let result = *cur - *lag;
+        *out = if result.is_finite() { result } else { T::nan() };
     }
 
     Ok(())

@@ -29,6 +29,18 @@
 //! - Because OBV is cumulative, once NaN appears, subsequent values remain NaN.
 //! - The first value is `volume[0]` unless `close[0]` or `volume[0]` is NaN.
 //!
+//! # Precision Behavior
+//!
+//! When `PrecisionMode::High` is active and input type is `f32`:
+//! - Cumulative OBV sum maintained in `f64`
+//! - Prevents precision loss with large volume sums
+//! - Final value converted to `f32` per bar
+//!
+//! **Tolerance**: hybrid(rel=1e-4, abs=1.0) when comparing f32 High mode to f64 reference.
+//! OBV can grow very large, so absolute tolerance of 1.0 is reasonable.
+//!
+//! For maximum precision over long series, use `f64` input directly.
+//!
 //! # Example
 //!
 //! ```
@@ -48,8 +60,15 @@
 //! ```
 
 use crate::error::{Error, Result};
+use crate::precision::{current_precision_mode, PrecisionMode};
 use crate::traits::SeriesElement;
-use crate::utils::is_invalid;
+
+/// Returns true if we should use f64 precision for the given type.
+#[inline]
+fn use_f64_precision<T: 'static>() -> bool {
+    use std::any::TypeId;
+    TypeId::of::<T>() == TypeId::of::<f32>() && current_precision_mode() == PrecisionMode::High
+}
 
 /// Returns the lookback period for OBV.
 ///
@@ -124,14 +143,18 @@ pub const fn obv_min_len() -> usize {
 /// }
 /// ```
 #[must_use = "this returns a Result with OBV values, which should be used"]
-pub fn obv<T: SeriesElement>(close: &[T], volume: &[T]) -> Result<Vec<T>> {
+pub fn obv<T: SeriesElement + 'static>(close: &[T], volume: &[T]) -> Result<Vec<T>> {
     validate_inputs(close, volume)?;
 
     let n = close.len();
     let mut output = Vec::with_capacity(n);
 
     // Compute OBV
-    compute_obv_core(close, volume, &mut output);
+    if use_f64_precision::<T>() {
+        compute_obv_core_f64(close, volume, &mut output)?;
+    } else {
+        compute_obv_core(close, volume, &mut output);
+    }
 
     Ok(output)
 }
@@ -172,7 +195,11 @@ pub fn obv<T: SeriesElement>(close: &[T], volume: &[T]) -> Result<Vec<T>> {
 /// assert_eq!(valid_count, 5); // All values are valid
 /// ```
 #[must_use = "this returns a Result with the count of valid OBV values"]
-pub fn obv_into<T: SeriesElement>(close: &[T], volume: &[T], output: &mut [T]) -> Result<usize> {
+pub fn obv_into<T: SeriesElement + 'static>(
+    close: &[T],
+    volume: &[T],
+    output: &mut [T],
+) -> Result<usize> {
     validate_inputs(close, volume)?;
 
     let n = close.len();
@@ -186,7 +213,11 @@ pub fn obv_into<T: SeriesElement>(close: &[T], volume: &[T], output: &mut [T]) -
     }
 
     // Compute OBV directly into buffer
-    compute_obv_core_into(close, volume, output);
+    if use_f64_precision::<T>() {
+        compute_obv_core_into_f64(close, volume, output)?;
+    } else {
+        compute_obv_core_into(close, volume, output);
+    }
 
     Ok(n)
 }
@@ -219,21 +250,36 @@ fn compute_obv_core<T: SeriesElement>(close: &[T], volume: &[T], output: &mut Ve
     // First OBV value is the first volume
     let first_vol = volume[0];
     let first_close = close[0];
-    if is_invalid(first_vol) || is_invalid(first_close) {
-        output.push(T::nan());
-    } else {
-        output.push(first_vol);
-    }
+    let mut nan_mode = !first_vol.is_finite() || !first_close.is_finite();
+    let mut obv = first_vol;
+    output.push(if nan_mode { T::nan() } else { obv });
 
-    // Compute subsequent values
+    // Inline checking with early NaN propagation
+    // Branch predictor optimizes the common case (valid data)
+    // Once NaN detected, remaining values stay NaN (cumulative indicator)
+    let mut prev_close = first_close;
     for i in 1..n {
-        let prev_obv = output[i - 1];
+        if nan_mode {
+            output.push(T::nan());
+            continue;
+        }
+
         let curr_close = close[i];
-        let prev_close = close[i - 1];
         let curr_vol = volume[i];
 
-        let new_obv = compute_obv_step(prev_obv, prev_close, curr_close, curr_vol);
-        output.push(new_obv);
+        if !curr_close.is_finite() || !curr_vol.is_finite() {
+            nan_mode = true;
+            output.push(T::nan());
+            continue;
+        }
+
+        if curr_close > prev_close {
+            obv = obv + curr_vol;
+        } else if curr_close < prev_close {
+            obv = obv - curr_vol;
+        }
+        output.push(obv);
+        prev_close = curr_close;
     }
 }
 
@@ -248,42 +294,143 @@ fn compute_obv_core_into<T: SeriesElement>(close: &[T], volume: &[T], output: &m
     // First OBV value is the first volume
     let first_vol = volume[0];
     let first_close = close[0];
-    output[0] = if is_invalid(first_vol) || is_invalid(first_close) {
-        T::nan()
-    } else {
-        first_vol
-    };
+    let mut nan_mode = !first_vol.is_finite() || !first_close.is_finite();
+    let mut obv = first_vol;
+    output[0] = if nan_mode { T::nan() } else { obv };
 
-    // Compute subsequent values
+    // Inline checking with early NaN propagation
+    let mut prev_close = first_close;
     for i in 1..n {
-        let prev_obv = output[i - 1];
+        if nan_mode {
+            output[i] = T::nan();
+            continue;
+        }
+
         let curr_close = close[i];
-        let prev_close = close[i - 1];
         let curr_vol = volume[i];
 
-        output[i] = compute_obv_step(prev_obv, prev_close, curr_close, curr_vol);
+        if !curr_close.is_finite() || !curr_vol.is_finite() {
+            nan_mode = true;
+            output[i] = T::nan();
+            continue;
+        }
+
+        if curr_close > prev_close {
+            obv = obv + curr_vol;
+        } else if curr_close < prev_close {
+            obv = obv - curr_vol;
+        }
+        output[i] = obv;
+        prev_close = curr_close;
     }
 }
 
-/// Compute single OBV step.
-#[inline]
-fn compute_obv_step<T: SeriesElement>(prev_obv: T, prev_close: T, curr_close: T, curr_vol: T) -> T {
-    // If any value is NaN, output stays NaN for cumulative consistency.
-    if is_invalid(prev_obv)
-        || is_invalid(curr_close)
-        || is_invalid(prev_close)
-        || is_invalid(curr_vol)
-    {
-        return T::nan();
+/// Core OBV computation with f64 accumulator that allocates a new vector.
+fn compute_obv_core_f64<T: SeriesElement>(
+    close: &[T],
+    volume: &[T],
+    output: &mut Vec<T>,
+) -> Result<()> {
+    let n = close.len();
+
+    if n == 0 {
+        return Ok(());
     }
 
-    if curr_close > prev_close {
-        prev_obv + curr_vol
-    } else if curr_close < prev_close {
-        prev_obv - curr_vol
-    } else {
-        prev_obv
+    // First OBV value is the first volume
+    let first_vol = volume[0];
+    let first_close = close[0];
+    let mut nan_mode = !first_vol.is_finite() || !first_close.is_finite();
+
+    // Use f64 accumulator for cumulative sum precision
+    let mut obv_accum: f64 = first_vol.to_f64().unwrap_or(0.0);
+    output.push(if nan_mode { T::nan() } else { T::from_f64(obv_accum)? });
+
+    // Inline checking with early NaN propagation
+    let mut prev_close_f64 = first_close.to_f64().unwrap_or(0.0);
+    for i in 1..n {
+        if nan_mode {
+            output.push(T::nan());
+            continue;
+        }
+
+        let curr_close = close[i];
+        let curr_vol = volume[i];
+
+        if !curr_close.is_finite() || !curr_vol.is_finite() {
+            nan_mode = true;
+            output.push(T::nan());
+            continue;
+        }
+
+        let curr_close_f64 = curr_close.to_f64().unwrap_or(0.0);
+        let curr_vol_f64 = curr_vol.to_f64().unwrap_or(0.0);
+
+        if curr_close_f64 > prev_close_f64 {
+            obv_accum += curr_vol_f64;
+        } else if curr_close_f64 < prev_close_f64 {
+            obv_accum -= curr_vol_f64;
+        }
+
+        output.push(T::from_f64(obv_accum)?);
+        prev_close_f64 = curr_close_f64;
     }
+
+    Ok(())
+}
+
+/// Core OBV computation with f64 accumulator into pre-allocated buffer.
+fn compute_obv_core_into_f64<T: SeriesElement>(
+    close: &[T],
+    volume: &[T],
+    output: &mut [T],
+) -> Result<()> {
+    let n = close.len();
+
+    if n == 0 {
+        return Ok(());
+    }
+
+    // First OBV value is the first volume
+    let first_vol = volume[0];
+    let first_close = close[0];
+    let mut nan_mode = !first_vol.is_finite() || !first_close.is_finite();
+
+    // Use f64 accumulator for cumulative sum precision
+    let mut obv_accum: f64 = first_vol.to_f64().unwrap_or(0.0);
+    output[0] = if nan_mode { T::nan() } else { T::from_f64(obv_accum)? };
+
+    // Inline checking with early NaN propagation
+    let mut prev_close_f64 = first_close.to_f64().unwrap_or(0.0);
+    for i in 1..n {
+        if nan_mode {
+            output[i] = T::nan();
+            continue;
+        }
+
+        let curr_close = close[i];
+        let curr_vol = volume[i];
+
+        if !curr_close.is_finite() || !curr_vol.is_finite() {
+            nan_mode = true;
+            output[i] = T::nan();
+            continue;
+        }
+
+        let curr_close_f64 = curr_close.to_f64().unwrap_or(0.0);
+        let curr_vol_f64 = curr_vol.to_f64().unwrap_or(0.0);
+
+        if curr_close_f64 > prev_close_f64 {
+            obv_accum += curr_vol_f64;
+        } else if curr_close_f64 < prev_close_f64 {
+            obv_accum -= curr_vol_f64;
+        }
+
+        output[i] = T::from_f64(obv_accum)?;
+        prev_close_f64 = curr_close_f64;
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

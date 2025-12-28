@@ -29,6 +29,15 @@
 //!
 //! The first `period - 1` values are NaN (insufficient lookback data).
 //!
+//! # Precision Behavior
+//!
+//! When `PrecisionMode::High` is active and input type is `f32`:
+//! - %R calculation (division by range) performed in `f64`
+//! - Prevents precision loss when range is very small
+//!
+//! **Tolerance**: abs(0.01) when comparing f32 High mode to f64 reference.
+//! Williams %R is bounded -100 to 0, so absolute tolerance is appropriate.
+//!
 //! # Example
 //!
 //! ```
@@ -50,8 +59,42 @@
 
 use crate::error::{Error, Result};
 use crate::kernels::rolling_extrema::{rolling_max, rolling_min};
+use crate::precision::{current_precision_mode, PrecisionMode};
 use crate::traits::SeriesElement;
 use crate::utils::is_invalid;
+
+/// Returns true if we should use f64 precision for the given type.
+///
+/// Uses f64 when:
+/// - Input type is f32 AND PrecisionMode is High
+#[inline]
+fn use_f64_precision<T: 'static>() -> bool {
+    use std::any::TypeId;
+    TypeId::of::<T>() == TypeId::of::<f32>() && current_precision_mode() == PrecisionMode::High
+}
+
+/// Computes %R = -100 × (highest_high - close) / range with appropriate precision.
+///
+/// For f32 inputs in High precision mode, the calculation is performed in f64.
+#[inline]
+fn compute_williams_r_value<T: SeriesElement + 'static>(
+    highest_high: T,
+    close: T,
+    range: T,
+    neg_hundred: T,
+) -> Result<T> {
+    if use_f64_precision::<T>() {
+        let hh_f64 = highest_high.to_f64().unwrap_or(0.0);
+        let c_f64 = close.to_f64().unwrap_or(0.0);
+        let range_f64 = range.to_f64().unwrap_or(1.0);
+        // Match original: neg_hundred * (hh - c) / range
+        let wr = -100.0 * (hh_f64 - c_f64) / range_f64;
+        T::from_f64(wr)
+    } else {
+        // Match original: neg_hundred * (hh - c) / range
+        Ok(neg_hundred * (highest_high - close) / range)
+    }
+}
 
 /// Returns the lookback period for Williams %R.
 ///
@@ -270,7 +313,7 @@ fn validate_inputs<T: SeriesElement>(
 }
 
 /// Core Williams %R computation.
-fn compute_williams_r_core<T: SeriesElement>(
+fn compute_williams_r_core<T: SeriesElement + 'static>(
     high: &[T],
     low: &[T],
     close: &[T],
@@ -303,7 +346,7 @@ fn compute_williams_r_core<T: SeriesElement>(
             output[i] = neg_fifty;
         } else {
             // %R = -100 × (HH - Close) / (HH - LL)
-            output[i] = neg_hundred * (hh - c) / range;
+            output[i] = compute_williams_r_value(hh, c, range, neg_hundred)?;
         }
     }
 

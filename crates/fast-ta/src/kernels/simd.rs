@@ -28,7 +28,6 @@
 
 use std::simd::{f32x8, f64x4, num::SimdFloat};
 
-use crate::utils::is_invalid;
 
 /// The number of f64 elements processed per SIMD lane.
 pub const F64_LANES: usize = 4;
@@ -168,14 +167,14 @@ pub fn min_f64(data: &[f64]) -> f64 {
 
     // SIMD accumulator initialized to infinity
     let mut acc = f64x4::splat(f64::INFINITY);
+    let mut invalid_mask = f64x4::splat(0.0).is_nan();
 
     // Process chunks of 4 elements
     for i in 0..chunks {
         let offset = i * F64_LANES;
         let chunk = f64x4::from_slice(&data[offset..offset + F64_LANES]);
-        if !chunk.is_finite().all() {
-            invalid = true;
-        }
+        let mask = chunk.is_finite();
+        invalid_mask |= !mask;
         acc = acc.simd_min(chunk);
     }
 
@@ -185,15 +184,16 @@ pub fn min_f64(data: &[f64]) -> f64 {
     // Handle remaining elements
     let tail_start = chunks * F64_LANES;
     for &value in &data[tail_start..tail_start + remainder] {
-        if is_invalid(value) {
+        if value.is_finite() {
+            if value < min_val {
+                min_val = value;
+            }
+        } else {
             invalid = true;
-        }
-        if value < min_val || is_invalid(min_val) {
-            min_val = value;
         }
     }
 
-    if invalid { f64::NAN } else { min_val }
+    if invalid || invalid_mask.any() { f64::NAN } else { min_val }
 }
 
 /// Computes the maximum of a slice of f64 values using SIMD.
@@ -221,14 +221,14 @@ pub fn max_f64(data: &[f64]) -> f64 {
 
     // SIMD accumulator initialized to negative infinity
     let mut acc = f64x4::splat(f64::NEG_INFINITY);
+    let mut invalid_mask = f64x4::splat(0.0).is_nan();
 
     // Process chunks of 4 elements
     for i in 0..chunks {
         let offset = i * F64_LANES;
         let chunk = f64x4::from_slice(&data[offset..offset + F64_LANES]);
-        if !chunk.is_finite().all() {
-            invalid = true;
-        }
+        let mask = chunk.is_finite();
+        invalid_mask |= !mask;
         acc = acc.simd_max(chunk);
     }
 
@@ -238,15 +238,16 @@ pub fn max_f64(data: &[f64]) -> f64 {
     // Handle remaining elements
     let tail_start = chunks * F64_LANES;
     for &value in &data[tail_start..tail_start + remainder] {
-        if is_invalid(value) {
+        if value.is_finite() {
+            if value > max_val {
+                max_val = value;
+            }
+        } else {
             invalid = true;
-        }
-        if value > max_val || is_invalid(max_val) {
-            max_val = value;
         }
     }
 
-    if invalid { f64::NAN } else { max_val }
+    if invalid || invalid_mask.any() { f64::NAN } else { max_val }
 }
 
 /// Computes the minimum of a slice of f32 values using SIMD.
@@ -261,13 +262,13 @@ pub fn min_f32(data: &[f32]) -> f32 {
     let mut invalid = false;
 
     let mut acc = f32x8::splat(f32::INFINITY);
+    let mut invalid_mask = f32x8::splat(0.0).is_nan();
 
     for i in 0..chunks {
         let offset = i * F32_LANES;
         let chunk = f32x8::from_slice(&data[offset..offset + F32_LANES]);
-        if !chunk.is_finite().all() {
-            invalid = true;
-        }
+        let mask = chunk.is_finite();
+        invalid_mask |= !mask;
         acc = acc.simd_min(chunk);
     }
 
@@ -275,15 +276,16 @@ pub fn min_f32(data: &[f32]) -> f32 {
 
     let tail_start = chunks * F32_LANES;
     for &value in &data[tail_start..tail_start + remainder] {
-        if is_invalid(value) {
+        if value.is_finite() {
+            if value < min_val {
+                min_val = value;
+            }
+        } else {
             invalid = true;
-        }
-        if value < min_val || is_invalid(min_val) {
-            min_val = value;
         }
     }
 
-    if invalid { f32::NAN } else { min_val }
+    if invalid || invalid_mask.any() { f32::NAN } else { min_val }
 }
 
 /// Computes the maximum of a slice of f32 values using SIMD.
@@ -298,13 +300,13 @@ pub fn max_f32(data: &[f32]) -> f32 {
     let mut invalid = false;
 
     let mut acc = f32x8::splat(f32::NEG_INFINITY);
+    let mut invalid_mask = f32x8::splat(0.0).is_nan();
 
     for i in 0..chunks {
         let offset = i * F32_LANES;
         let chunk = f32x8::from_slice(&data[offset..offset + F32_LANES]);
-        if !chunk.is_finite().all() {
-            invalid = true;
-        }
+        let mask = chunk.is_finite();
+        invalid_mask |= !mask;
         acc = acc.simd_max(chunk);
     }
 
@@ -312,15 +314,16 @@ pub fn max_f32(data: &[f32]) -> f32 {
 
     let tail_start = chunks * F32_LANES;
     for &value in &data[tail_start..tail_start + remainder] {
-        if is_invalid(value) {
+        if value.is_finite() {
+            if value > max_val {
+                max_val = value;
+            }
+        } else {
             invalid = true;
-        }
-        if value > max_val || is_invalid(max_val) {
-            max_val = value;
         }
     }
 
-    if invalid { f32::NAN } else { max_val }
+    if invalid || invalid_mask.any() { f32::NAN } else { max_val }
 }
 
 /// Computes sum and count of non-NaN elements simultaneously using SIMD.
@@ -347,16 +350,15 @@ pub fn sum_and_count_f64(data: &[f64]) -> (f64, usize) {
         let offset = i * F64_LANES;
         let chunk = f64x4::from_slice(&data[offset..offset + F64_LANES]);
 
-        // Count finite values in this chunk
-        let arr = chunk.to_array();
-        for &val in &arr {
-            if val.is_finite() {
+        let mask = chunk.is_finite();
+        let mask_arr = mask.to_array();
+        for &lane_valid in &mask_arr {
+            if lane_valid {
                 count += 1;
             }
         }
 
         // Replace non-finite values with 0 for sum
-        let mask = chunk.is_finite();
         let zero = f64x4::splat(0.0);
         let clean_chunk = mask.select(chunk, zero);
         sum_acc += clean_chunk;

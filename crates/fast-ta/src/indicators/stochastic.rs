@@ -47,6 +47,16 @@
 //! - **Rolling Extrema**: Uses monotonic deque for O(n) computation when
 //!   `k_period` ≥ 25, naive O(n×k) for smaller periods (per E04 findings).
 //!
+//! # Precision Behavior
+//!
+//! When `PrecisionMode::High` is active and input type is `f32`:
+//! - %K calculation (division by range) performed in `f64`
+//! - Prevents precision loss when range is very small
+//! - SMA smoothing for %D uses `f64` accumulators
+//!
+//! **Tolerance**: abs(0.01) when comparing f32 High mode to f64 reference.
+//! Stochastic is bounded 0-100, so absolute tolerance is appropriate.
+//!
 //! # Example
 //!
 //! ```
@@ -69,8 +79,66 @@
 //! ```
 
 use crate::error::{Error, Result};
+use crate::indicators::sma::sma_from_idx_into;
+use crate::precision::{current_precision_mode, PrecisionMode};
 use crate::traits::SeriesElement;
 use crate::utils::is_invalid;
+
+/// Returns true if we should use f64 precision for the given type.
+///
+/// Uses f64 when:
+/// - Input type is f32 AND PrecisionMode is High
+#[inline]
+fn use_f64_precision<T: 'static>() -> bool {
+    use std::any::TypeId;
+    TypeId::of::<T>() == TypeId::of::<f32>() && current_precision_mode() == PrecisionMode::High
+}
+
+/// Computes %K with appropriate precision.
+///
+/// For f32 inputs in High precision mode, the calculation is performed in f64.
+/// There are two formula variants used in different code paths:
+/// - `compute_percent_k_mul_first`: 100 * (close - lowest) / range (for cached extrema path)
+/// - `compute_percent_k_div_first`: (close - lowest) / range * 100 (for streaming path)
+#[inline]
+fn compute_percent_k_mul_first<T: SeriesElement + 'static>(
+    close: T,
+    lowest: T,
+    range: T,
+    hundred: T,
+) -> Result<T> {
+    if use_f64_precision::<T>() {
+        let close_f64 = close.to_f64().unwrap_or(0.0);
+        let lowest_f64 = lowest.to_f64().unwrap_or(0.0);
+        let range_f64 = range.to_f64().unwrap_or(1.0);
+        // Match original: hundred * (close - lowest) / range
+        let k = 100.0 * (close_f64 - lowest_f64) / range_f64;
+        T::from_f64(k)
+    } else {
+        // Match original: hundred * (close - lowest) / range
+        Ok(hundred * (close - lowest) / range)
+    }
+}
+
+#[inline]
+fn compute_percent_k_div_first<T: SeriesElement + 'static>(
+    close: T,
+    lowest: T,
+    range: T,
+    hundred: T,
+) -> Result<T> {
+    if use_f64_precision::<T>() {
+        let close_f64 = close.to_f64().unwrap_or(0.0);
+        let lowest_f64 = lowest.to_f64().unwrap_or(0.0);
+        let range_f64 = range.to_f64().unwrap_or(1.0);
+        // Match original: (close - lowest) / range * 100
+        let k = (close_f64 - lowest_f64) / range_f64 * 100.0;
+        T::from_f64(k)
+    } else {
+        // Match original: (close - lowest) / range * hundred
+        Ok((close - lowest) / range * hundred)
+    }
+}
 
 /// Computes the Stochastic Oscillator with configurable %K slowing.
 ///
@@ -938,7 +1006,7 @@ fn pop_expired(q: &mut IdxRing, window_start: usize) {
 /// Uses monotonic deques for O(n) rolling min/max + streaming SMA for %D.
 /// No intermediate allocations.
 #[inline(never)]
-fn compute_stochastic_fast_streaming<T: SeriesElement>(
+fn compute_stochastic_fast_streaming<T: SeriesElement + 'static>(
     high: &[T],
     low: &[T],
     close: &[T],
@@ -990,9 +1058,10 @@ fn compute_stochastic_fast_streaming<T: SeriesElement>(
                 let ll = *low.get_unchecked(min_q.front());
                 let hh = *high.get_unchecked(max_q.front());
                 let range = hh - ll;
+                let cl = *close.get_unchecked(i);
 
                 let fk = if range > T::zero() {
-                    (*close.get_unchecked(i) - ll) / range * T::from_f64(100.0)?
+                    compute_percent_k_div_first(cl, ll, range, T::from_f64(100.0)?)?
                 } else {
                     fifty
                 };
@@ -1014,7 +1083,7 @@ fn compute_stochastic_fast_streaming<T: SeriesElement>(
 /// Streaming single-pass Full Stochastic implementation.
 /// Uses monotonic deques for rolling min/max + cascaded SMAs.
 #[inline(never)]
-fn compute_stochastic_full_streaming<T: SeriesElement>(
+fn compute_stochastic_full_streaming<T: SeriesElement + 'static>(
     high: &[T],
     low: &[T],
     close: &[T],
@@ -1071,9 +1140,10 @@ fn compute_stochastic_full_streaming<T: SeriesElement>(
                 let ll = *low.get_unchecked(min_q.front());
                 let hh = *high.get_unchecked(max_q.front());
                 let range = hh - ll;
+                let cl = *close.get_unchecked(i);
 
                 let fast_k = if range > T::zero() {
-                    (*close.get_unchecked(i) - ll) / range * T::from_f64(100.0)?
+                    compute_percent_k_div_first(cl, ll, range, T::from_f64(100.0)?)?
                 } else {
                     fifty
                 };
@@ -1392,7 +1462,7 @@ fn compute_stochastic_fast_fused<T: SeriesElement>(
 /// - Otherwise, just compare new value with cached extremum
 ///
 /// This achieves amortized O(n) performance on typical market data.
-fn compute_raw_k<T: SeriesElement>(
+fn compute_raw_k<T: SeriesElement + 'static>(
     high: &[T],
     low: &[T],
     close: &[T],
@@ -1432,7 +1502,7 @@ fn compute_raw_k<T: SeriesElement>(
     } else {
         let range = highest - lowest;
         if range > T::zero() {
-            output[first_idx] = hundred * (close[first_idx] - lowest) / range;
+            output[first_idx] = compute_percent_k_mul_first(close[first_idx], lowest, range, hundred)?;
         } else {
             output[first_idx] = fifty;
         }
@@ -1509,7 +1579,7 @@ fn compute_raw_k<T: SeriesElement>(
         } else {
             let range = highest - lowest;
             if range > T::zero() {
-                output[today] = hundred * (close[today] - lowest) / range;
+                output[today] = compute_percent_k_mul_first(close[today], lowest, range, hundred)?;
             } else {
                 output[today] = fifty;
             }
@@ -1521,65 +1591,18 @@ fn compute_raw_k<T: SeriesElement>(
 
 /// Computes SMA of a series starting from a given index.
 ///
-/// This handles NaN values in the input by only computing SMA where
+/// This is a thin wrapper around [`sma_from_idx_into`] for internal use.
+/// Handles NaN values in the input by only computing SMA where
 /// enough valid values exist.
-fn compute_sma_of_series<T: SeriesElement>(
+#[inline]
+fn compute_sma_of_series<T: SeriesElement + 'static>(
     input: &[T],
     period: usize,
     start_idx: usize,
     output: &mut [T],
 ) -> Result<()> {
-    let n = input.len();
-    let period_t = T::from_usize(period)?;
-
-    // First valid output is at start_idx + period - 1
-    let first_valid_idx = start_idx + period - 1;
-
-    if first_valid_idx >= n {
-        return Ok(());
-    }
-
-    // Compute initial sum, tracking NaN values
-    let mut sum = T::zero();
-    let mut nan_count = 0usize;
-    for &value in input.iter().skip(start_idx).take(period) {
-        if is_invalid(value) {
-            nan_count += 1;
-        } else {
-            sum = sum + value;
-        }
-    }
-    if nan_count == 0 {
-        output[first_valid_idx] = sum / period_t;
-    } else {
-        output[first_valid_idx] = T::nan();
-    }
-
-    // Rolling calculation
-    for i in (first_valid_idx + 1)..n {
-        let old_value = input[i - period];
-        let new_value = input[i];
-
-        if is_invalid(new_value) {
-            nan_count += 1;
-        } else {
-            sum = sum + new_value;
-        }
-
-        if is_invalid(old_value) {
-            nan_count -= 1;
-        } else {
-            sum = sum - old_value;
-        }
-
-        if nan_count == 0 {
-            output[i] = sum / period_t;
-        } else {
-            output[i] = T::nan();
-        }
-    }
-
-    Ok(())
+    // Delegate to the shared SMA implementation
+    sma_from_idx_into(input, period, start_idx, output).map(|_| ())
 }
 
 // ==================== Configuration Type ====================

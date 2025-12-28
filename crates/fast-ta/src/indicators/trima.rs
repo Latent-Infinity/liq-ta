@@ -118,24 +118,174 @@ pub fn trima_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T])
         });
     }
 
-    let lookback = trima_lookback(period);
-
-    // Fill lookback period with NaN
-    for i in 0..lookback {
-        output[i] = T::nan();
-    }
-
     // For period 1, TRIMA equals the input
     if period == 1 {
-        for i in 0..data.len() {
-            output[i] = data[i];
-        }
+        output[..data.len()].copy_from_slice(data);
         return Ok(());
     }
 
+    let n = data.len();
+    let lookback = trima_lookback(period);
+
+    // Fill lookback period with NaN
+    output[..lookback].fill(T::nan());
+
+    // Check for NaN in data - if any, use slow path
+    let has_nan = data.iter().take(n).any(|&v| is_invalid(v));
+    if has_nan {
+        return trima_into_slow(data, period, output, lookback);
+    }
+
+    // Fast path: TA-Lib style incremental algorithm
+    // Uses numerator, numeratorSub, numeratorAdd for O(1) per-element updates
+    trima_into_fast(data, period, output, lookback)
+}
+
+/// Fast path for TRIMA using TA-Lib's incremental algorithm.
+/// Computes in O(1) per element instead of SMA of SMA.
+fn trima_into_fast<T: SeriesElement>(
+    data: &[T],
+    period: usize,
+    output: &mut [T],
+    lookback: usize,
+) -> Result<()> {
+    let n = data.len();
+
+    if period % 2 == 1 {
+        // Odd period logic
+        // Triangular weights: 1+2+3+...+(n/2+1)+...+2+1 = (n/2+1)^2
+        let i = period / 2;
+        let factor = 1.0 / ((i + 1) * (i + 1)) as f64;
+
+        let mut trailing_idx = 0usize;
+        let mut middle_idx = trailing_idx + i;
+        let mut today_idx = middle_idx + i;
+
+        // Initialize numerator and numeratorSub
+        let mut numerator = 0.0_f64;
+        let mut numerator_sub = 0.0_f64;
+
+        // Build initial numeratorSub and numerator from trailing to middle (descending)
+        for j in (trailing_idx..=middle_idx).rev() {
+            let temp_real = data[j].to_f64().unwrap_or(0.0);
+            numerator_sub += temp_real;
+            numerator += numerator_sub;
+        }
+
+        // Build numeratorAdd and add to numerator from (middle+1) to today
+        let mut numerator_add = 0.0_f64;
+        for j in (middle_idx + 1)..=today_idx {
+            let temp_real = data[j].to_f64().unwrap_or(0.0);
+            numerator_add += temp_real;
+            numerator += numerator_add;
+        }
+
+        // Write first output
+        let mut temp_real = data[trailing_idx].to_f64().unwrap_or(0.0);
+        output[lookback] = T::from_f64(numerator * factor)?;
+        trailing_idx += 1;
+        middle_idx += 1;
+        today_idx += 1;
+
+        // Main loop - O(1) per iteration
+        while today_idx < n {
+            // Step 1: Remove old trailing values
+            numerator -= numerator_sub;
+            numerator_sub -= temp_real;
+            temp_real = data[middle_idx].to_f64().unwrap_or(0.0);
+            numerator_sub += temp_real;
+
+            // Step 2: Add new leading values
+            numerator += numerator_add;
+            numerator_add -= temp_real;
+            temp_real = data[today_idx].to_f64().unwrap_or(0.0);
+            numerator_add += temp_real;
+
+            // Step 3: Add newest value
+            numerator += temp_real;
+
+            // Step 4: Output and advance
+            temp_real = data[trailing_idx].to_f64().unwrap_or(0.0);
+            output[today_idx] = T::from_f64(numerator * factor)?;
+
+            trailing_idx += 1;
+            middle_idx += 1;
+            today_idx += 1;
+        }
+    } else {
+        // Even period logic
+        // Triangular weights: 1+2+...+n/2+n/2+...+2+1 = n/2 * (n/2 + 1)
+        let i = period / 2;
+        let factor = 1.0 / (i * (i + 1)) as f64;
+
+        let mut trailing_idx = 0usize;
+        let mut middle_idx = trailing_idx + i - 1;
+        let mut today_idx = middle_idx + i;
+
+        // Initialize numerator and numeratorSub
+        let mut numerator = 0.0_f64;
+        let mut numerator_sub = 0.0_f64;
+
+        // Build initial numeratorSub and numerator from trailing to middle (descending)
+        for j in (trailing_idx..=middle_idx).rev() {
+            let temp_real = data[j].to_f64().unwrap_or(0.0);
+            numerator_sub += temp_real;
+            numerator += numerator_sub;
+        }
+
+        // Build numeratorAdd and add to numerator from (middle+1) to today
+        let mut numerator_add = 0.0_f64;
+        for j in (middle_idx + 1)..=today_idx {
+            let temp_real = data[j].to_f64().unwrap_or(0.0);
+            numerator_add += temp_real;
+            numerator += numerator_add;
+        }
+
+        // Write first output
+        let mut temp_real = data[trailing_idx].to_f64().unwrap_or(0.0);
+        output[lookback] = T::from_f64(numerator * factor)?;
+        trailing_idx += 1;
+        middle_idx += 1;
+        today_idx += 1;
+
+        // Main loop - O(1) per iteration (slightly different from odd)
+        while today_idx < n {
+            // Step 1: Remove old trailing values
+            numerator -= numerator_sub;
+            numerator_sub -= temp_real;
+            temp_real = data[middle_idx].to_f64().unwrap_or(0.0);
+            numerator_sub += temp_real;
+
+            // Step 2: Even period differs - subtract middle from add first
+            numerator_add -= temp_real;
+            numerator += numerator_add;
+            temp_real = data[today_idx].to_f64().unwrap_or(0.0);
+            numerator_add += temp_real;
+
+            // Step 3: Add newest value
+            numerator += temp_real;
+
+            // Step 4: Output and advance
+            temp_real = data[trailing_idx].to_f64().unwrap_or(0.0);
+            output[today_idx] = T::from_f64(numerator * factor)?;
+
+            trailing_idx += 1;
+            middle_idx += 1;
+            today_idx += 1;
+        }
+    }
+
+    Ok(())
+}
+
+/// Slow path for TRIMA with NaN propagation using SMA of SMA.
+fn trima_into_slow<T: SeriesElement>(
+    data: &[T],
+    period: usize,
+    output: &mut [T],
+    _lookback: usize,
+) -> Result<()> {
     // Calculate the periods for the two SMAs
-    // For odd: both = (period+1)/2
-    // For even: first = period/2 + 1, second = period/2
     let (sma1_period, sma2_period) = if period % 2 == 1 {
         let p = period.div_ceil(2);
         (p, p)
@@ -143,97 +293,100 @@ pub fn trima_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T])
         (period / 2 + 1, period / 2)
     };
 
-    // Compute first SMA
-    let sma1_len = data.len() - sma1_period + 1;
-    let mut sma1 = vec![T::nan(); sma1_len];
+    let n = data.len();
 
-    // First SMA value
-    let mut sum = T::zero();
-    let mut invalid_count = 0usize;
-    for i in 0..sma1_period {
-        if is_invalid(data[i]) {
-            invalid_count += 1;
-        } else {
-            sum = sum + data[i];
-        }
+    // Check if we have enough data for second SMA
+    if n < sma1_period {
+        return Ok(());
     }
-    let period1_t = T::from_usize(sma1_period)?;
-    sma1[0] = if invalid_count > 0 {
-        T::nan()
-    } else {
-        sum / period1_t
-    };
-
-    // Subsequent SMA1 values using rolling sum
-    for i in 1..sma1_len {
-        let old_value = data[i - 1];
-        let new_value = data[i + sma1_period - 1];
-        if is_invalid(old_value) {
-            invalid_count = invalid_count.saturating_sub(1);
-        } else {
-            sum = sum - old_value;
-        }
-        if is_invalid(new_value) {
-            invalid_count += 1;
-        } else {
-            sum = sum + new_value;
-        }
-        sma1[i] = if invalid_count > 0 {
-            T::nan()
-        } else {
-            sum / period1_t
-        };
-    }
-
-    // Compute second SMA of SMA1
-    if sma1.len() < sma2_period {
-        // Not enough SMA1 values for second smoothing
-        for i in lookback..data.len() {
-            output[i] = T::nan();
-        }
+    let sma1_valid_len = n - sma1_period + 1;
+    if sma1_valid_len < sma2_period {
         return Ok(());
     }
 
-    let sma2_len = sma1.len() - sma2_period + 1;
+    // Pre-compute reciprocals
+    let inv_period1 = T::one() / T::from_usize(sma1_period)?;
+    let inv_period2 = T::one() / T::from_usize(sma2_period)?;
 
-    // First SMA2 value
+    // Ring buffer for SMA1 values
+    let mut sma1_ring = vec![T::zero(); sma2_period];
+    let mut invalid1_ring = vec![0usize; sma2_period];
+    let mut ring_idx = 0usize;
+
+    // SMA1 rolling state
+    let mut sum1 = T::zero();
+    let mut invalid_count1 = 0usize;
+
+    // SMA2 rolling state
     let mut sum2 = T::zero();
     let mut invalid_count2 = 0usize;
-    for i in 0..sma2_period {
-        if is_invalid(sma1[i]) {
-            invalid_count2 += 1;
+    let mut sma1_count = 0usize;
+
+    // Initialize SMA1 sum for first window
+    for i in 0..sma1_period {
+        if is_invalid(data[i]) {
+            invalid_count1 += 1;
         } else {
-            sum2 = sum2 + sma1[i];
+            sum1 = sum1 + data[i];
         }
     }
-    let period2_t = T::from_usize(sma2_period)?;
 
-    // The first valid TRIMA is at index (sma1_period - 1) + (sma2_period - 1) = period - 1
-    output[lookback] = if invalid_count2 > 0 {
-        T::nan()
-    } else {
-        sum2 / period2_t
-    };
-
-    // Subsequent TRIMA values
-    for i in 1..sma2_len {
-        let old_value = sma1[i - 1];
-        let new_value = sma1[i + sma2_period - 1];
-        if is_invalid(old_value) {
-            invalid_count2 = invalid_count2.saturating_sub(1);
+    // Process all data positions where SMA1 is valid
+    for data_idx in (sma1_period - 1)..n {
+        let sma1_val = if invalid_count1 == 0 {
+            sum1 * inv_period1
         } else {
-            sum2 = sum2 - old_value;
+            T::nan()
+        };
+
+        let old_sma1 = sma1_ring[ring_idx];
+        let old_invalid1 = invalid1_ring[ring_idx];
+
+        sma1_ring[ring_idx] = sma1_val;
+        invalid1_ring[ring_idx] = invalid_count1;
+
+        if sma1_count >= sma2_period {
+            if old_invalid1 > 0 {
+                invalid_count2 -= 1;
+            } else {
+                sum2 = sum2 - old_sma1;
+            }
         }
-        if is_invalid(new_value) {
+
+        if invalid_count1 > 0 {
             invalid_count2 += 1;
         } else {
-            sum2 = sum2 + new_value;
+            sum2 = sum2 + sma1_val;
         }
-        output[lookback + i] = if invalid_count2 > 0 {
-            T::nan()
-        } else {
-            sum2 / period2_t
-        };
+
+        sma1_count += 1;
+
+        if sma1_count >= sma2_period {
+            if invalid_count2 == 0 {
+                output[data_idx] = sum2 * inv_period2;
+            } else {
+                output[data_idx] = T::nan();
+            }
+        }
+
+        ring_idx = (ring_idx + 1) % sma2_period;
+
+        if data_idx + 1 < n {
+            let new_value = data[data_idx + 1];
+            let old_value = data[data_idx + 1 - sma1_period];
+
+            if is_invalid(new_value) {
+                invalid_count1 += 1;
+            } else {
+                sum1 = sum1 + new_value;
+            }
+
+            if is_invalid(old_value) {
+                invalid_count1 -= 1;
+            } else {
+                sum1 = sum1 - old_value;
+            }
+        }
     }
 
     Ok(())
@@ -596,5 +749,28 @@ mod tests {
         for i in 4..10 {
             assert!(result[i].is_finite());
         }
+    }
+
+    #[test]
+    fn test_trima_infinity_propagation() {
+        // Test that infinity in the input produces NaN when in the window
+        let mut data: Vec<f64> = (0..120).map(|i| 100.0 + i as f64).collect();
+        data[25] = f64::INFINITY;
+
+        let result = trima(&data, 5).unwrap();
+
+        // Infinity at index 25 should produce NaN at indices where it's in the window
+        // With period 5, the effective window size spans multiple indices
+        assert!(
+            result[25].is_nan(),
+            "result[25] should be NaN when infinity is in window, got {}",
+            result[25]
+        );
+
+        // Values before infinity enters the window should be valid
+        assert!(result[20].is_finite(), "result[20] should be finite");
+
+        // Values after infinity leaves the window should recover
+        assert!(result[35].is_finite(), "result[35] should recover to finite");
     }
 }

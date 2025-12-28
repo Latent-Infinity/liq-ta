@@ -75,8 +75,19 @@
 //! ```
 
 use crate::error::{Error, Result};
+use crate::precision::{current_precision_mode, PrecisionMode};
 use crate::traits::SeriesElement;
 use crate::utils::is_invalid;
+
+/// Returns true if we should use f64 precision for the given type.
+///
+/// Uses f64 precision when:
+/// - Input type is f32 AND PrecisionMode is High
+#[inline]
+fn use_f64_precision<T: 'static>() -> bool {
+    use std::any::TypeId;
+    TypeId::of::<T>() == TypeId::of::<f32>() && current_precision_mode() == PrecisionMode::High
+}
 
 /// Returns the lookback period for ATR.
 ///
@@ -265,6 +276,12 @@ pub fn true_range_into<T: SeriesElement>(
 /// ATR measures market volatility by calculating the average of True Range values
 /// over a specified period, using Wilder's smoothing method.
 ///
+/// # Precision Behavior
+///
+/// When `PrecisionMode::High` is active and input type is `f32`:
+/// - ATR smoothing state is maintained in `f64` to prevent drift accumulation
+/// - Particularly important for long periods (> 14) where cumulative error builds
+///
 /// # Arguments
 ///
 /// * `high` - The high prices series
@@ -317,7 +334,12 @@ pub fn true_range_into<T: SeriesElement>(
 /// assert!(result[5] > 0.0); // ATR is always positive
 /// ```
 #[must_use = "this returns a Result with the ATR values, which should be used"]
-pub fn atr<T: SeriesElement>(high: &[T], low: &[T], close: &[T], period: usize) -> Result<Vec<T>> {
+pub fn atr<T: SeriesElement + 'static>(
+    high: &[T],
+    low: &[T],
+    close: &[T],
+    period: usize,
+) -> Result<Vec<T>> {
     // Validate inputs
     validate_atr_inputs(high, low, close, period)?;
 
@@ -373,7 +395,7 @@ pub fn atr<T: SeriesElement>(high: &[T], low: &[T], close: &[T], period: usize) 
 /// assert_eq!(valid_count, 6); // 11 - 5 = 6 valid values
 /// ```
 #[must_use = "this returns a Result with the count of valid ATR values"]
-pub fn atr_into<T: SeriesElement>(
+pub fn atr_into<T: SeriesElement + 'static>(
     high: &[T],
     low: &[T],
     close: &[T],
@@ -482,7 +504,24 @@ fn compute_true_range<T: SeriesElement>(high: T, low: T, prev_close: T) -> T {
 ///
 /// This function assumes all validation has been done and output is properly sized.
 /// It fills the output slice with ATR values starting at index `period`.
-fn compute_atr_core<T: SeriesElement>(
+///
+/// Dispatches to f64 precision path for f32 inputs in High precision mode.
+fn compute_atr_core<T: SeriesElement + 'static>(
+    high: &[T],
+    low: &[T],
+    close: &[T],
+    period: usize,
+    output: &mut [T],
+) -> Result<()> {
+    if use_f64_precision::<T>() {
+        compute_atr_core_f64(high, low, close, period, output)
+    } else {
+        compute_atr_core_native(high, low, close, period, output)
+    }
+}
+
+/// Core ATR computation using native precision.
+fn compute_atr_core_native<T: SeriesElement>(
     high: &[T],
     low: &[T],
     close: &[T],
@@ -513,6 +552,58 @@ fn compute_atr_core<T: SeriesElement>(
         let atr_current = (atr_prev * period_minus_one_t + tr) / period_t;
         output[i] = atr_current;
         atr_prev = atr_current;
+    }
+
+    Ok(())
+}
+
+/// Core ATR computation using f64 precision for smoothing state.
+///
+/// Uses f64 for the ATR state to prevent drift accumulation over long periods.
+/// TR computation is done in f64, smoothing state maintained in f64, output cast to T.
+fn compute_atr_core_f64<T: SeriesElement>(
+    high: &[T],
+    low: &[T],
+    close: &[T],
+    period: usize,
+    output: &mut [T],
+) -> Result<()> {
+    let n = high.len();
+    let period_f64 = period as f64;
+    let period_minus_one_f64 = (period - 1) as f64;
+
+    // Step 1: Calculate initial sum of True Range values in f64
+    let mut sum_tr: f64 = 0.0;
+    for i in 1..=period {
+        let tr = compute_true_range(high[i], low[i], close[i - 1]);
+        if is_invalid(tr) {
+            // If any TR in initial window is NaN, propagate it
+            output[period] = T::nan();
+            // Continue with NaN state
+            let mut atr_prev_f64 = f64::NAN;
+            for j in (period + 1)..n {
+                let tr_j = compute_true_range(high[j], low[j], close[j - 1]);
+                let tr_f64 = tr_j.to_f64().unwrap_or(f64::NAN);
+                atr_prev_f64 = (atr_prev_f64 * period_minus_one_f64 + tr_f64) / period_f64;
+                output[j] = T::from_f64(atr_prev_f64)?;
+            }
+            return Ok(());
+        }
+        sum_tr += tr.to_f64().unwrap_or(0.0);
+    }
+
+    // Calculate initial ATR (SMA of first period TR values) in f64
+    let mut atr_prev_f64 = sum_tr / period_f64;
+    output[period] = T::from_f64(atr_prev_f64)?;
+
+    // Step 2: Apply Wilder's smoothing with f64 state
+    for i in (period + 1)..n {
+        let tr = compute_true_range(high[i], low[i], close[i - 1]);
+        let tr_f64 = tr.to_f64().unwrap_or(f64::NAN);
+
+        // Wilder's formula in f64: ATR = (prev_ATR * (period-1) + TR) / period
+        atr_prev_f64 = (atr_prev_f64 * period_minus_one_f64 + tr_f64) / period_f64;
+        output[i] = T::from_f64(atr_prev_f64)?;
     }
 
     Ok(())

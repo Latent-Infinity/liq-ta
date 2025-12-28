@@ -52,6 +52,18 @@
 //! - **All losses (no gains)**: RSI = 0 (maximum bearish momentum)
 //! - **No movement (no gains or losses)**: RSI = 50 (neutral midpoint)
 //!
+//! # Precision Behavior
+//!
+//! When `PrecisionMode::High` is active and input type is `f32`:
+//! - Wilder smoothing state (avg_gain, avg_loss) maintained in `f64`
+//! - Prevents drift accumulation over long series
+//! - RSI computation and boundary checks performed in `f64`
+//!
+//! **Tolerance**: abs(0.01) when comparing f32 High mode to f64 reference.
+//! RSI is bounded 0-100, so absolute tolerance is appropriate.
+//!
+//! For maximum precision over very long series (>10,000 bars), use `f64` input directly.
+//!
 //! # Example
 //!
 //! ```
@@ -69,8 +81,16 @@
 //! ```
 
 use crate::error::{Error, Result};
+use crate::precision::{current_precision_mode, PrecisionMode};
 use crate::traits::SeriesElement;
 use crate::utils::is_invalid;
+
+/// Returns true if we should use f64 precision for the given type.
+#[inline]
+fn use_f64_precision<T: 'static>() -> bool {
+    use std::any::TypeId;
+    TypeId::of::<T>() == TypeId::of::<f32>() && current_precision_mode() == PrecisionMode::High
+}
 
 /// Returns the lookback period for RSI.
 ///
@@ -164,7 +184,7 @@ pub const fn rsi_min_len(period: usize) -> usize {
 /// ```
 #[inline]
 #[must_use = "this returns a Result with the RSI values, which should be used"]
-pub fn rsi<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
+pub fn rsi<T: SeriesElement + 'static>(data: &[T], period: usize) -> Result<Vec<T>> {
     // Validate inputs
     validate_rsi_inputs(data, period)?;
 
@@ -172,7 +192,11 @@ pub fn rsi<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
     let mut result = vec![T::nan(); data.len()];
 
     // Compute RSI values into the result vector
-    compute_rsi_core(data, period, &mut result)?;
+    if use_f64_precision::<T>() {
+        compute_rsi_core_f64(data, period, &mut result)?;
+    } else {
+        compute_rsi_core(data, period, &mut result)?;
+    }
 
     Ok(result)
 }
@@ -216,7 +240,11 @@ pub fn rsi<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
 /// ```
 #[inline]
 #[must_use = "this returns a Result with the count of valid RSI values"]
-pub fn rsi_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -> Result<usize> {
+pub fn rsi_into<T: SeriesElement + 'static>(
+    data: &[T],
+    period: usize,
+    output: &mut [T],
+) -> Result<usize> {
     // Validate inputs
     validate_rsi_inputs(data, period)?;
 
@@ -234,7 +262,11 @@ pub fn rsi_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -
     }
 
     // Compute RSI values
-    compute_rsi_core(data, period, output)?;
+    if use_f64_precision::<T>() {
+        compute_rsi_core_f64(data, period, output)?;
+    } else {
+        compute_rsi_core(data, period, output)?;
+    }
 
     // Return count of valid (non-NaN) values
     Ok(data.len() - period)
@@ -348,6 +380,103 @@ fn compute_rsi_core<T: SeriesElement>(data: &[T], period: usize, output: &mut [T
     }
 
     Ok(())
+}
+
+/// Core RSI computation using f64 precision for f32 inputs.
+fn compute_rsi_core_f64<T: SeriesElement>(
+    data: &[T],
+    period: usize,
+    output: &mut [T],
+) -> Result<()> {
+    let period_f64 = period as f64;
+    let period_minus_one_f64 = (period - 1) as f64;
+
+    // Step 1: Calculate initial sum of gains and losses for the first period
+    let mut sum_gain: f64 = 0.0;
+    let mut sum_loss: f64 = 0.0;
+    let mut has_nan = false;
+
+    for i in 1..=period {
+        if is_invalid(data[i]) || is_invalid(data[i - 1]) {
+            has_nan = true;
+            break;
+        }
+        let cur = data[i].to_f64().unwrap_or(0.0);
+        let prev = data[i - 1].to_f64().unwrap_or(0.0);
+        let change = cur - prev;
+        if change > 0.0 {
+            sum_gain += change;
+        } else if change < 0.0 {
+            sum_loss -= change; // Make loss positive
+        }
+    }
+
+    // Calculate initial average gain and loss (SMA seed)
+    let mut avg_gain: f64 = if has_nan {
+        f64::NAN
+    } else {
+        sum_gain / period_f64
+    };
+    let mut avg_loss: f64 = if has_nan {
+        f64::NAN
+    } else {
+        sum_loss / period_f64
+    };
+
+    // Calculate first RSI value
+    output[period] = if has_nan {
+        T::nan()
+    } else {
+        T::from_f64(compute_rsi_value_f64(avg_gain, avg_loss))?
+    };
+
+    // Step 2: Apply Wilder's smoothing for remaining values
+    for i in (period + 1)..data.len() {
+        if is_invalid(data[i]) || is_invalid(data[i - 1]) || avg_gain.is_nan() || avg_loss.is_nan()
+        {
+            avg_gain = f64::NAN;
+            avg_loss = f64::NAN;
+            output[i] = T::nan();
+            continue;
+        }
+
+        let cur = data[i].to_f64().unwrap_or(0.0);
+        let prev = data[i - 1].to_f64().unwrap_or(0.0);
+        let change = cur - prev;
+
+        let (gain, loss) = if change > 0.0 {
+            (change, 0.0)
+        } else if change < 0.0 {
+            (0.0, -change)
+        } else {
+            (0.0, 0.0)
+        };
+
+        // Wilder's smoothing in f64
+        avg_gain = (avg_gain * period_minus_one_f64 + gain) / period_f64;
+        avg_loss = (avg_loss * period_minus_one_f64 + loss) / period_f64;
+
+        output[i] = T::from_f64(compute_rsi_value_f64(avg_gain, avg_loss))?;
+    }
+
+    Ok(())
+}
+
+/// Computes RSI value from average gain and loss in f64.
+#[inline]
+fn compute_rsi_value_f64(avg_gain: f64, avg_loss: f64) -> f64 {
+    if avg_loss == 0.0 {
+        if avg_gain == 0.0 {
+            50.0 // No movement - neutral
+        } else {
+            100.0 // All gains
+        }
+    } else if avg_gain == 0.0 {
+        0.0 // All losses
+    } else {
+        let rs = avg_gain / avg_loss;
+        100.0 - (100.0 / (1.0 + rs))
+    }
 }
 
 /// Computes the RSI value from average gain and average loss.

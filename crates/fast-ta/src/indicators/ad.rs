@@ -16,6 +16,16 @@
 //! - When `high == low`, the Money Flow Multiplier is 0 (no range to compute)
 //! - First value is the first Money Flow Volume
 //!
+//! # Precision Behavior
+//!
+//! When `PrecisionMode::High` is active and input type is `f32`:
+//! - Cumulative AD sum maintained in `f64`
+//! - Money Flow calculations performed in `f64`
+//! - Prevents precision loss with large volume accumulations
+//!
+//! **Tolerance**: hybrid(rel=1e-4, abs=1.0) when comparing f32 High mode to f64 reference.
+//! AD is cumulative and can grow very large.
+//!
 //! # Example
 //!
 //! ```
@@ -31,8 +41,16 @@
 //! ```
 
 use crate::error::{Error, Result};
+use crate::precision::{current_precision_mode, PrecisionMode};
 use crate::traits::SeriesElement;
 use crate::utils::is_invalid;
+
+/// Returns true if we should use f64 precision for the given type.
+#[inline]
+fn use_f64_precision<T: 'static>() -> bool {
+    use std::any::TypeId;
+    TypeId::of::<T>() == TypeId::of::<f32>() && current_precision_mode() == PrecisionMode::High
+}
 
 /// Returns the lookback period for AD.
 ///
@@ -66,7 +84,7 @@ pub const fn ad_min_len() -> usize {
 /// - Any input is empty
 /// - Input lengths don't match
 /// - Output buffer is too small
-pub fn ad_into<T: SeriesElement>(
+pub fn ad_into<T: SeriesElement + 'static>(
     high: &[T],
     low: &[T],
     close: &[T],
@@ -98,6 +116,22 @@ pub fn ad_into<T: SeriesElement>(
         });
     }
 
+    if use_f64_precision::<T>() {
+        ad_core_f64(high, low, close, volume, output)
+    } else {
+        ad_core_native(high, low, close, volume, output)
+    }
+}
+
+/// Core AD computation using native precision.
+fn ad_core_native<T: SeriesElement>(
+    high: &[T],
+    low: &[T],
+    close: &[T],
+    volume: &[T],
+    output: &mut [T],
+) -> Result<()> {
+    let len = high.len();
     let mut ad_value = T::zero();
     let mut nan_active = false;
 
@@ -136,6 +170,56 @@ pub fn ad_into<T: SeriesElement>(
     Ok(())
 }
 
+/// Core AD computation using f64 precision for f32 inputs.
+fn ad_core_f64<T: SeriesElement>(
+    high: &[T],
+    low: &[T],
+    close: &[T],
+    volume: &[T],
+    output: &mut [T],
+) -> Result<()> {
+    let len = high.len();
+    let mut ad_accum: f64 = 0.0;
+    let mut nan_active = false;
+
+    for i in 0..len {
+        let h = high[i];
+        let l = low[i];
+        let c = close[i];
+        let v = volume[i];
+
+        if nan_active || is_invalid(h) || is_invalid(l) || is_invalid(c) || is_invalid(v) {
+            nan_active = true;
+            output[i] = T::nan();
+            continue;
+        }
+
+        // Convert to f64 for precision
+        let h_f64 = h.to_f64().unwrap_or(0.0);
+        let l_f64 = l.to_f64().unwrap_or(0.0);
+        let c_f64 = c.to_f64().unwrap_or(0.0);
+        let v_f64 = v.to_f64().unwrap_or(0.0);
+
+        // Money Flow Multiplier = (2 * close - high - low) / (high - low)
+        let range = h_f64 - l_f64;
+
+        let mfm = if range > 0.0 {
+            (2.0 * c_f64 - h_f64 - l_f64) / range
+        } else {
+            0.0
+        };
+
+        // Money Flow Volume = MFM * volume
+        let mfv = mfm * v_f64;
+
+        // AD is cumulative in f64
+        ad_accum += mfv;
+        output[i] = T::from_f64(ad_accum)?;
+    }
+
+    Ok(())
+}
+
 /// Computes AD (Chaikin A/D Line) and returns a newly allocated vector.
 ///
 /// # Arguments
@@ -168,7 +252,12 @@ pub fn ad_into<T: SeriesElement>(
 /// let result = ad(&high, &low, &close, &volume).unwrap();
 /// assert_eq!(result.len(), 5);
 /// ```
-pub fn ad<T: SeriesElement>(high: &[T], low: &[T], close: &[T], volume: &[T]) -> Result<Vec<T>> {
+pub fn ad<T: SeriesElement + 'static>(
+    high: &[T],
+    low: &[T],
+    close: &[T],
+    volume: &[T],
+) -> Result<Vec<T>> {
     let len = high.len();
     if len == 0 {
         return Err(Error::EmptyInput);

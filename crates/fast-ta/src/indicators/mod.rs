@@ -186,7 +186,7 @@ pub use obv::{obv, obv_into, obv_lookback, obv_min_len};
 pub use rsi::{rsi, rsi_into, rsi_lookback, rsi_min_len};
 
 // Simple Moving Average (uses SIMD internally for f64 when the simd feature is enabled)
-pub use sma::{sma, sma_into, sma_lookback, sma_min_len};
+pub use sma::{sma, sma_from_idx_into, sma_into, sma_lookback, sma_min_len};
 
 // Stochastic Oscillator
 pub use stochastic::{

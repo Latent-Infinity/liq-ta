@@ -139,18 +139,134 @@ pub fn t3_full_into<T: SeriesElement>(
     }
 
     // Fill lookback period with NaN
-    for i in 0..lookback {
-        output[i] = T::nan();
+    for out in output.iter_mut().take(lookback) {
+        *out = T::nan();
     }
 
     // For period 1, T3 equals the input (no smoothing)
     if period == 1 {
-        for i in 0..data.len() {
-            output[i] = data[i];
-        }
+        output[..data.len()].copy_from_slice(data);
         return Ok(());
     }
 
+    let n = data.len();
+    let ema_lookback = period - 1;
+
+    // Check for NaN in data - if any NaN exists, use the slow path with NaN propagation
+    let has_nan = data.iter().take(n).any(|&v| is_invalid(v));
+    if has_nan {
+        return t3_full_into_slow(data, period, vfactor, output, lookback);
+    }
+
+    // Fast path: No NaN in input - use TA-Lib style tight loop
+    // EMA smoothing factor (use f64 for intermediate calculations)
+    let k = 2.0 / (period as f64 + 1.0);
+    let one_minus_k = 1.0 - k;
+
+    // Calculate coefficients in f64
+    let vf = vfactor.to_f64().unwrap_or(0.7);
+    let v2 = vf * vf;
+    let v3 = v2 * vf;
+    let c1 = -v3;
+    let c2 = 3.0 * v2 + 3.0 * v3;
+    let c3 = -6.0 * v2 - 3.0 * vf - 3.0 * v3;
+    let c4 = 1.0 + 3.0 * vf + v3 + 3.0 * v2;
+
+    // Start position for reading data
+    let mut today = 0usize;
+
+    // Initialize e1 with SMA of first `period` values
+    let mut temp_real = 0.0_f64;
+    for _ in 0..period {
+        temp_real += data[today].to_f64().unwrap_or(0.0);
+        today += 1;
+    }
+    let mut e1 = temp_real / period as f64;
+
+    // Initialize e2: compute SMA of e1 values over next (period-1) iterations
+    temp_real = e1;
+    for _ in 0..ema_lookback {
+        e1 = k * data[today].to_f64().unwrap_or(0.0) + one_minus_k * e1;
+        today += 1;
+        temp_real += e1;
+    }
+    let mut e2 = temp_real / period as f64;
+
+    // Initialize e3
+    temp_real = e2;
+    for _ in 0..ema_lookback {
+        e1 = k * data[today].to_f64().unwrap_or(0.0) + one_minus_k * e1;
+        e2 = k * e1 + one_minus_k * e2;
+        today += 1;
+        temp_real += e2;
+    }
+    let mut e3 = temp_real / period as f64;
+
+    // Initialize e4
+    temp_real = e3;
+    for _ in 0..ema_lookback {
+        e1 = k * data[today].to_f64().unwrap_or(0.0) + one_minus_k * e1;
+        e2 = k * e1 + one_minus_k * e2;
+        e3 = k * e2 + one_minus_k * e3;
+        today += 1;
+        temp_real += e3;
+    }
+    let mut e4 = temp_real / period as f64;
+
+    // Initialize e5
+    temp_real = e4;
+    for _ in 0..ema_lookback {
+        e1 = k * data[today].to_f64().unwrap_or(0.0) + one_minus_k * e1;
+        e2 = k * e1 + one_minus_k * e2;
+        e3 = k * e2 + one_minus_k * e3;
+        e4 = k * e3 + one_minus_k * e4;
+        today += 1;
+        temp_real += e4;
+    }
+    let mut e5 = temp_real / period as f64;
+
+    // Initialize e6
+    temp_real = e5;
+    for _ in 0..ema_lookback {
+        e1 = k * data[today].to_f64().unwrap_or(0.0) + one_minus_k * e1;
+        e2 = k * e1 + one_minus_k * e2;
+        e3 = k * e2 + one_minus_k * e3;
+        e4 = k * e3 + one_minus_k * e4;
+        e5 = k * e4 + one_minus_k * e5;
+        today += 1;
+        temp_real += e5;
+    }
+    let mut e6 = temp_real / period as f64;
+
+    // Now `today` should be at `lookback` position
+    debug_assert_eq!(today, lookback);
+
+    // Write first output
+    output[lookback] = T::from_f64(c1 * e6 + c2 * e5 + c3 * e4 + c4 * e3)?;
+
+    // Main loop: tight, no branches - just like TA-Lib
+    for i in (lookback + 1)..n {
+        let val = data[i].to_f64().unwrap_or(0.0);
+        e1 = k * val + one_minus_k * e1;
+        e2 = k * e1 + one_minus_k * e2;
+        e3 = k * e2 + one_minus_k * e3;
+        e4 = k * e3 + one_minus_k * e4;
+        e5 = k * e4 + one_minus_k * e5;
+        e6 = k * e5 + one_minus_k * e6;
+        output[i] = T::from_f64(c1 * e6 + c2 * e5 + c3 * e4 + c4 * e3)?;
+    }
+
+    Ok(())
+}
+
+/// Slow path for T3 with NaN propagation.
+fn t3_full_into_slow<T: SeriesElement>(
+    data: &[T],
+    period: usize,
+    vfactor: T,
+    output: &mut [T],
+    lookback: usize,
+) -> Result<()> {
     // Calculate coefficients
     let v2 = vfactor * vfactor;
     let v3 = v2 * vfactor;
@@ -169,120 +285,93 @@ pub fn t3_full_into<T: SeriesElement>(
     let ema_lookback = period - 1;
     let n = data.len();
 
-    // Allocate intermediate EMA arrays
-    // Each EMA level starts being valid at (level * ema_lookback)
-    let mut ema1 = vec![T::nan(); n];
-    let mut ema2 = vec![T::nan(); n];
-    let mut ema3 = vec![T::nan(); n];
-    let mut ema4 = vec![T::nan(); n];
-    let mut ema5 = vec![T::nan(); n];
-    let mut ema6 = vec![T::nan(); n];
+    let mut e1 = T::nan();
+    let mut e2 = T::nan();
+    let mut e3 = T::nan();
+    let mut e4 = T::nan();
+    let mut e5 = T::nan();
+    let mut e6 = T::nan();
 
-    // Compute EMA1 (EMA of input data)
-    ema1[ema_lookback] = if is_invalid(data[ema_lookback]) {
-        T::nan()
-    } else {
-        data[ema_lookback]
-    };
-    for i in (ema_lookback + 1)..n {
-        if is_invalid(data[i]) || is_invalid(ema1[i - 1]) {
-            ema1[i] = T::nan();
-        } else {
-            ema1[i] = alpha * data[i] + one_minus_alpha * ema1[i - 1];
-        }
-    }
+    for i in 0..n {
+        let val = data[i];
 
-    // Compute EMA2 (EMA of EMA1)
-    let start2 = 2 * ema_lookback;
-    if start2 < n {
-        ema2[start2] = if is_invalid(ema1[start2]) {
-            T::nan()
-        } else {
-            ema1[start2]
-        };
-        for i in (start2 + 1)..n {
-            if is_invalid(ema1[i]) || is_invalid(ema2[i - 1]) {
-                ema2[i] = T::nan();
+        // Update EMA1
+        if i == ema_lookback {
+            e1 = if is_invalid(val) { T::nan() } else { val };
+        } else if i > ema_lookback {
+            if is_invalid(val) || is_invalid(e1) {
+                e1 = T::nan();
             } else {
-                ema2[i] = alpha * ema1[i] + one_minus_alpha * ema2[i - 1];
+                e1 = alpha * val + one_minus_alpha * e1;
             }
         }
-    }
 
-    // Compute EMA3 (EMA of EMA2)
-    let start3 = 3 * ema_lookback;
-    if start3 < n {
-        ema3[start3] = if is_invalid(ema2[start3]) {
-            T::nan()
-        } else {
-            ema2[start3]
-        };
-        for i in (start3 + 1)..n {
-            if is_invalid(ema2[i]) || is_invalid(ema3[i - 1]) {
-                ema3[i] = T::nan();
+        // Update EMA2
+        let start2 = 2 * ema_lookback;
+        if i == start2 {
+            e2 = if is_invalid(e1) { T::nan() } else { e1 };
+        } else if i > start2 {
+            if is_invalid(e1) || is_invalid(e2) {
+                e2 = T::nan();
             } else {
-                ema3[i] = alpha * ema2[i] + one_minus_alpha * ema3[i - 1];
+                e2 = alpha * e1 + one_minus_alpha * e2;
             }
         }
-    }
 
-    // Compute EMA4 (EMA of EMA3)
-    let start4 = 4 * ema_lookback;
-    if start4 < n {
-        ema4[start4] = if is_invalid(ema3[start4]) {
-            T::nan()
-        } else {
-            ema3[start4]
-        };
-        for i in (start4 + 1)..n {
-            if is_invalid(ema3[i]) || is_invalid(ema4[i - 1]) {
-                ema4[i] = T::nan();
+        // Update EMA3
+        let start3 = 3 * ema_lookback;
+        if i == start3 {
+            e3 = if is_invalid(e2) { T::nan() } else { e2 };
+        } else if i > start3 {
+            if is_invalid(e2) || is_invalid(e3) {
+                e3 = T::nan();
             } else {
-                ema4[i] = alpha * ema3[i] + one_minus_alpha * ema4[i - 1];
+                e3 = alpha * e2 + one_minus_alpha * e3;
             }
         }
-    }
 
-    // Compute EMA5 (EMA of EMA4)
-    let start5 = 5 * ema_lookback;
-    if start5 < n {
-        ema5[start5] = if is_invalid(ema4[start5]) {
-            T::nan()
-        } else {
-            ema4[start5]
-        };
-        for i in (start5 + 1)..n {
-            if is_invalid(ema4[i]) || is_invalid(ema5[i - 1]) {
-                ema5[i] = T::nan();
+        // Update EMA4
+        let start4 = 4 * ema_lookback;
+        if i == start4 {
+            e4 = if is_invalid(e3) { T::nan() } else { e3 };
+        } else if i > start4 {
+            if is_invalid(e3) || is_invalid(e4) {
+                e4 = T::nan();
             } else {
-                ema5[i] = alpha * ema4[i] + one_minus_alpha * ema5[i - 1];
+                e4 = alpha * e3 + one_minus_alpha * e4;
             }
         }
-    }
 
-    // Compute EMA6 (EMA of EMA5)
-    if lookback < n {
-        ema6[lookback] = if is_invalid(ema5[lookback]) {
-            T::nan()
-        } else {
-            ema5[lookback]
-        };
-        for i in (lookback + 1)..n {
-            if is_invalid(ema5[i]) || is_invalid(ema6[i - 1]) {
-                ema6[i] = T::nan();
+        // Update EMA5
+        let start5 = 5 * ema_lookback;
+        if i == start5 {
+            e5 = if is_invalid(e4) { T::nan() } else { e4 };
+        } else if i > start5 {
+            if is_invalid(e4) || is_invalid(e5) {
+                e5 = T::nan();
             } else {
-                ema6[i] = alpha * ema5[i] + one_minus_alpha * ema6[i - 1];
+                e5 = alpha * e4 + one_minus_alpha * e5;
             }
         }
-    }
 
-    // Compute T3 = c1*ema6 + c2*ema5 + c3*ema4 + c4*ema3
-    for i in lookback..n {
-        if is_invalid(ema6[i]) || is_invalid(ema5[i]) || is_invalid(ema4[i]) || is_invalid(ema3[i])
-        {
-            output[i] = T::nan();
-        } else {
-            output[i] = c1 * ema6[i] + c2 * ema5[i] + c3 * ema4[i] + c4 * ema3[i];
+        // Update EMA6
+        if i == lookback {
+            e6 = if is_invalid(e5) { T::nan() } else { e5 };
+        } else if i > lookback {
+            if is_invalid(e5) || is_invalid(e6) {
+                e6 = T::nan();
+            } else {
+                e6 = alpha * e5 + one_minus_alpha * e6;
+            }
+        }
+
+        // Compute T3 output
+        if i >= lookback {
+            if is_invalid(e3) || is_invalid(e4) || is_invalid(e5) || is_invalid(e6) {
+                output[i] = T::nan();
+            } else {
+                output[i] = c1 * e6 + c2 * e5 + c3 * e4 + c4 * e3;
+            }
         }
     }
 

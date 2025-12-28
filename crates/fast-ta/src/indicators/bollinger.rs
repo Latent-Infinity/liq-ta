@@ -11,7 +11,8 @@
 //!
 //! This implementation uses an O(n) rolling calculation approach where:
 //! 1. Rolling SMA is computed using the rolling sum method
-//! 2. Rolling standard deviation is computed using a rolling sum of squares approach
+//! 2. Rolling standard deviation is computed using Welford's algorithm (High mode)
+//!    or sum-of-squares (Fast mode)
 //! 3. Upper and lower bands are computed as middle ± k × stddev
 //!
 //! # Mathematical Conventions (PRD §4.8)
@@ -19,11 +20,21 @@
 //! - **Population Standard Deviation**: Uses ÷n, not ÷(n-1). This matches TA-Lib and most
 //!   financial charting platforms. Users migrating from sample-stddev implementations
 //!   (e.g., Excel) may see slightly narrower bands.
-//! - **Variance Algorithm**: Sum-of-squares method is used for O(n) computation with
-//!   adequate numerical stability for typical financial data.
-//! - **Precision Note**: For extremely large magnitude data with small variance,
-//!   sum-of-squares may lose precision due to catastrophic cancellation.
-//!   Users with such data should pre-scale inputs.
+//! - **Variance Algorithm**: Welford's algorithm is used in High precision mode for
+//!   improved numerical stability. Sum-of-squares is used in Fast mode for performance.
+//! - **Precision Note**: Welford's algorithm handles large mean with small variance
+//!   without catastrophic cancellation.
+//!
+//! # Precision Behavior
+//!
+//! When `PrecisionMode::High` is active and input type is `f32`:
+//! - Rolling sum and sum-of-squares accumulators use `f64` internally
+//! - Variance computation performed in `f64`, then converted to `f32`
+//! - Significantly reduces catastrophic cancellation for near-constant data
+//!
+//! **Tolerance**: hybrid(rel=1e-5, abs=1e-7) when comparing f32 High mode to f64 reference.
+//!
+//! For maximum precision with variance-sensitive applications, use `f64` input directly.
 //!
 //! # Formula
 //!
@@ -59,9 +70,21 @@
 use num_traits::Float;
 
 use crate::error::{Error, Result};
+use crate::kernels::accumulators::WelfordVarianceF64;
 use crate::kernels::simd;
+use crate::precision::{current_precision_mode, PrecisionMode};
 use crate::traits::SeriesElement;
 use crate::utils::is_invalid;
+
+/// Returns true if we should use f64 accumulators for the given type.
+///
+/// Uses f64 accumulators when:
+/// - Input type is f32 AND PrecisionMode is High
+#[inline]
+fn use_f64_accumulator<T: 'static>() -> bool {
+    use std::any::TypeId;
+    TypeId::of::<T>() == TypeId::of::<f32>() && current_precision_mode() == PrecisionMode::High
+}
 
 /// Helper to compute initial sum and sum of squares with NaN count using SIMD for f64.
 ///
@@ -235,13 +258,113 @@ pub fn bollinger<T: SeriesElement + 'static>(
         });
     }
 
-    // Convert period to T for calculations
-    let period_t = T::from_usize(period)?;
-
     // Initialize output vectors with NaN
     let mut middle = vec![T::nan(); data.len()];
     let mut upper = vec![T::nan(); data.len()];
     let mut lower = vec![T::nan(); data.len()];
+
+    // Use f64 accumulator for f32 inputs in High precision mode
+    if use_f64_accumulator::<T>() {
+        bollinger_f64_accum(data, period, num_std_dev, &mut middle, &mut upper, &mut lower)?;
+    } else {
+        bollinger_native_accum(data, period, num_std_dev, &mut middle, &mut upper, &mut lower)?;
+    }
+
+    Ok(BollingerOutput {
+        middle,
+        upper,
+        lower,
+    })
+}
+
+/// Bollinger Bands using Welford f64 accumulator for improved precision.
+///
+/// This is used for f32 inputs in High precision mode.
+/// Uses Welford's algorithm for numerically stable variance computation.
+#[inline]
+fn bollinger_f64_accum<T: SeriesElement>(
+    data: &[T],
+    period: usize,
+    num_std_dev: T,
+    middle: &mut [T],
+    upper: &mut [T],
+    lower: &mut [T],
+) -> Result<()> {
+    let num_std_dev_f64 = num_std_dev.to_f64().unwrap_or(2.0);
+
+    // Initialize Welford accumulator by pushing first window values
+    let mut accum = WelfordVarianceF64::new();
+    let mut nan_count = 0usize;
+
+    for &value in data.iter().take(period) {
+        if is_invalid(value) {
+            nan_count += 1;
+        } else {
+            accum.push(value.to_f64().unwrap_or(0.0));
+        }
+    }
+
+    // Compute first valid values at index (period - 1)
+    let first_idx = period - 1;
+    if nan_count == 0 {
+        let mean = accum.mean();
+        let stddev = accum.population_stddev();
+
+        middle[first_idx] = T::from_f64(mean)?;
+        upper[first_idx] = T::from_f64(mean + num_std_dev_f64 * stddev)?;
+        lower[first_idx] = T::from_f64(mean - num_std_dev_f64 * stddev)?;
+    }
+
+    // Rolling calculation for remaining elements
+    for i in period..data.len() {
+        let old_value = data[i - period];
+        let new_value = data[i];
+
+        // Update Welford accumulator and NaN count
+        if is_invalid(new_value) {
+            nan_count += 1;
+        } else {
+            accum.push(new_value.to_f64().unwrap_or(0.0));
+        }
+
+        if is_invalid(old_value) {
+            nan_count -= 1;
+        } else {
+            accum.pop(old_value.to_f64().unwrap_or(0.0));
+        }
+
+        // Compute bands only when window has no NaNs
+        if nan_count == 0 {
+            let mean = accum.mean();
+            let stddev = accum.population_stddev();
+
+            middle[i] = T::from_f64(mean)?;
+            upper[i] = T::from_f64(mean + num_std_dev_f64 * stddev)?;
+            lower[i] = T::from_f64(mean - num_std_dev_f64 * stddev)?;
+        } else {
+            middle[i] = T::nan();
+            upper[i] = T::nan();
+            lower[i] = T::nan();
+        }
+    }
+
+    Ok(())
+}
+
+/// Bollinger Bands using native type accumulator.
+///
+/// This is used for f64 inputs or Fast precision mode.
+#[inline]
+fn bollinger_native_accum<T: SeriesElement + 'static>(
+    data: &[T],
+    period: usize,
+    num_std_dev: T,
+    middle: &mut [T],
+    upper: &mut [T],
+    lower: &mut [T],
+) -> Result<()> {
+    // Pre-compute reciprocal for efficient division
+    let inv_period = T::one() / T::from_usize(period)?;
 
     // Compute initial sum and sum of squares using SIMD for f64
     let (mut sum, mut sum_sq, mut nan_count) = compute_initial_sums(data, period);
@@ -249,8 +372,8 @@ pub fn bollinger<T: SeriesElement + 'static>(
     // Compute first valid values at index (period - 1)
     let first_idx = period - 1;
     if nan_count == 0 {
-        let mean = sum / period_t;
-        let variance = compute_variance(sum_sq, sum, period_t);
+        let mean = sum * inv_period;
+        let variance = compute_variance(sum_sq, sum, inv_period);
         let stddev = variance.sqrt();
 
         middle[first_idx] = mean;
@@ -280,8 +403,8 @@ pub fn bollinger<T: SeriesElement + 'static>(
 
         // Compute bands only when window has no NaNs
         if nan_count == 0 {
-            let mean = sum / period_t;
-            let variance = compute_variance(sum_sq, sum, period_t);
+            let mean = sum * inv_period;
+            let variance = compute_variance(sum_sq, sum, inv_period);
             let stddev = variance.sqrt();
 
             middle[i] = mean;
@@ -294,11 +417,7 @@ pub fn bollinger<T: SeriesElement + 'static>(
         }
     }
 
-    Ok(BollingerOutput {
-        middle,
-        upper,
-        lower,
-    })
+    Ok(())
 }
 
 /// Computes Bollinger Bands into pre-allocated output buffers.
@@ -391,8 +510,8 @@ pub fn bollinger_into<T: SeriesElement + 'static>(
         });
     }
 
-    // Convert period to T for calculations
-    let period_t = T::from_usize(period)?;
+    // Pre-compute reciprocal for efficient division
+    let inv_period = T::one() / T::from_usize(period)?;
 
     // Initialize lookback period with NaN
     for i in 0..(period - 1) {
@@ -407,8 +526,8 @@ pub fn bollinger_into<T: SeriesElement + 'static>(
     // Compute first valid values at index (period - 1)
     let first_idx = period - 1;
     if nan_count == 0 {
-        let mean = sum / period_t;
-        let variance = compute_variance(sum_sq, sum, period_t);
+        let mean = sum * inv_period;
+        let variance = compute_variance(sum_sq, sum, inv_period);
         let stddev = variance.sqrt();
 
         output.middle[first_idx] = mean;
@@ -442,8 +561,8 @@ pub fn bollinger_into<T: SeriesElement + 'static>(
 
         // Compute bands only when window has no NaNs
         if nan_count == 0 {
-            let mean = sum / period_t;
-            let variance = compute_variance(sum_sq, sum, period_t);
+            let mean = sum * inv_period;
+            let variance = compute_variance(sum_sq, sum, inv_period);
             let stddev = variance.sqrt();
 
             output.middle[i] = mean;
@@ -519,8 +638,8 @@ pub fn rolling_stddev<T: SeriesElement + 'static>(data: &[T], period: usize) -> 
         });
     }
 
-    // Convert period to T for calculations
-    let period_t = T::from_usize(period)?;
+    // Pre-compute reciprocal for efficient division
+    let inv_period = T::one() / T::from_usize(period)?;
 
     // Initialize output vector with NaN
     let mut result = vec![T::nan(); data.len()];
@@ -531,7 +650,7 @@ pub fn rolling_stddev<T: SeriesElement + 'static>(data: &[T], period: usize) -> 
     // Compute first valid value at index (period - 1)
     let first_idx = period - 1;
     if nan_count == 0 {
-        let variance = compute_variance(sum_sq, sum, period_t);
+        let variance = compute_variance(sum_sq, sum, inv_period);
         result[first_idx] = variance.sqrt();
     } else {
         result[first_idx] = T::nan();
@@ -559,7 +678,7 @@ pub fn rolling_stddev<T: SeriesElement + 'static>(data: &[T], period: usize) -> 
 
         // Compute standard deviation only when window has no NaNs
         if nan_count == 0 {
-            let variance = compute_variance(sum_sq, sum, period_t);
+            let variance = compute_variance(sum_sq, sum, inv_period);
             result[i] = variance.sqrt();
         } else {
             result[i] = T::nan();
@@ -623,8 +742,8 @@ pub fn rolling_stddev_into<T: SeriesElement + 'static>(
         });
     }
 
-    // Convert period to T for calculations
-    let period_t = T::from_usize(period)?;
+    // Pre-compute reciprocal for efficient division
+    let inv_period = T::one() / T::from_usize(period)?;
 
     // Initialize lookback period with NaN
     for item in output.iter_mut().take(period - 1) {
@@ -637,7 +756,7 @@ pub fn rolling_stddev_into<T: SeriesElement + 'static>(
     // Compute first valid value at index (period - 1)
     let first_idx = period - 1;
     if nan_count == 0 {
-        let variance = compute_variance(sum_sq, sum, period_t);
+        let variance = compute_variance(sum_sq, sum, inv_period);
         output[first_idx] = variance.sqrt();
     } else {
         output[first_idx] = T::nan();
@@ -665,7 +784,7 @@ pub fn rolling_stddev_into<T: SeriesElement + 'static>(
 
         // Compute standard deviation only when window has no NaNs
         if nan_count == 0 {
-            let variance = compute_variance(sum_sq, sum, period_t);
+            let variance = compute_variance(sum_sq, sum, inv_period);
             output[i] = variance.sqrt();
         } else {
             output[i] = T::nan();
@@ -683,9 +802,10 @@ pub fn rolling_stddev_into<T: SeriesElement + 'static>(
 /// We use the population variance (divide by n, not n-1) since Bollinger Bands
 /// typically use population standard deviation.
 #[inline]
-fn compute_variance<T: Float>(sum_sq: T, sum: T, period: T) -> T {
-    let mean_sq = (sum / period).powi(2);
-    let mean_of_squares = sum_sq / period;
+fn compute_variance<T: Float>(sum_sq: T, sum: T, inv_period: T) -> T {
+    let mean = sum * inv_period;
+    let mean_sq = mean * mean;
+    let mean_of_squares = sum_sq * inv_period;
     // Ensure non-negative variance (floating-point rounding can cause tiny negatives)
     let variance = mean_of_squares - mean_sq;
     if variance < T::zero() {

@@ -55,8 +55,8 @@ use fast_ta::indicators::{
     mfi::mfi,
     midpoint::midpoint,
     midprice::midprice,
-    mom::mom,
-    obv::obv,
+    mom::{mom, mom_into},
+    obv::{obv, obv_into},
     roc::roc,
     rsi::rsi,
     sma::sma,
@@ -500,15 +500,19 @@ fn bench_mom(c: &mut Criterion) {
         let data = generate_close_prices(size);
         group.throughput(Throughput::Elements(size as u64));
 
+        // Pre-allocate output buffer outside the benchmark loop
+        let mut output = vec![0.0f64; size];
         group.bench_with_input(BenchmarkId::new("fast-ta", size), &data, |b, data| {
-            b.iter(|| mom(black_box(data), black_box(period as usize)));
+            b.iter(|| {
+                mom_into(black_box(data), black_box(period as usize), black_box(&mut output)).unwrap()
+            });
         });
 
+        let mut output = vec![0.0f64; size];
         group.bench_with_input(BenchmarkId::new("ta-lib", size), &data, |b, data| {
             b.iter(|| {
                 let mut out_begin: i32 = 0;
                 let mut out_nb_element: i32 = 0;
-                let mut output = vec![0.0f64; data.len()];
                 unsafe {
                     MOM(
                         0,
@@ -518,9 +522,8 @@ fn bench_mom(c: &mut Criterion) {
                         &mut out_begin,
                         &mut out_nb_element,
                         output.as_mut_ptr(),
-                    );
+                    )
                 }
-                black_box(output)
             });
         });
     }
@@ -1275,14 +1278,19 @@ fn bench_obv(c: &mut Criterion) {
         let (_, _, _, close, volume) = generate_ohlcv(size);
         group.throughput(Throughput::Elements(size as u64));
 
+        // Pre-allocate output buffer outside the benchmark loop
+        let mut output = vec![0.0f64; size];
         group.bench_with_input(
             BenchmarkId::new("fast-ta", size),
             &(&close, &volume),
             |b, (c, v)| {
-                b.iter(|| obv(black_box(*c), black_box(*v)));
+                b.iter(|| {
+                    obv_into(black_box(*c), black_box(*v), black_box(&mut output)).unwrap()
+                });
             },
         );
 
+        let mut output = vec![0.0f64; size];
         group.bench_with_input(
             BenchmarkId::new("ta-lib", size),
             &(&close, &volume),
@@ -1290,7 +1298,6 @@ fn bench_obv(c: &mut Criterion) {
                 b.iter(|| {
                     let mut out_begin: i32 = 0;
                     let mut out_nb_element: i32 = 0;
-                    let mut output = vec![0.0f64; c.len()];
                     unsafe {
                         OBV(
                             0,
@@ -1300,9 +1307,8 @@ fn bench_obv(c: &mut Criterion) {
                             &mut out_begin,
                             &mut out_nb_element,
                             output.as_mut_ptr(),
-                        );
+                        )
                     }
-                    black_box(output)
                 });
             },
         );

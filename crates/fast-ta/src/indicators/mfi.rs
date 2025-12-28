@@ -25,10 +25,28 @@
 //! # Lookback
 //!
 //! The lookback period is `period`.
+//!
+//! # Precision Behavior
+//!
+//! When `PrecisionMode::High` is active and input type is `f32`:
+//! - Typical price and raw money flow calculated in `f64`
+//! - Rolling positive/negative money flow sums use `f64`
+//! - Final MFI computation performed in `f64`
+//!
+//! **Tolerance**: abs(0.01) when comparing f32 High mode to f64 reference.
+//! MFI is bounded 0-100, so absolute tolerance is appropriate.
 
 use crate::error::{Error, Result};
+use crate::precision::{current_precision_mode, PrecisionMode};
 use crate::traits::SeriesElement;
 use crate::utils::is_invalid;
+
+/// Returns true if we should use f64 precision for the given type.
+#[inline]
+fn use_f64_precision<T: 'static>() -> bool {
+    use std::any::TypeId;
+    TypeId::of::<T>() == TypeId::of::<f32>() && current_precision_mode() == PrecisionMode::High
+}
 
 /// Computes the lookback period for MFI.
 #[inline]
@@ -63,7 +81,7 @@ pub const fn mfi_min_len(period: usize) -> usize {
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 /// - The output buffer is too small (`Error::BufferTooSmall`)
-pub fn mfi_into<T: SeriesElement>(
+pub fn mfi_into<T: SeriesElement + 'static>(
     high: &[T],
     low: &[T],
     close: &[T],
@@ -113,10 +131,54 @@ pub fn mfi_into<T: SeriesElement>(
         });
     }
 
+    if use_f64_precision::<T>() {
+        mfi_core_f64(high, low, close, volume, period, output)
+    } else {
+        mfi_core_native(high, low, close, volume, period, output)
+    }
+}
+
+/// Core MFI computation using native precision with O(period) ring buffer.
+///
+/// This implementation uses ring buffers of size `period` instead of full-length
+/// intermediate arrays, reducing memory usage from O(n) to O(period).
+fn mfi_core_native<T: SeriesElement>(
+    high: &[T],
+    low: &[T],
+    close: &[T],
+    volume: &[T],
+    period: usize,
+    output: &mut [T],
+) -> Result<()> {
+    let n = high.len();
+
+    // Pre-scan for NaN - much faster than checking per-element in hot loop
+    let has_nan = high.iter().take(n).any(|&v| is_invalid(v))
+        || low.iter().take(n).any(|&v| is_invalid(v))
+        || close.iter().take(n).any(|&v| is_invalid(v))
+        || volume.iter().take(n).any(|&v| is_invalid(v));
+
+    if has_nan {
+        mfi_core_native_slow(high, low, close, volume, period, output)
+    } else {
+        mfi_core_native_fast(high, low, close, volume, period, output)
+    }
+}
+
+/// Fast path: no NaN checks per element - tight loop.
+#[inline]
+fn mfi_core_native_fast<T: SeriesElement>(
+    high: &[T],
+    low: &[T],
+    close: &[T],
+    volume: &[T],
+    period: usize,
+    output: &mut [T],
+) -> Result<()> {
+    let n = high.len();
     let lookback = mfi_lookback(period);
     let inv_three = T::from_f64(1.0 / 3.0)?;
     let hundred = T::from_f64(100.0)?;
-    let one = T::from_f64(1.0)?;
     let zero = T::zero();
 
     // Fill lookback period with NaN
@@ -124,86 +186,537 @@ pub fn mfi_into<T: SeriesElement>(
         *out = T::nan();
     }
 
-    // Pre-compute positive and negative money flows separately.
-    let mut positive_mf = vec![zero; n];
-    let mut negative_mf = vec![zero; n];
-    let mut nan_flags = vec![false; n];
+    // Ring buffers of size `period` - O(period) space instead of O(n)
+    let mut positive_ring = vec![zero; period];
+    let mut negative_ring = vec![zero; period];
 
+    // Rolling sums - f64 accumulators for precision
+    let mut sum_positive: f64 = 0.0;
+    let mut sum_negative: f64 = 0.0;
+
+    // Compute first typical price
     let mut prev_tp = (high[0] + low[0] + close[0]) * inv_three;
-    if is_invalid(high[0]) || is_invalid(low[0]) || is_invalid(close[0]) || is_invalid(volume[0]) {
-        nan_flags[0] = true;
-    }
-    for i in 1..n {
-        if is_invalid(high[i]) || is_invalid(low[i]) || is_invalid(close[i]) || is_invalid(volume[i])
-        {
-            nan_flags[i] = true;
-            prev_tp = (high[i] + low[i] + close[i]) * inv_three;
-            continue;
-        }
 
+    // Process indices 1..=period to fill the initial window
+    for i in 1..=period {
+        let ring_idx = (i - 1) % period;
         let tp = (high[i] + low[i] + close[i]) * inv_three;
-        if is_invalid(prev_tp) {
-            nan_flags[i] = true;
-            prev_tp = tp;
-            continue;
-        }
-
         let raw_mf = tp * volume[i];
+
         if tp > prev_tp {
-            positive_mf[i] = raw_mf;
+            positive_ring[ring_idx] = raw_mf;
+            sum_positive += raw_mf.to_f64().unwrap_or(0.0);
         } else if tp < prev_tp {
-            negative_mf[i] = raw_mf;
+            negative_ring[ring_idx] = raw_mf;
+            sum_negative += raw_mf.to_f64().unwrap_or(0.0);
         }
         prev_tp = tp;
     }
 
-    // Calculate initial sums for first window (indices 1..=period)
-    let mut sum_positive = zero;
-    let mut sum_negative = zero;
+    // Calculate first MFI at index = period
+    if sum_negative == 0.0 {
+        output[lookback] = hundred;
+    } else if sum_positive == 0.0 {
+        output[lookback] = zero;
+    } else {
+        let mfr = sum_positive / sum_negative;
+        let mfi_val = 100.0 - (100.0 / (1.0 + mfr));
+        output[lookback] = T::from_f64(mfi_val)?;
+    }
+
+    // Rolling calculation for remaining values - tight loop, no NaN checks
+    for i in (lookback + 1)..n {
+        let ring_idx = (i - 1) % period;
+
+        // Remove old value from sums
+        sum_positive -= positive_ring[ring_idx].to_f64().unwrap_or(0.0);
+        sum_negative -= negative_ring[ring_idx].to_f64().unwrap_or(0.0);
+
+        // Reset ring slot
+        positive_ring[ring_idx] = zero;
+        negative_ring[ring_idx] = zero;
+
+        // Compute new value
+        let tp = (high[i] + low[i] + close[i]) * inv_three;
+        let raw_mf = tp * volume[i];
+
+        if tp > prev_tp {
+            positive_ring[ring_idx] = raw_mf;
+            sum_positive += raw_mf.to_f64().unwrap_or(0.0);
+        } else if tp < prev_tp {
+            negative_ring[ring_idx] = raw_mf;
+            sum_negative += raw_mf.to_f64().unwrap_or(0.0);
+        }
+        prev_tp = tp;
+
+        // Calculate MFI
+        if sum_negative == 0.0 {
+            output[i] = hundred;
+        } else if sum_positive == 0.0 {
+            output[i] = zero;
+        } else {
+            let mfr = sum_positive / sum_negative;
+            let mfi_val = 100.0 - (100.0 / (1.0 + mfr));
+            output[i] = T::from_f64(mfi_val)?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Slow path: handles NaN values per element.
+fn mfi_core_native_slow<T: SeriesElement>(
+    high: &[T],
+    low: &[T],
+    close: &[T],
+    volume: &[T],
+    period: usize,
+    output: &mut [T],
+) -> Result<()> {
+    let n = high.len();
+    let lookback = mfi_lookback(period);
+    let inv_three = T::from_f64(1.0 / 3.0)?;
+    let hundred = T::from_f64(100.0)?;
+    let zero = T::zero();
+
+    // Fill lookback period with NaN
+    for out in output.iter_mut().take(lookback) {
+        *out = T::nan();
+    }
+
+    // Ring buffers of size `period` - O(period) space instead of O(n)
+    let mut positive_ring = vec![zero; period];
+    let mut negative_ring = vec![zero; period];
+    let mut nan_ring = vec![false; period];
+
+    // Rolling sums - f64 accumulators for precision
+    let mut sum_positive: f64 = 0.0;
+    let mut sum_negative: f64 = 0.0;
     let mut nan_count = 0usize;
+
+    // Compute first typical price
+    let mut prev_tp = (high[0] + low[0] + close[0]) * inv_three;
+    let first_invalid =
+        is_invalid(high[0]) || is_invalid(low[0]) || is_invalid(close[0]) || is_invalid(volume[0]);
+
+    // Process indices 1..=period to fill the initial window
+    // These correspond to ring indices 0..(period-1) for values at indices 1..period
     for i in 1..=period {
-        if nan_flags[i] {
+        let ring_idx = (i - 1) % period;
+
+        let is_nan = if is_invalid(high[i])
+            || is_invalid(low[i])
+            || is_invalid(close[i])
+            || is_invalid(volume[i])
+        {
+            prev_tp = (high[i] + low[i] + close[i]) * inv_three;
+            true
+        } else {
+            let tp = (high[i] + low[i] + close[i]) * inv_three;
+            let prev_invalid = if i == 1 { first_invalid } else { nan_ring[(i - 2) % period] };
+
+            if is_invalid(prev_tp) || prev_invalid {
+                prev_tp = tp;
+                true
+            } else {
+                let raw_mf = tp * volume[i];
+                if tp > prev_tp {
+                    positive_ring[ring_idx] = raw_mf;
+                    sum_positive += raw_mf.to_f64().unwrap_or(0.0);
+                } else if tp < prev_tp {
+                    negative_ring[ring_idx] = raw_mf;
+                    sum_negative += raw_mf.to_f64().unwrap_or(0.0);
+                }
+                prev_tp = tp;
+                false
+            }
+        };
+
+        nan_ring[ring_idx] = is_nan;
+        if is_nan {
             nan_count += 1;
         }
-        sum_positive = sum_positive + positive_mf[i];
-        sum_negative = sum_negative + negative_mf[i];
     }
 
     // Calculate first MFI at index = period
     if nan_count > 0 {
         output[lookback] = T::nan();
-    } else if sum_negative == zero {
+    } else if sum_negative == 0.0 {
         output[lookback] = hundred;
-    } else if sum_positive == zero {
+    } else if sum_positive == 0.0 {
         output[lookback] = zero;
     } else {
         let mfr = sum_positive / sum_negative;
-        output[lookback] = hundred - (hundred / (one + mfr));
+        let mfi_val = 100.0 - (100.0 / (1.0 + mfr));
+        output[lookback] = T::from_f64(mfi_val)?;
     }
 
     // Rolling calculation for remaining values
-    // Use simple add/subtract - no conditionals needed since arrays store 0 for unchanged
     for i in (lookback + 1)..n {
-        let old_idx = i - period;
-        sum_positive = sum_positive - positive_mf[old_idx] + positive_mf[i];
-        sum_negative = sum_negative - negative_mf[old_idx] + negative_mf[i];
-        if nan_flags[old_idx] {
+        // Ring index for the new value (which overwrites the oldest)
+        let ring_idx = (i - 1) % period;
+
+        // Remove old value from sums
+        let old_positive = positive_ring[ring_idx];
+        let old_negative = negative_ring[ring_idx];
+        sum_positive -= old_positive.to_f64().unwrap_or(0.0);
+        sum_negative -= old_negative.to_f64().unwrap_or(0.0);
+        if nan_ring[ring_idx] {
             nan_count -= 1;
         }
-        if nan_flags[i] {
+
+        // Reset ring slot
+        positive_ring[ring_idx] = zero;
+        negative_ring[ring_idx] = zero;
+
+        // Compute new value
+        let is_nan = if is_invalid(high[i])
+            || is_invalid(low[i])
+            || is_invalid(close[i])
+            || is_invalid(volume[i])
+        {
+            prev_tp = (high[i] + low[i] + close[i]) * inv_three;
+            true
+        } else {
+            let tp = (high[i] + low[i] + close[i]) * inv_three;
+            if is_invalid(prev_tp) {
+                prev_tp = tp;
+                true
+            } else {
+                let raw_mf = tp * volume[i];
+                if tp > prev_tp {
+                    positive_ring[ring_idx] = raw_mf;
+                    sum_positive += raw_mf.to_f64().unwrap_or(0.0);
+                } else if tp < prev_tp {
+                    negative_ring[ring_idx] = raw_mf;
+                    sum_negative += raw_mf.to_f64().unwrap_or(0.0);
+                }
+                prev_tp = tp;
+                false
+            }
+        };
+
+        nan_ring[ring_idx] = is_nan;
+        if is_nan {
             nan_count += 1;
         }
 
         // Calculate MFI
         if nan_count > 0 {
             output[i] = T::nan();
-        } else if sum_negative == zero {
+        } else if sum_negative == 0.0 {
             output[i] = hundred;
-        } else if sum_positive == zero {
+        } else if sum_positive == 0.0 {
             output[i] = zero;
         } else {
             let mfr = sum_positive / sum_negative;
-            output[i] = hundred - (hundred / (one + mfr));
+            let mfi_val = 100.0 - (100.0 / (1.0 + mfr));
+            output[i] = T::from_f64(mfi_val)?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Core MFI computation using f64 precision with O(period) ring buffer.
+///
+/// This implementation uses ring buffers of size `period` instead of full-length
+/// intermediate arrays, reducing memory usage from O(n) to O(period).
+/// All computations are performed in f64 for improved precision with f32 inputs.
+fn mfi_core_f64<T: SeriesElement>(
+    high: &[T],
+    low: &[T],
+    close: &[T],
+    volume: &[T],
+    period: usize,
+    output: &mut [T],
+) -> Result<()> {
+    let n = high.len();
+
+    // Pre-scan for NaN - much faster than checking per-element in hot loop
+    let has_nan = high.iter().take(n).any(|&v| is_invalid(v))
+        || low.iter().take(n).any(|&v| is_invalid(v))
+        || close.iter().take(n).any(|&v| is_invalid(v))
+        || volume.iter().take(n).any(|&v| is_invalid(v));
+
+    if has_nan {
+        mfi_core_f64_slow(high, low, close, volume, period, output)
+    } else {
+        mfi_core_f64_fast(high, low, close, volume, period, output)
+    }
+}
+
+/// Fast path for f64 precision: no NaN checks per element.
+#[inline]
+fn mfi_core_f64_fast<T: SeriesElement>(
+    high: &[T],
+    low: &[T],
+    close: &[T],
+    volume: &[T],
+    period: usize,
+    output: &mut [T],
+) -> Result<()> {
+    let n = high.len();
+    let lookback = mfi_lookback(period);
+    let inv_three = 1.0_f64 / 3.0;
+
+    // Fill lookback period with NaN
+    for out in output.iter_mut().take(lookback) {
+        *out = T::nan();
+    }
+
+    // Ring buffers of size `period` - O(period) space instead of O(n)
+    let mut positive_ring = vec![0.0_f64; period];
+    let mut negative_ring = vec![0.0_f64; period];
+
+    // Rolling sums - f64 accumulators
+    let mut sum_positive: f64 = 0.0;
+    let mut sum_negative: f64 = 0.0;
+
+    // Compute first typical price in f64
+    let h0 = high[0].to_f64().unwrap_or(0.0);
+    let l0 = low[0].to_f64().unwrap_or(0.0);
+    let c0 = close[0].to_f64().unwrap_or(0.0);
+    let mut prev_tp = (h0 + l0 + c0) * inv_three;
+
+    // Process indices 1..=period to fill the initial window
+    for i in 1..=period {
+        let ring_idx = (i - 1) % period;
+        let h = high[i].to_f64().unwrap_or(0.0);
+        let l = low[i].to_f64().unwrap_or(0.0);
+        let c = close[i].to_f64().unwrap_or(0.0);
+        let v = volume[i].to_f64().unwrap_or(0.0);
+        let tp = (h + l + c) * inv_three;
+        let raw_mf = tp * v;
+
+        if tp > prev_tp {
+            positive_ring[ring_idx] = raw_mf;
+            sum_positive += raw_mf;
+        } else if tp < prev_tp {
+            negative_ring[ring_idx] = raw_mf;
+            sum_negative += raw_mf;
+        }
+        prev_tp = tp;
+    }
+
+    // Calculate first MFI at index = period
+    if sum_negative == 0.0 {
+        output[lookback] = T::from_f64(100.0)?;
+    } else if sum_positive == 0.0 {
+        output[lookback] = T::zero();
+    } else {
+        let mfr = sum_positive / sum_negative;
+        let mfi_val = 100.0 - (100.0 / (1.0 + mfr));
+        output[lookback] = T::from_f64(mfi_val)?;
+    }
+
+    // Rolling calculation for remaining values - tight loop, no NaN checks
+    for i in (lookback + 1)..n {
+        let ring_idx = (i - 1) % period;
+
+        // Remove old value from sums
+        sum_positive -= positive_ring[ring_idx];
+        sum_negative -= negative_ring[ring_idx];
+
+        // Reset ring slot
+        positive_ring[ring_idx] = 0.0;
+        negative_ring[ring_idx] = 0.0;
+
+        // Compute new value
+        let h = high[i].to_f64().unwrap_or(0.0);
+        let l = low[i].to_f64().unwrap_or(0.0);
+        let c = close[i].to_f64().unwrap_or(0.0);
+        let v = volume[i].to_f64().unwrap_or(0.0);
+        let tp = (h + l + c) * inv_three;
+        let raw_mf = tp * v;
+
+        if tp > prev_tp {
+            positive_ring[ring_idx] = raw_mf;
+            sum_positive += raw_mf;
+        } else if tp < prev_tp {
+            negative_ring[ring_idx] = raw_mf;
+            sum_negative += raw_mf;
+        }
+        prev_tp = tp;
+
+        // Calculate MFI
+        if sum_negative == 0.0 {
+            output[i] = T::from_f64(100.0)?;
+        } else if sum_positive == 0.0 {
+            output[i] = T::zero();
+        } else {
+            let mfr = sum_positive / sum_negative;
+            let mfi_val = 100.0 - (100.0 / (1.0 + mfr));
+            output[i] = T::from_f64(mfi_val)?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Slow path for f64 precision: handles NaN values per element.
+fn mfi_core_f64_slow<T: SeriesElement>(
+    high: &[T],
+    low: &[T],
+    close: &[T],
+    volume: &[T],
+    period: usize,
+    output: &mut [T],
+) -> Result<()> {
+    let n = high.len();
+    let lookback = mfi_lookback(period);
+    let inv_three = 1.0_f64 / 3.0;
+
+    // Fill lookback period with NaN
+    for out in output.iter_mut().take(lookback) {
+        *out = T::nan();
+    }
+
+    // Ring buffers of size `period` - O(period) space instead of O(n)
+    // Use f64 for all ring buffers for precision
+    let mut positive_ring = vec![0.0_f64; period];
+    let mut negative_ring = vec![0.0_f64; period];
+    let mut nan_ring = vec![false; period];
+
+    // Rolling sums - f64 accumulators
+    let mut sum_positive: f64 = 0.0;
+    let mut sum_negative: f64 = 0.0;
+    let mut nan_count = 0usize;
+
+    // Compute first typical price in f64
+    let h0 = high[0].to_f64().unwrap_or(0.0);
+    let l0 = low[0].to_f64().unwrap_or(0.0);
+    let c0 = close[0].to_f64().unwrap_or(0.0);
+    let mut prev_tp = (h0 + l0 + c0) * inv_three;
+    let first_invalid =
+        is_invalid(high[0]) || is_invalid(low[0]) || is_invalid(close[0]) || is_invalid(volume[0]);
+
+    // Process indices 1..=period to fill the initial window
+    for i in 1..=period {
+        let ring_idx = (i - 1) % period;
+
+        let is_nan = if is_invalid(high[i])
+            || is_invalid(low[i])
+            || is_invalid(close[i])
+            || is_invalid(volume[i])
+        {
+            let h = high[i].to_f64().unwrap_or(0.0);
+            let l = low[i].to_f64().unwrap_or(0.0);
+            let c = close[i].to_f64().unwrap_or(0.0);
+            prev_tp = (h + l + c) * inv_three;
+            true
+        } else {
+            let h = high[i].to_f64().unwrap_or(0.0);
+            let l = low[i].to_f64().unwrap_or(0.0);
+            let c = close[i].to_f64().unwrap_or(0.0);
+            let v = volume[i].to_f64().unwrap_or(0.0);
+            let tp = (h + l + c) * inv_three;
+
+            let prev_invalid = if i == 1 { first_invalid } else { nan_ring[(i - 2) % period] };
+
+            if prev_tp.is_nan() || prev_invalid {
+                prev_tp = tp;
+                true
+            } else {
+                let raw_mf = tp * v;
+                if tp > prev_tp {
+                    positive_ring[ring_idx] = raw_mf;
+                    sum_positive += raw_mf;
+                } else if tp < prev_tp {
+                    negative_ring[ring_idx] = raw_mf;
+                    sum_negative += raw_mf;
+                }
+                prev_tp = tp;
+                false
+            }
+        };
+
+        nan_ring[ring_idx] = is_nan;
+        if is_nan {
+            nan_count += 1;
+        }
+    }
+
+    // Calculate first MFI at index = period
+    if nan_count > 0 {
+        output[lookback] = T::nan();
+    } else if sum_negative == 0.0 {
+        output[lookback] = T::from_f64(100.0)?;
+    } else if sum_positive == 0.0 {
+        output[lookback] = T::zero();
+    } else {
+        let mfr = sum_positive / sum_negative;
+        let mfi_val = 100.0 - (100.0 / (1.0 + mfr));
+        output[lookback] = T::from_f64(mfi_val)?;
+    }
+
+    // Rolling calculation for remaining values
+    for i in (lookback + 1)..n {
+        // Ring index for the new value (which overwrites the oldest)
+        let ring_idx = (i - 1) % period;
+
+        // Remove old value from sums
+        sum_positive -= positive_ring[ring_idx];
+        sum_negative -= negative_ring[ring_idx];
+        if nan_ring[ring_idx] {
+            nan_count -= 1;
+        }
+
+        // Reset ring slot
+        positive_ring[ring_idx] = 0.0;
+        negative_ring[ring_idx] = 0.0;
+
+        // Compute new value
+        let is_nan = if is_invalid(high[i])
+            || is_invalid(low[i])
+            || is_invalid(close[i])
+            || is_invalid(volume[i])
+        {
+            let h = high[i].to_f64().unwrap_or(0.0);
+            let l = low[i].to_f64().unwrap_or(0.0);
+            let c = close[i].to_f64().unwrap_or(0.0);
+            prev_tp = (h + l + c) * inv_three;
+            true
+        } else {
+            let h = high[i].to_f64().unwrap_or(0.0);
+            let l = low[i].to_f64().unwrap_or(0.0);
+            let c = close[i].to_f64().unwrap_or(0.0);
+            let v = volume[i].to_f64().unwrap_or(0.0);
+            let tp = (h + l + c) * inv_three;
+
+            if prev_tp.is_nan() {
+                prev_tp = tp;
+                true
+            } else {
+                let raw_mf = tp * v;
+                if tp > prev_tp {
+                    positive_ring[ring_idx] = raw_mf;
+                    sum_positive += raw_mf;
+                } else if tp < prev_tp {
+                    negative_ring[ring_idx] = raw_mf;
+                    sum_negative += raw_mf;
+                }
+                prev_tp = tp;
+                false
+            }
+        };
+
+        nan_ring[ring_idx] = is_nan;
+        if is_nan {
+            nan_count += 1;
+        }
+
+        // Calculate MFI
+        if nan_count > 0 {
+            output[i] = T::nan();
+        } else if sum_negative == 0.0 {
+            output[i] = T::from_f64(100.0)?;
+        } else if sum_positive == 0.0 {
+            output[i] = T::zero();
+        } else {
+            let mfr = sum_positive / sum_negative;
+            let mfi_val = 100.0 - (100.0 / (1.0 + mfr));
+            output[i] = T::from_f64(mfi_val)?;
         }
     }
 
@@ -246,7 +759,7 @@ pub fn mfi_into<T: SeriesElement>(
 /// - The input arrays have different lengths (`Error::LengthMismatch`)
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
-pub fn mfi<T: SeriesElement>(
+pub fn mfi<T: SeriesElement + 'static>(
     high: &[T],
     low: &[T],
     close: &[T],

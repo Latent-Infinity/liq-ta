@@ -198,18 +198,36 @@ fn numeric_policy_nan_all_nan_window_rolling_extrema() {
 }
 
 // ==================== PRD §4.3: Infinity Handling Tests ====================
-// "Infinity in input: Propagate to output"
+// Infinity is treated as an invalid value (like NaN) and produces NaN output
+// when present in the rolling window. This is consistent with the is_invalid()
+// utility and prevents arithmetic issues like infinity - infinity = NaN.
 
 #[test]
 fn numeric_policy_infinity_propagation_sma() {
-    let data = vec![1.0_f64, 2.0, f64::INFINITY, 4.0, 5.0];
+    // Need enough data so infinity leaves the window
+    let data = vec![1.0_f64, 2.0, f64::INFINITY, 4.0, 5.0, 6.0, 7.0];
     let result = sma(&data, 3).unwrap();
 
-    // SMA with infinity should produce infinity
-    assert!(result[2].is_infinite(), "SMA should propagate infinity");
+    // SMA with infinity should produce NaN (infinity treated as invalid)
+    // Window [1, 2, INF] at index 2 → NaN
     assert!(
-        result[3].is_infinite(),
-        "SMA should propagate infinity at index 3"
+        result[2].is_nan(),
+        "SMA should produce NaN when infinity is in window"
+    );
+    // Window [2, INF, 4] at index 3 → NaN
+    assert!(
+        result[3].is_nan(),
+        "SMA should produce NaN when infinity is in window at index 3"
+    );
+    // Window [INF, 4, 5] at index 4 → NaN
+    assert!(
+        result[4].is_nan(),
+        "SMA should produce NaN when infinity is in window at index 4"
+    );
+    // Window [4, 5, 6] at index 5 → Finite (infinity has left the window)
+    assert!(
+        result[5].is_finite(),
+        "SMA should recover after infinity leaves window"
     );
 }
 
@@ -227,13 +245,30 @@ fn numeric_policy_infinity_propagation_ema() {
 
 #[test]
 fn numeric_policy_negative_infinity() {
-    let data = vec![1.0_f64, 2.0, f64::NEG_INFINITY, 4.0, 5.0];
+    // Need enough data so infinity leaves the window
+    let data = vec![1.0_f64, 2.0, f64::NEG_INFINITY, 4.0, 5.0, 6.0, 7.0];
     let result = sma(&data, 3).unwrap();
 
-    // Negative infinity should also propagate
+    // Negative infinity is also treated as invalid and produces NaN
+    // Window [1, 2, -INF] at index 2 → NaN
     assert!(
-        result[2].is_infinite() && result[2] < 0.0,
-        "SMA should propagate negative infinity"
+        result[2].is_nan(),
+        "SMA should produce NaN when negative infinity is in window"
+    );
+    // Window [2, -INF, 4] at index 3 → NaN
+    assert!(
+        result[3].is_nan(),
+        "SMA should produce NaN when negative infinity is in window at index 3"
+    );
+    // Window [-INF, 4, 5] at index 4 → NaN
+    assert!(
+        result[4].is_nan(),
+        "SMA should produce NaN when negative infinity is in window at index 4"
+    );
+    // Window [4, 5, 6] at index 5 → Finite (infinity has left the window)
+    assert!(
+        result[5].is_finite(),
+        "SMA should recover after negative infinity leaves window"
     );
 }
 

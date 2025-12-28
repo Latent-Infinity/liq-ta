@@ -21,10 +21,29 @@
 //! # Lookback
 //!
 //! The lookback period is `period - 1`.
+//!
+//! # Precision Behavior
+//!
+//! When `PrecisionMode::High` is active and input type is `f32`:
+//! - Typical price calculation uses `f64`
+//! - Rolling SMA sum uses `f64` accumulator
+//! - Mean deviation calculation uses `f64`
+//! - Final CCI division performed in `f64`
+//!
+//! **Tolerance**: hybrid(rel=1e-4, abs=0.1) when comparing f32 High mode to f64 reference.
+//! CCI is unbounded but typically ranges ±200.
 
 use crate::error::{Error, Result};
+use crate::precision::{current_precision_mode, PrecisionMode};
 use crate::traits::SeriesElement;
 use crate::utils::is_invalid;
+
+/// Returns true if we should use f64 precision for the given type.
+#[inline]
+fn use_f64_precision<T: 'static>() -> bool {
+    use std::any::TypeId;
+    TypeId::of::<T>() == TypeId::of::<f32>() && current_precision_mode() == PrecisionMode::High
+}
 
 /// Computes the lookback period for CCI.
 #[inline]
@@ -62,7 +81,7 @@ pub const fn cci_min_len(period: usize) -> usize {
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 /// - The output buffer is too small (`Error::BufferTooSmall`)
-pub fn cci_into<T: SeriesElement>(
+pub fn cci_into<T: SeriesElement + 'static>(
     high: &[T],
     low: &[T],
     close: &[T],
@@ -110,6 +129,22 @@ pub fn cci_into<T: SeriesElement>(
         });
     }
 
+    if use_f64_precision::<T>() {
+        cci_core_f64(high, low, close, period, output)
+    } else {
+        cci_core_native(high, low, close, period, output)
+    }
+}
+
+/// Core CCI computation using native precision.
+fn cci_core_native<T: SeriesElement>(
+    high: &[T],
+    low: &[T],
+    close: &[T],
+    period: usize,
+    output: &mut [T],
+) -> Result<()> {
+    let n = high.len();
     let lookback = cci_lookback(period);
     let inv_period = T::from_f64(1.0 / period as f64)?;
     let inv_three = T::from_f64(1.0 / 3.0)?;
@@ -209,6 +244,116 @@ pub fn cci_into<T: SeriesElement>(
     Ok(())
 }
 
+/// Core CCI computation using f64 precision for f32 inputs.
+fn cci_core_f64<T: SeriesElement>(
+    high: &[T],
+    low: &[T],
+    close: &[T],
+    period: usize,
+    output: &mut [T],
+) -> Result<()> {
+    let n = high.len();
+    let lookback = cci_lookback(period);
+    let inv_period = 1.0 / period as f64;
+    let inv_three = 1.0 / 3.0;
+    let inv_constant = 1.0 / 0.015;
+
+    // Calculate typical prices in f64
+    let mut tp = vec![0.0_f64; n];
+    let mut invalid_flags = vec![false; n];
+    for i in 0..n {
+        if is_invalid(high[i]) || is_invalid(low[i]) || is_invalid(close[i]) {
+            tp[i] = f64::NAN;
+            invalid_flags[i] = true;
+        } else {
+            let h = high[i].to_f64().unwrap_or(0.0);
+            let l = low[i].to_f64().unwrap_or(0.0);
+            let c = close[i].to_f64().unwrap_or(0.0);
+            tp[i] = (h + l + c) * inv_three;
+        }
+    }
+
+    // Fill lookback period with NaN
+    for out in output.iter_mut().take(lookback) {
+        *out = T::nan();
+    }
+
+    // Initialize rolling sum for SMA in f64
+    let mut tp_sum: f64 = 0.0;
+    let mut invalid_count = 0usize;
+    for i in 0..period {
+        if invalid_flags[i] {
+            invalid_count += 1;
+        } else {
+            tp_sum += tp[i];
+        }
+    }
+
+    // Calculate first CCI value (at index = lookback = period - 1)
+    if invalid_count > 0 {
+        output[lookback] = T::nan();
+    } else {
+        let tp_sma = tp_sum * inv_period;
+
+        // Calculate mean deviation for first window in f64
+        let mut deviation_sum: f64 = 0.0;
+        for j in 0..period {
+            let diff = tp[j] - tp_sma;
+            deviation_sum += diff.abs();
+        }
+        let mean_deviation = deviation_sum * inv_period;
+
+        // CCI = (TP - SMA) * (1/0.015) / Mean Deviation
+        let cci_val = if mean_deviation == 0.0 {
+            0.0
+        } else {
+            (tp[lookback] - tp_sma) * inv_constant / mean_deviation
+        };
+        output[lookback] = T::from_f64(cci_val)?;
+    }
+
+    // Rolling calculation for remaining values
+    for i in (lookback + 1)..n {
+        // Update rolling sum for SMA
+        let old_idx = i - period;
+        if invalid_flags[old_idx] {
+            invalid_count = invalid_count.saturating_sub(1);
+        } else {
+            tp_sum -= tp[old_idx];
+        }
+        if invalid_flags[i] {
+            invalid_count += 1;
+        } else {
+            tp_sum += tp[i];
+        }
+
+        if invalid_count > 0 {
+            output[i] = T::nan();
+            continue;
+        }
+
+        let tp_sma = tp_sum * inv_period;
+
+        // Mean deviation in f64
+        let start = i + 1 - period;
+        let mut deviation_sum: f64 = 0.0;
+        for j in start..=i {
+            let diff = tp[j] - tp_sma;
+            deviation_sum += diff.abs();
+        }
+        let mean_deviation = deviation_sum * inv_period;
+
+        let cci_val = if mean_deviation == 0.0 {
+            0.0
+        } else {
+            (tp[i] - tp_sma) * inv_constant / mean_deviation
+        };
+        output[i] = T::from_f64(cci_val)?;
+    }
+
+    Ok(())
+}
+
 /// Computes CCI (Commodity Channel Index).
 ///
 /// # Arguments
@@ -244,7 +389,12 @@ pub fn cci_into<T: SeriesElement>(
 /// - The input arrays have different lengths (`Error::LengthMismatch`)
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
-pub fn cci<T: SeriesElement>(high: &[T], low: &[T], close: &[T], period: usize) -> Result<Vec<T>> {
+pub fn cci<T: SeriesElement + 'static>(
+    high: &[T],
+    low: &[T],
+    close: &[T],
+    period: usize,
+) -> Result<Vec<T>> {
     let mut output = vec![T::zero(); high.len()];
     cci_into(high, low, close, period, &mut output)?;
     Ok(output)

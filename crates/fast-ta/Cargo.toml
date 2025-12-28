@@ -30,6 +30,9 @@ parallel = ["dep:rayon"]
 reference-checks-strict = []
 # Enable dhat allocation profiling tests (run separately: cargo test --features dhat-heap)
 dhat-heap = ["dep:dhat"]
+# Use Fast precision mode by default (native-type accumulators for f32 inputs)
+# When not enabled, High precision mode is used (f64 accumulators for f32 inputs)
+precision-fast = []
 
 [dependencies]
 num-traits = { workspace = true }
@@ -61,4 +64,12 @@ harness = false
 
 [[bench]]
 name = "simd_comparison"
+harness = false
+
+[[bench]]
+name = "precision_baseline"
+harness = false
+
+[[bench]]
+name = "precision_comparison"
 harness = false

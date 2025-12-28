@@ -5,6 +5,7 @@
 //!
 //! # Kernels
 //!
+//! - [`mod@accumulators`]: Precision-aware accumulators (f64 internal state)
 //! - [`mod@rolling_extrema`]: Monotonic deque algorithm for O(n) rolling max/min
 //! - [`mod@simd`]: SIMD-accelerated reductions using portable SIMD
 //!
@@ -17,7 +18,11 @@
 //! The SIMD kernels use portable SIMD (requires nightly Rust) to accelerate
 //! reduction operations like sum, variance, dot product, and correlation,
 //! providing 2.5-4x speedups on typical data sizes.
+//!
+//! The accumulators provide f64 internal precision for improved numeric stability
+//! when processing f32 inputs, with O(1) per-operation complexity.
 
+pub mod accumulators;
 pub mod rolling_extrema;
 
 /// SIMD-accelerated kernels (requires nightly Rust)
@@ -27,6 +32,12 @@ pub mod simd;
 //
 // These re-exports allow users to import directly from `kernels` without
 // needing to specify the submodule, e.g., `use fast_ta::kernels::rolling_max;`
+
+// Accumulator exports: f64-precision accumulators for numeric stability
+pub use accumulators::{
+    CumulativeProductSum, CumulativeSum, RollingSumF64, RollingVarianceF64, WelfordVarianceF64,
+    WilderSmoothing,
+};
 
 // Rolling extrema kernel exports: O(n) rolling max/min using monotonic deque
 pub use rolling_extrema::{

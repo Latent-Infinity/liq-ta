@@ -31,6 +31,17 @@
 //! This implementation provides continuous (anchored) VWAP without session resets.
 //! For intraday VWAP with daily resets, users should segment their data by session.
 //!
+//! # Precision Behavior
+//!
+//! When `PrecisionMode::High` is active and input type is `f32`:
+//! - Cumulative TP×Volume and Volume sums use `f64` accumulators
+//! - Prevents overflow and precision loss over long sessions
+//! - Division performed in `f64`, then converted to `f32`
+//!
+//! **Tolerance**: hybrid(rel=1e-5, abs=1e-7) when comparing f32 High mode to f64 reference.
+//!
+//! For maximum precision over full trading days (>5000 bars), use `f64` input directly.
+//!
 //! # Example
 //!
 //! ```
@@ -51,8 +62,15 @@
 //! ```
 
 use crate::error::{Error, Result};
+use crate::precision::{current_precision_mode, PrecisionMode};
 use crate::traits::SeriesElement;
-use crate::utils::is_invalid;
+
+/// Returns true if we should use f64 precision for the given type.
+#[inline]
+fn use_f64_precision<T: 'static>() -> bool {
+    use std::any::TypeId;
+    TypeId::of::<T>() == TypeId::of::<f32>() && current_precision_mode() == PrecisionMode::High
+}
 
 /// Returns the lookback period for VWAP.
 ///
@@ -129,13 +147,22 @@ pub const fn vwap_min_len() -> usize {
 /// assert!(!result[0].is_nan());
 /// ```
 #[must_use = "this returns a Result with VWAP values, which should be used"]
-pub fn vwap<T: SeriesElement>(high: &[T], low: &[T], close: &[T], volume: &[T]) -> Result<Vec<T>> {
+pub fn vwap<T: SeriesElement + 'static>(
+    high: &[T],
+    low: &[T],
+    close: &[T],
+    volume: &[T],
+) -> Result<Vec<T>> {
     validate_inputs(high, low, close, volume)?;
 
     let n = high.len();
     let mut output = Vec::with_capacity(n);
 
-    compute_vwap_core(high, low, close, volume, &mut output);
+    if use_f64_precision::<T>() {
+        compute_vwap_core_f64(high, low, close, volume, &mut output)?;
+    } else {
+        compute_vwap_core(high, low, close, volume, &mut output);
+    }
 
     Ok(output)
 }
@@ -180,7 +207,7 @@ pub fn vwap<T: SeriesElement>(high: &[T], low: &[T], close: &[T], volume: &[T]) 
 /// assert_eq!(valid_count, 3);
 /// ```
 #[must_use = "this returns a Result with the count of valid VWAP values"]
-pub fn vwap_into<T: SeriesElement>(
+pub fn vwap_into<T: SeriesElement + 'static>(
     high: &[T],
     low: &[T],
     close: &[T],
@@ -199,7 +226,11 @@ pub fn vwap_into<T: SeriesElement>(
         });
     }
 
-    compute_vwap_core_into(high, low, close, volume, output);
+    if use_f64_precision::<T>() {
+        compute_vwap_core_into_f64(high, low, close, volume, output)?;
+    } else {
+        compute_vwap_core_into(high, low, close, volume, output);
+    }
 
     Ok(n)
 }
@@ -260,12 +291,11 @@ fn compute_vwap_core<T: SeriesElement>(
         let c = close[i];
         let v = volume[i];
 
-        if nan_active
-            || is_invalid(h)
-            || is_invalid(l)
-            || is_invalid(c)
-            || is_invalid(v)
-        {
+        if nan_active {
+            output.push(T::nan());
+            continue;
+        }
+        if !(h.is_finite() && l.is_finite() && c.is_finite() && v.is_finite()) {
             nan_active = true;
             output.push(T::nan());
             continue;
@@ -318,12 +348,11 @@ fn compute_vwap_core_into<T: SeriesElement>(
         let c = close[i];
         let v = volume[i];
 
-        if nan_active
-            || is_invalid(h)
-            || is_invalid(l)
-            || is_invalid(c)
-            || is_invalid(v)
-        {
+        if nan_active {
+            output[i] = T::nan();
+            continue;
+        }
+        if !(h.is_finite() && l.is_finite() && c.is_finite() && v.is_finite()) {
             nan_active = true;
             output[i] = T::nan();
             continue;
@@ -352,6 +381,134 @@ fn compute_vwap_core_into<T: SeriesElement>(
         last_valid_vwap = vwap_val;
         output[i] = vwap_val;
     }
+}
+
+/// Core VWAP computation with f64 accumulators that allocates a new vector.
+fn compute_vwap_core_f64<T: SeriesElement>(
+    high: &[T],
+    low: &[T],
+    close: &[T],
+    volume: &[T],
+    output: &mut Vec<T>,
+) -> Result<()> {
+    let n = high.len();
+
+    let mut cumulative_tp_vol: f64 = 0.0;
+    let mut cumulative_vol: f64 = 0.0;
+    let mut last_valid_vwap: f64 = f64::NAN;
+    let mut nan_active = false;
+
+    for i in 0..n {
+        let h = high[i];
+        let l = low[i];
+        let c = close[i];
+        let v = volume[i];
+
+        if nan_active {
+            output.push(T::nan());
+            continue;
+        }
+        if !(h.is_finite() && l.is_finite() && c.is_finite() && v.is_finite()) {
+            nan_active = true;
+            output.push(T::nan());
+            continue;
+        }
+
+        // Convert to f64 for accumulation
+        let h_f64 = h.to_f64().unwrap_or(0.0);
+        let l_f64 = l.to_f64().unwrap_or(0.0);
+        let c_f64 = c.to_f64().unwrap_or(0.0);
+        let v_f64 = v.to_f64().unwrap_or(0.0);
+
+        // Skip zero volume (VWAP unchanged)
+        if v_f64 == 0.0 {
+            output.push(T::from_f64(last_valid_vwap)?);
+            continue;
+        }
+
+        // Typical price in f64
+        let tp = (h_f64 + l_f64 + c_f64) / 3.0;
+
+        // Update cumulative values in f64
+        cumulative_tp_vol += tp * v_f64;
+        cumulative_vol += v_f64;
+
+        // Calculate VWAP in f64
+        let vwap_val = if cumulative_vol > 0.0 {
+            cumulative_tp_vol / cumulative_vol
+        } else {
+            tp
+        };
+
+        last_valid_vwap = vwap_val;
+        output.push(T::from_f64(vwap_val)?);
+    }
+
+    Ok(())
+}
+
+/// Core VWAP computation with f64 accumulators into pre-allocated buffer.
+fn compute_vwap_core_into_f64<T: SeriesElement>(
+    high: &[T],
+    low: &[T],
+    close: &[T],
+    volume: &[T],
+    output: &mut [T],
+) -> Result<()> {
+    let n = high.len();
+
+    let mut cumulative_tp_vol: f64 = 0.0;
+    let mut cumulative_vol: f64 = 0.0;
+    let mut last_valid_vwap: f64 = f64::NAN;
+    let mut nan_active = false;
+
+    for i in 0..n {
+        let h = high[i];
+        let l = low[i];
+        let c = close[i];
+        let v = volume[i];
+
+        if nan_active {
+            output[i] = T::nan();
+            continue;
+        }
+        if !(h.is_finite() && l.is_finite() && c.is_finite() && v.is_finite()) {
+            nan_active = true;
+            output[i] = T::nan();
+            continue;
+        }
+
+        // Convert to f64 for accumulation
+        let h_f64 = h.to_f64().unwrap_or(0.0);
+        let l_f64 = l.to_f64().unwrap_or(0.0);
+        let c_f64 = c.to_f64().unwrap_or(0.0);
+        let v_f64 = v.to_f64().unwrap_or(0.0);
+
+        // Skip zero volume (VWAP unchanged)
+        if v_f64 == 0.0 {
+            output[i] = T::from_f64(last_valid_vwap)?;
+            continue;
+        }
+
+        // Typical price in f64
+        let tp = (h_f64 + l_f64 + c_f64) / 3.0;
+
+        // Update cumulative values in f64
+        cumulative_tp_vol += tp * v_f64;
+        cumulative_vol += v_f64;
+
+        // Calculate VWAP in f64
+        let vwap_val = if cumulative_vol > 0.0 {
+            cumulative_tp_vol / cumulative_vol
+        } else {
+            tp
+        };
+
+        last_valid_vwap = vwap_val;
+        output[i] = T::from_f64(vwap_val)?;
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

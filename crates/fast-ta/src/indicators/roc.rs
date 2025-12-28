@@ -18,10 +18,80 @@
 //! # Lookback
 //!
 //! All functions have a lookback period equal to the period parameter.
+//!
+//! # Precision Behavior
+//!
+//! When `PrecisionMode::High` is active and input type is `f32`:
+//! - All division operations performed in `f64`
+//! - Prevents precision loss for small price differences
+//! - Result converted back to `f32`
+//!
+//! **Tolerance**: hybrid(rel=2e-4, abs=2e-5) for ROC/ROCR100 (percentage-scaled),
+//! hybrid(rel=1e-4, abs=1e-6) for ROCP/ROCR (ratio form).
 
 use crate::error::{Error, Result};
+use crate::precision::{current_precision_mode, PrecisionMode};
 use crate::traits::SeriesElement;
 use crate::utils::is_invalid;
+
+/// Returns true if we should use f64 precision for the given type.
+#[inline]
+fn use_f64_precision<T: 'static>() -> bool {
+    use std::any::TypeId;
+    TypeId::of::<T>() == TypeId::of::<f32>() && current_precision_mode() == PrecisionMode::High
+}
+
+/// Computes ROC = ((cur - prev) / prev) * 100 with appropriate precision.
+#[inline]
+fn compute_roc_value<T: SeriesElement + 'static>(cur: T, prev: T, hundred: T) -> Result<T> {
+    if use_f64_precision::<T>() {
+        let cur_f64 = cur.to_f64().unwrap_or(0.0);
+        let prev_f64 = prev.to_f64().unwrap_or(1.0);
+        let roc = ((cur_f64 - prev_f64) / prev_f64) * 100.0;
+        T::from_f64(roc)
+    } else {
+        Ok(((cur - prev) / prev) * hundred)
+    }
+}
+
+/// Computes ROCP = (cur - prev) / prev with appropriate precision.
+#[inline]
+fn compute_rocp_value<T: SeriesElement + 'static>(cur: T, prev: T) -> Result<T> {
+    if use_f64_precision::<T>() {
+        let cur_f64 = cur.to_f64().unwrap_or(0.0);
+        let prev_f64 = prev.to_f64().unwrap_or(1.0);
+        let rocp = (cur_f64 - prev_f64) / prev_f64;
+        T::from_f64(rocp)
+    } else {
+        Ok((cur - prev) / prev)
+    }
+}
+
+/// Computes ROCR = cur / prev with appropriate precision.
+#[inline]
+fn compute_rocr_value<T: SeriesElement + 'static>(cur: T, prev: T) -> Result<T> {
+    if use_f64_precision::<T>() {
+        let cur_f64 = cur.to_f64().unwrap_or(0.0);
+        let prev_f64 = prev.to_f64().unwrap_or(1.0);
+        let rocr = cur_f64 / prev_f64;
+        T::from_f64(rocr)
+    } else {
+        Ok(cur / prev)
+    }
+}
+
+/// Computes ROCR100 = (cur / prev) * 100 with appropriate precision.
+#[inline]
+fn compute_rocr100_value<T: SeriesElement + 'static>(cur: T, prev: T, hundred: T) -> Result<T> {
+    if use_f64_precision::<T>() {
+        let cur_f64 = cur.to_f64().unwrap_or(0.0);
+        let prev_f64 = prev.to_f64().unwrap_or(1.0);
+        let rocr100 = (cur_f64 / prev_f64) * 100.0;
+        T::from_f64(rocr100)
+    } else {
+        Ok((cur / prev) * hundred)
+    }
+}
 
 // =============================================================================
 // ROC - Rate of Change (percentage * 100)
@@ -58,7 +128,11 @@ pub const fn roc_min_len(period: usize) -> usize {
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 /// - The output buffer is too small (`Error::BufferTooSmall`)
-pub fn roc_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -> Result<()> {
+pub fn roc_into<T: SeriesElement + 'static>(
+    data: &[T],
+    period: usize,
+    output: &mut [T],
+) -> Result<()> {
     if data.is_empty() {
         return Err(Error::EmptyInput);
     }
@@ -104,7 +178,7 @@ pub fn roc_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -
         if is_invalid(prev) || is_invalid(cur) || prev == T::zero() {
             output[i] = T::nan();
         } else {
-            output[i] = ((cur - prev) / prev) * hundred;
+            output[i] = compute_roc_value(cur, prev, hundred)?;
         }
     }
 
@@ -132,7 +206,7 @@ pub fn roc_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -
 /// - The input data is empty (`Error::EmptyInput`)
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
-pub fn roc<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
+pub fn roc<T: SeriesElement + 'static>(data: &[T], period: usize) -> Result<Vec<T>> {
     let mut output = vec![T::nan(); data.len()];
     roc_into(data, period, &mut output)?;
     Ok(output)
@@ -173,7 +247,11 @@ pub const fn rocp_min_len(period: usize) -> usize {
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 /// - The output buffer is too small (`Error::BufferTooSmall`)
-pub fn rocp_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -> Result<()> {
+pub fn rocp_into<T: SeriesElement + 'static>(
+    data: &[T],
+    period: usize,
+    output: &mut [T],
+) -> Result<()> {
     if data.is_empty() {
         return Err(Error::EmptyInput);
     }
@@ -218,7 +296,7 @@ pub fn rocp_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) 
         if is_invalid(prev) || is_invalid(cur) || prev == T::zero() {
             output[i] = T::nan();
         } else {
-            output[i] = (cur - prev) / prev;
+            output[i] = compute_rocp_value(cur, prev)?;
         }
     }
 
@@ -246,7 +324,7 @@ pub fn rocp_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) 
 /// - The input data is empty (`Error::EmptyInput`)
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
-pub fn rocp<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
+pub fn rocp<T: SeriesElement + 'static>(data: &[T], period: usize) -> Result<Vec<T>> {
     let mut output = vec![T::nan(); data.len()];
     rocp_into(data, period, &mut output)?;
     Ok(output)
@@ -287,7 +365,11 @@ pub const fn rocr_min_len(period: usize) -> usize {
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 /// - The output buffer is too small (`Error::BufferTooSmall`)
-pub fn rocr_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -> Result<()> {
+pub fn rocr_into<T: SeriesElement + 'static>(
+    data: &[T],
+    period: usize,
+    output: &mut [T],
+) -> Result<()> {
     if data.is_empty() {
         return Err(Error::EmptyInput);
     }
@@ -332,7 +414,7 @@ pub fn rocr_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) 
         if is_invalid(prev) || is_invalid(cur) || prev == T::zero() {
             output[i] = T::nan();
         } else {
-            output[i] = cur / prev;
+            output[i] = compute_rocr_value(cur, prev)?;
         }
     }
 
@@ -360,7 +442,7 @@ pub fn rocr_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) 
 /// - The input data is empty (`Error::EmptyInput`)
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
-pub fn rocr<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
+pub fn rocr<T: SeriesElement + 'static>(data: &[T], period: usize) -> Result<Vec<T>> {
     let mut output = vec![T::nan(); data.len()];
     rocr_into(data, period, &mut output)?;
     Ok(output)
@@ -401,7 +483,11 @@ pub const fn rocr100_min_len(period: usize) -> usize {
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 /// - The output buffer is too small (`Error::BufferTooSmall`)
-pub fn rocr100_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -> Result<()> {
+pub fn rocr100_into<T: SeriesElement + 'static>(
+    data: &[T],
+    period: usize,
+    output: &mut [T],
+) -> Result<()> {
     if data.is_empty() {
         return Err(Error::EmptyInput);
     }
@@ -447,7 +533,7 @@ pub fn rocr100_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T
         if is_invalid(prev) || is_invalid(cur) || prev == T::zero() {
             output[i] = T::nan();
         } else {
-            output[i] = (cur / prev) * hundred;
+            output[i] = compute_rocr100_value(cur, prev, hundred)?;
         }
     }
 
@@ -475,7 +561,7 @@ pub fn rocr100_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T
 /// - The input data is empty (`Error::EmptyInput`)
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
-pub fn rocr100<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
+pub fn rocr100<T: SeriesElement + 'static>(data: &[T], period: usize) -> Result<Vec<T>> {
     let mut output = vec![T::nan(); data.len()];
     rocr100_into(data, period, &mut output)?;
     Ok(output)

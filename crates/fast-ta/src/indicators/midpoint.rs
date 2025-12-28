@@ -10,10 +10,14 @@
 //! # Lookback
 //!
 //! The lookback period is `period - 1`.
+//!
+//! # Performance
+//!
+//! Uses O(n) monotonic deque algorithm instead of naive O(n×period) approach.
 
 use crate::error::{Error, Result};
+use crate::kernels::rolling_extrema::MonotonicDeque;
 use crate::traits::SeriesElement;
-use crate::utils::is_invalid;
 
 /// Computes the lookback period for MIDPOINT.
 ///
@@ -110,6 +114,7 @@ pub fn midpoint_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [
     }
 
     let lookback = midpoint_lookback(period);
+    let n = data.len();
 
     // Fill lookback period with NaN
     for i in 0..lookback {
@@ -118,7 +123,7 @@ pub fn midpoint_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [
 
     // For period 1, MIDPOINT equals the input (highest = lowest = data[i])
     if period == 1 {
-        for i in 0..data.len() {
+        for i in 0..n {
             output[i] = data[i];
         }
         return Ok(());
@@ -126,34 +131,27 @@ pub fn midpoint_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [
 
     let two = T::from_usize(2)?;
 
-    // Use a deque-like structure to track min/max efficiently
-    // For simplicity, we'll use a straightforward O(period) approach for each window
-    // This can be optimized with monotonic deques if needed for performance
+    // Use O(n) monotonic deques for rolling max and min
+    let mut max_deque: MonotonicDeque<T> = MonotonicDeque::new(period);
+    let mut min_deque: MonotonicDeque<T> = MonotonicDeque::new(period);
 
-    for i in lookback..data.len() {
-        let window_start = i + 1 - period;
-        let mut highest = data[window_start];
-        let mut lowest = data[window_start];
-        let mut has_nan = is_invalid(highest) || is_invalid(lowest);
+    // Single pass through data
+    for i in 0..n {
+        // Update deques with current element
+        max_deque.push_max(i, data);
+        min_deque.push_min(i, data);
 
-        for j in (window_start + 1)..=i {
-            let value = data[j];
-            if is_invalid(value) {
-                has_nan = true;
-                break;
-            }
-            if value > highest {
-                highest = value;
-            }
-            if value < lowest {
-                lowest = value;
-            }
-        }
+        // Output valid values after lookback period
+        if i >= lookback {
+            let highest = max_deque.get_extremum(data);
+            let lowest = min_deque.get_extremum(data);
 
-        if has_nan {
-            output[i] = T::nan();
-        } else {
-            output[i] = (highest + lowest) / two;
+            // If either deque is empty (all values were NaN), output NaN
+            if !highest.is_finite() || !lowest.is_finite() {
+                output[i] = T::nan();
+            } else {
+                output[i] = (highest + lowest) / two;
+            }
         }
     }
 

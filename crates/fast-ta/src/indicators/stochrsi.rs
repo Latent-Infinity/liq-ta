@@ -25,6 +25,8 @@
 
 use crate::error::{Error, Result};
 use crate::indicators::rsi::{rsi_into, rsi_lookback};
+use crate::indicators::sma::sma_from_idx_into;
+use crate::kernels::{rolling_max_nan_propagating, rolling_min_nan_propagating};
 use crate::traits::SeriesElement;
 use crate::utils::is_invalid;
 
@@ -77,7 +79,7 @@ pub const fn stochrsi_min_len(rsi_period: usize, stoch_period: usize, d_period: 
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 /// - The output buffer is too small (`Error::BufferTooSmall`)
-pub fn stochrsi_into<T: SeriesElement>(
+pub fn stochrsi_into<T: SeriesElement + 'static>(
     data: &[T],
     rsi_period: usize,
     stoch_period: usize,
@@ -151,100 +153,58 @@ pub fn stochrsi_into<T: SeriesElement>(
         fastd[i] = T::nan();
     }
 
-    // Calculate raw StochRSI (before k_period smoothing)
+    // Calculate raw StochRSI using O(n) rolling extrema
     let mut raw_stochrsi = vec![T::nan(); n];
     let rsi_lb = rsi_lookback(rsi_period);
 
-    for i in (rsi_lb + stoch_period - 1)..n {
-        let start = i - stoch_period + 1;
+    // Use rolling_extrema kernel for O(n) min/max computation
+    let min_rsi = rolling_min_nan_propagating(&rsi_values, stoch_period)?;
+    let max_rsi = rolling_max_nan_propagating(&rsi_values, stoch_period)?;
 
-        let mut nan_in_window = false;
-        let mut min_rsi = rsi_values[start];
-        let mut max_rsi = rsi_values[start];
-        if is_invalid(min_rsi) || is_invalid(max_rsi) {
-            nan_in_window = true;
-        }
+    // Compute StochRSI from rolling min/max
+    let stoch_start = rsi_lb + stoch_period - 1;
+    let half = T::from_f64(0.5)?;
+    for i in stoch_start..n {
+        let min_val = min_rsi[i];
+        let max_val = max_rsi[i];
 
-        if !nan_in_window {
-            for j in (start + 1)..=i {
-                let value = rsi_values[j];
-                if is_invalid(value) {
-                    nan_in_window = true;
-                    break;
-                }
-                if value < min_rsi {
-                    min_rsi = value;
-                }
-                if value > max_rsi {
-                    max_rsi = value;
-                }
-            }
-        }
-
-        if nan_in_window {
+        if is_invalid(min_val) || is_invalid(max_val) {
             raw_stochrsi[i] = T::nan();
         } else {
-            let range = max_rsi - min_rsi;
+            let range = max_val - min_val;
             if range == T::zero() {
                 // If range is zero, StochRSI is typically set to 50 (or 0.5)
-                raw_stochrsi[i] = T::from_f64(0.5)?;
+                raw_stochrsi[i] = half;
             } else {
-                raw_stochrsi[i] = (rsi_values[i] - min_rsi) / range;
+                raw_stochrsi[i] = (rsi_values[i] - min_val) / range;
             }
         }
     }
 
     // Apply k_period smoothing (SMA) to get FastK
     if k_period == 1 {
-        // No smoothing needed
+        // No smoothing needed - copy raw_stochrsi to fastk
         for i in k_lookback..n {
             fastk[i] = raw_stochrsi[i];
         }
     } else {
-        // SMA smoothing for FastK
-        let k_start = rsi_lb + stoch_period - 1 + k_period - 1;
-        for i in k_start..n {
-            let mut sum = T::zero();
-            let mut nan_in_window = false;
-            for j in 0..k_period {
-                let value = raw_stochrsi[i - j];
-                if is_invalid(value) {
-                    nan_in_window = true;
-                    break;
-                }
-                sum = sum + value;
-            }
-            if nan_in_window {
-                fastk[i] = T::nan();
-            } else {
-                fastk[i] = sum / T::from_usize(k_period)?;
-            }
-        }
+        // Use shared SMA implementation for k_period smoothing
+        // raw_stochrsi is valid from stoch_start onwards
+        sma_from_idx_into(&raw_stochrsi, k_period, stoch_start, fastk)?;
     }
 
     // Calculate FastD (SMA of FastK)
     if d_period == 1 {
+        // No smoothing needed - copy fastk to fastd
         for i in d_lookback..n {
             fastd[i] = fastk[i];
         }
     } else {
-        for i in d_lookback..n {
-            let mut sum = T::zero();
-            let mut nan_in_window = false;
-            for j in 0..d_period {
-                let value = fastk[i - j];
-                if is_invalid(value) {
-                    nan_in_window = true;
-                    break;
-                }
-                sum = sum + value;
-            }
-            if nan_in_window {
-                fastd[i] = T::nan();
-            } else {
-                fastd[i] = sum / T::from_usize(d_period)?;
-            }
-        }
+        // Use shared SMA implementation for d_period smoothing
+        // fastk is valid from k_lookback onwards (when k_period == 1)
+        // or from stoch_start + k_period - 1 onwards (when k_period > 1)
+        // The SMA will correctly propagate NaN for any invalid values
+        sma_from_idx_into(fastk, d_period, k_lookback, fastd)?;
     }
 
     Ok(())
@@ -283,7 +243,7 @@ pub fn stochrsi_into<T: SeriesElement>(
 /// - The input data is empty (`Error::EmptyInput`)
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
-pub fn stochrsi<T: SeriesElement>(
+pub fn stochrsi<T: SeriesElement + 'static>(
     data: &[T],
     rsi_period: usize,
     stoch_period: usize,

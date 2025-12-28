@@ -93,6 +93,9 @@ pub fn bop_into<T: SeriesElement>(
     }
 
     // Calculate BOP for each bar
+    // Note: NaN-precheck pattern is NOT beneficial here because:
+    // - Loop body is very simple (2 subs + 1 div)
+    // - 4 pre-scans would add more overhead than inline NaN checks
     for i in 0..n {
         if is_invalid(open[i])
             || is_invalid(high[i])

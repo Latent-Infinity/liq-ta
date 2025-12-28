@@ -27,8 +27,8 @@
 //! The lookback period is `period`.
 
 use crate::error::{Error, Result};
+use crate::kernels::rolling_extrema::MonotonicDeque;
 use crate::traits::SeriesElement;
-use crate::utils::is_invalid;
 
 /// Output structure for AROON indicator.
 #[derive(Debug, Clone)]
@@ -136,56 +136,68 @@ pub fn aroon_into<T: SeriesElement>(
         aroon_down_output[i] = T::nan();
     }
 
-    // Calculate AROON for each bar after lookback
-    for i in lookback..n {
-        let start = i - period;
-        let end = i + 1; // inclusive of current bar
+    // AROON window is [i - period, i] inclusive = period + 1 elements
+    let window_size = period + 1;
 
-        // Find index of highest high and lowest low in the window, propagating NaNs.
-        let mut nan_in_window = false;
-        let mut highest_idx = start;
-        let mut lowest_idx = start;
-        let mut highest_val = high[start];
-        let mut lowest_val = low[start];
+    // Use O(n) monotonic deques for rolling max/min with index tracking
+    let mut max_deque: MonotonicDeque<T> = MonotonicDeque::new(window_size);
+    let mut min_deque: MonotonicDeque<T> = MonotonicDeque::new(window_size);
 
-        if is_invalid(highest_val) || is_invalid(lowest_val) {
-            nan_in_window = true;
-        } else {
-            for j in (start + 1)..end {
-                let high_val = high[j];
-                let low_val = low[j];
-                if is_invalid(high_val) || is_invalid(low_val) {
-                    nan_in_window = true;
-                    break;
-                }
-                if high_val >= highest_val {
-                    highest_val = high_val;
-                    highest_idx = j;
-                }
-                if low_val <= lowest_val {
-                    lowest_val = low_val;
-                    lowest_idx = j;
-                }
+    // Track NaN count in window for NaN propagation
+    let mut nan_count_high = 0usize;
+    let mut nan_count_low = 0usize;
+
+    // Single pass through data
+    for i in 0..n {
+        // Track NaN entering window
+        if !high[i].is_finite() {
+            nan_count_high += 1;
+        }
+        if !low[i].is_finite() {
+            nan_count_low += 1;
+        }
+
+        // Track NaN leaving window (after first full window)
+        if i >= window_size {
+            if !high[i - window_size].is_finite() {
+                nan_count_high -= 1;
+            }
+            if !low[i - window_size].is_finite() {
+                nan_count_low -= 1;
             }
         }
 
-        if nan_in_window {
-            aroon_up_output[i] = T::nan();
-            aroon_down_output[i] = T::nan();
-            continue;
+        // Update deques with current element
+        max_deque.push_max(i, high);
+        min_deque.push_min(i, low);
+
+        // Output valid values after lookback period
+        if i >= lookback {
+            if nan_count_high > 0 || nan_count_low > 0 {
+                aroon_up_output[i] = T::nan();
+                aroon_down_output[i] = T::nan();
+            } else if let (Some(highest_idx), Some(lowest_idx)) =
+                (max_deque.front_index(), min_deque.front_index())
+            {
+                // Periods since highest high and lowest low
+                let periods_since_high = i - highest_idx;
+                let periods_since_low = i - lowest_idx;
+
+                // Aroon Up = ((period - periods_since_high) / period) * 100
+                let aroon_up =
+                    ((period_t - T::from_usize(periods_since_high)?) / period_t) * hundred;
+                // Aroon Down = ((period - periods_since_low) / period) * 100
+                let aroon_down =
+                    ((period_t - T::from_usize(periods_since_low)?) / period_t) * hundred;
+
+                aroon_up_output[i] = aroon_up;
+                aroon_down_output[i] = aroon_down;
+            } else {
+                // Deque is empty (all values were NaN)
+                aroon_up_output[i] = T::nan();
+                aroon_down_output[i] = T::nan();
+            }
         }
-
-        // Periods since highest high and lowest low
-        let periods_since_high = i - highest_idx;
-        let periods_since_low = i - lowest_idx;
-
-        // Aroon Up = ((period - periods_since_high) / period) * 100
-        let aroon_up = ((period_t - T::from_usize(periods_since_high)?) / period_t) * hundred;
-        // Aroon Down = ((period - periods_since_low) / period) * 100
-        let aroon_down = ((period_t - T::from_usize(periods_since_low)?) / period_t) * hundred;
-
-        aroon_up_output[i] = aroon_up;
-        aroon_down_output[i] = aroon_down;
     }
 
     Ok(())
