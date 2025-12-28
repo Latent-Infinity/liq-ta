@@ -1,4 +1,0 @@
-{
-  "task_description": "Create a build to implement the features described in @development-plan.md. Please use the specific tasks and subtasks listed in that file to generate your implementation plan.",
-  "workflow_type": "feature"
-}
