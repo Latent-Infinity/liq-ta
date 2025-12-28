@@ -156,22 +156,53 @@ pub fn midprice_into<T: SeriesElement>(
     let mut max_deque: MonotonicDeque<T> = MonotonicDeque::new(period);
     let mut min_deque: MonotonicDeque<T> = MonotonicDeque::new(period);
 
+    // Ring buffer for tracking invalid value indices (for NaN/Infinity propagation)
+    let mut invalid_buf = vec![0usize; period];
+    let mut invalid_head = 0usize;
+    let mut invalid_tail = 0usize;
+    let mut invalid_len = 0usize;
+    let wrap = |idx: usize| idx % period;
+
     // Single pass through data
     for i in 0..n {
+        let h = high[i];
+        let l = low[i];
+
+        // Track non-finite values for propagation policy
+        if !h.is_finite() || !l.is_finite() {
+            invalid_buf[invalid_tail] = i;
+            invalid_tail = wrap(invalid_tail + 1);
+            invalid_len += 1;
+        }
+
         // Update deques with current elements
         max_deque.push_max(i, high);
         min_deque.push_min(i, low);
 
+        // Remove expired invalid indices from the window
+        if i >= period {
+            let window_start = i + 1 - period;
+            while invalid_len > 0 && invalid_buf[invalid_head] < window_start {
+                invalid_head = wrap(invalid_head + 1);
+                invalid_len -= 1;
+            }
+        }
+
         // Output valid values after lookback period
         if i >= lookback {
-            let highest_high = max_deque.get_extremum(high);
-            let lowest_low = min_deque.get_extremum(low);
-
-            // If either deque is empty (all values were NaN), output NaN
-            if !highest_high.is_finite() || !lowest_low.is_finite() {
+            // If any invalid value is still in the window, output NaN (propagation policy)
+            if invalid_len > 0 {
                 output[i] = T::nan();
             } else {
-                output[i] = (highest_high + lowest_low) / two;
+                let highest_high = max_deque.get_extremum(high);
+                let lowest_low = min_deque.get_extremum(low);
+
+                // If either deque is empty (all values were NaN), output NaN
+                if !highest_high.is_finite() || !lowest_low.is_finite() {
+                    output[i] = T::nan();
+                } else {
+                    output[i] = (highest_high + lowest_low) / two;
+                }
             }
         }
     }

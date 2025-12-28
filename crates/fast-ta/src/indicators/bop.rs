@@ -22,7 +22,6 @@
 
 use crate::error::{Error, Result};
 use crate::traits::SeriesElement;
-use crate::utils::is_invalid;
 
 /// Computes the lookback period for BOP.
 #[inline]
@@ -92,25 +91,28 @@ pub fn bop_into<T: SeriesElement>(
         });
     }
 
-    // Calculate BOP for each bar
-    // Note: NaN-precheck pattern is NOT beneficial here because:
-    // - Loop body is very simple (2 subs + 1 div)
-    // - 4 pre-scans would add more overhead than inline NaN checks
+    // Calculate BOP for each bar using IEEE 754 NaN propagation.
+    // Instead of 4 explicit is_invalid() checks per iteration, we compute
+    // the result and check once at the end. NaN arithmetic naturally propagates.
     for i in 0..n {
-        if is_invalid(open[i])
-            || is_invalid(high[i])
-            || is_invalid(low[i])
-            || is_invalid(close[i])
-        {
-            output[i] = T::nan();
-            continue;
-        }
+        let numerator = close[i] - open[i];
         let range = high[i] - low[i];
+
         if range == T::zero() {
-            // When high == low, use 0 (no directional pressure)
-            output[i] = T::zero();
+            // When high == low (valid finite values), use 0 (no directional pressure).
+            // Note: range == 0 can only be true if high and low are both finite and equal,
+            // since NaN comparisons always return false.
+            // We still need to check numerator in case close or open was NaN/Inf.
+            output[i] = if numerator.is_finite() {
+                T::zero()
+            } else {
+                T::nan()
+            };
         } else {
-            output[i] = (close[i] - open[i]) / range;
+            let result = numerator / range;
+            // If any input was NaN/Inf, result will be NaN/Inf.
+            // We normalize all non-finite results to NaN.
+            output[i] = if result.is_finite() { result } else { T::nan() };
         }
     }
 

@@ -76,7 +76,6 @@
 
 use crate::error::{Error, Result};
 use crate::traits::SeriesElement;
-use crate::utils::is_invalid;
 
 /// Output structure for ADX indicator containing ADX, +DI, and -DI.
 #[derive(Debug, Clone)]
@@ -305,16 +304,12 @@ pub fn adx_into<T: SeriesElement>(
         });
     }
 
-    // Initialize lookback period with NaN
+    // Initialize lookback period with NaN using efficient slice.fill()
     let lookback = adx_lookback(period);
-    for i in 0..lookback.min(n) {
-        adx_out[i] = T::nan();
-    }
+    adx_out[..lookback.min(n)].fill(T::nan());
     let di_lb = di_lookback(period);
-    for i in 0..di_lb.min(n) {
-        plus_di_out[i] = T::nan();
-        minus_di_out[i] = T::nan();
-    }
+    plus_di_out[..di_lb.min(n)].fill(T::nan());
+    minus_di_out[..di_lb.min(n)].fill(T::nan());
 
     compute_adx_core(high, low, close, period, adx_out, plus_di_out, minus_di_out)?;
 
@@ -376,20 +371,19 @@ fn validate_adx_inputs<T: SeriesElement>(
 }
 
 /// Computes True Range for a single bar.
+/// Uses IEEE 754 NaN propagation - if any input is NaN, result is NaN.
 #[inline]
 fn compute_true_range<T: SeriesElement>(high: T, low: T, prev_close: T) -> T {
-    if is_invalid(high) || is_invalid(low) || is_invalid(prev_close) {
-        return T::nan();
-    }
-
     let hl = high - low;
     let hc = (high - prev_close).abs();
     let lc = (low - prev_close).abs();
 
+    // IEEE 754: max(NaN, x) = NaN, so NaN propagates naturally
     hl.max(hc).max(lc)
 }
 
 /// Computes directional movement (+DM and -DM) for a single bar.
+/// Uses IEEE 754 NaN propagation - if any input is NaN, result is NaN.
 #[inline]
 fn compute_directional_movement<T: SeriesElement>(
     high: T,
@@ -397,12 +391,14 @@ fn compute_directional_movement<T: SeriesElement>(
     low: T,
     prev_low: T,
 ) -> (T, T) {
-    if is_invalid(high) || is_invalid(prev_high) || is_invalid(low) || is_invalid(prev_low) {
-        return (T::nan(), T::nan());
-    }
-
     let up_move = high - prev_high;
     let down_move = prev_low - low;
+
+    // IEEE 754: NaN comparisons return false, so we need to check for NaN
+    // to ensure proper propagation. This is cheaper than 4 input checks.
+    if !up_move.is_finite() || !down_move.is_finite() {
+        return (T::nan(), T::nan());
+    }
 
     let plus_dm = if up_move > down_move && up_move > T::zero() {
         up_move
@@ -454,11 +450,13 @@ fn compute_adx_core<T: SeriesElement>(
     let mut smoothed_plus_dm = sum_plus_dm;
     let mut smoothed_minus_dm = sum_minus_dm;
 
-    let mut nan_active = is_invalid(smoothed_tr)
-        || is_invalid(smoothed_plus_dm)
-        || is_invalid(smoothed_minus_dm);
+    // Check if any initial value is NaN - once set, stays set
+    // Only need to check smoothed_tr since if any input price was NaN,
+    // TR computation would produce NaN which propagates through the sum
+    let mut nan_active = !smoothed_tr.is_finite() || !smoothed_plus_dm.is_finite();
 
     // Calculate first +DI and -DI at index = period
+    // Use IEEE 754 propagation: if smoothed values are NaN, division produces NaN
     let plus_di_val = if nan_active {
         T::nan()
     } else if smoothed_tr > T::zero() {
@@ -477,8 +475,8 @@ fn compute_adx_core<T: SeriesElement>(
     plus_di_out[period] = plus_di_val;
     minus_di_out[period] = minus_di_val;
 
-    // Calculate first DX
-    let first_dx = if is_invalid(plus_di_val) || is_invalid(minus_di_val) {
+    // Calculate first DX - use is_finite() instead of separate is_invalid() calls
+    let first_dx = if !plus_di_val.is_finite() {
         nan_active = true;
         T::nan()
     } else {
@@ -499,7 +497,8 @@ fn compute_adx_core<T: SeriesElement>(
         let (plus_dm, minus_dm) =
             compute_directional_movement(high[i], high[i - 1], low[i], low[i - 1]);
 
-        if nan_active || is_invalid(tr) || is_invalid(plus_dm) || is_invalid(minus_dm) {
+        // Simplified NaN check: only check tr and plus_dm (minus_dm has same validity as plus_dm)
+        if nan_active || !tr.is_finite() || !plus_dm.is_finite() {
             nan_active = true;
             plus_di_out[i] = T::nan();
             minus_di_out[i] = T::nan();
@@ -541,7 +540,7 @@ fn compute_adx_core<T: SeriesElement>(
     // This is at index 2 * period - 1
     let adx_start = 2 * period - 1;
     let mut prev_adx = dx_sum / period_t;
-    if nan_active || is_invalid(prev_adx) {
+    if nan_active || !prev_adx.is_finite() {
         nan_active = true;
         prev_adx = T::nan();
     }
@@ -553,7 +552,8 @@ fn compute_adx_core<T: SeriesElement>(
         let (plus_dm, minus_dm) =
             compute_directional_movement(high[i], high[i - 1], low[i], low[i - 1]);
 
-        if nan_active || is_invalid(tr) || is_invalid(plus_dm) || is_invalid(minus_dm) {
+        // Simplified NaN check: only check tr and plus_dm (minus_dm has same validity as plus_dm)
+        if nan_active || !tr.is_finite() || !plus_dm.is_finite() {
             nan_active = true;
             plus_di_out[i] = T::nan();
             minus_di_out[i] = T::nan();

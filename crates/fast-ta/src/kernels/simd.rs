@@ -831,6 +831,74 @@ pub fn sum_abs_diff_f64(a: &[f64], b: &[f64]) -> f64 {
     sum
 }
 
+// =============================================================================
+// Lagged Subtraction (for MOM, ROC numerator)
+// =============================================================================
+
+/// Computes lagged subtraction using SIMD: output[i] = current[i] - lagged[i]
+///
+/// This is optimized for MOM (Momentum) and similar indicators that compute
+/// the difference between current and lagged values.
+///
+/// # Arguments
+/// * `current` - Current values slice
+/// * `lagged` - Lagged values slice (must have same length as current)
+/// * `output` - Output slice (must have same length as current)
+///
+/// # Performance
+/// - Uses 4-wide SIMD for parallel subtraction
+/// - Expected 2-4x speedup over scalar for large arrays
+#[inline]
+pub fn lagged_sub_f64(current: &[f64], lagged: &[f64], output: &mut [f64]) {
+    debug_assert_eq!(current.len(), lagged.len());
+    debug_assert_eq!(current.len(), output.len());
+
+    let n = current.len();
+    let chunks = n / F64_LANES;
+    let remainder = n % F64_LANES;
+
+    // Process chunks of 4 elements
+    for i in 0..chunks {
+        let offset = i * F64_LANES;
+        let cur_chunk = f64x4::from_slice(&current[offset..offset + F64_LANES]);
+        let lag_chunk = f64x4::from_slice(&lagged[offset..offset + F64_LANES]);
+        let result = cur_chunk - lag_chunk;
+        result.copy_to_slice(&mut output[offset..offset + F64_LANES]);
+    }
+
+    // Handle remaining elements
+    let tail_start = chunks * F64_LANES;
+    for i in 0..remainder {
+        output[tail_start + i] = current[tail_start + i] - lagged[tail_start + i];
+    }
+}
+
+/// Computes lagged subtraction using SIMD for f32.
+#[inline]
+pub fn lagged_sub_f32(current: &[f32], lagged: &[f32], output: &mut [f32]) {
+    debug_assert_eq!(current.len(), lagged.len());
+    debug_assert_eq!(current.len(), output.len());
+
+    let n = current.len();
+    let chunks = n / F32_LANES;
+    let remainder = n % F32_LANES;
+
+    // Process chunks of 8 elements
+    for i in 0..chunks {
+        let offset = i * F32_LANES;
+        let cur_chunk = f32x8::from_slice(&current[offset..offset + F32_LANES]);
+        let lag_chunk = f32x8::from_slice(&lagged[offset..offset + F32_LANES]);
+        let result = cur_chunk - lag_chunk;
+        result.copy_to_slice(&mut output[offset..offset + F32_LANES]);
+    }
+
+    // Handle remaining elements
+    let tail_start = chunks * F32_LANES;
+    for i in 0..remainder {
+        output[tail_start + i] = current[tail_start + i] - lagged[tail_start + i];
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1083,5 +1151,54 @@ mod tests {
     fn test_sum_abs_diff_same() {
         let data = vec![1.0, 2.0, 3.0, 4.0];
         assert!((sum_abs_diff_f64(&data, &data)).abs() < EPSILON);
+    }
+
+    // ==================== Lagged Subtraction Tests ====================
+
+    #[test]
+    fn test_lagged_sub_f64_basic() {
+        let current = vec![5.0, 6.0, 7.0, 8.0];
+        let lagged = vec![1.0, 2.0, 3.0, 4.0];
+        let mut output = vec![0.0; 4];
+        lagged_sub_f64(&current, &lagged, &mut output);
+        assert!((output[0] - 4.0).abs() < EPSILON);
+        assert!((output[1] - 4.0).abs() < EPSILON);
+        assert!((output[2] - 4.0).abs() < EPSILON);
+        assert!((output[3] - 4.0).abs() < EPSILON);
+    }
+
+    #[test]
+    fn test_lagged_sub_f64_with_remainder() {
+        let current = vec![10.0, 20.0, 30.0, 40.0, 50.0, 60.0];
+        let lagged = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let mut output = vec![0.0; 6];
+        lagged_sub_f64(&current, &lagged, &mut output);
+        for i in 0..6 {
+            let expected = (i + 1) as f64 * 9.0;
+            assert!((output[i] - expected).abs() < EPSILON);
+        }
+    }
+
+    #[test]
+    fn test_lagged_sub_f64_large() {
+        let n = 1000;
+        let current: Vec<f64> = (0..n).map(|x| (x + 100) as f64).collect();
+        let lagged: Vec<f64> = (0..n).map(|x| x as f64).collect();
+        let mut output = vec![0.0; n];
+        lagged_sub_f64(&current, &lagged, &mut output);
+        for &val in &output {
+            assert!((val - 100.0).abs() < EPSILON);
+        }
+    }
+
+    #[test]
+    fn test_lagged_sub_f32_basic() {
+        let current = vec![5.0_f32, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0];
+        let lagged = vec![1.0_f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
+        let mut output = vec![0.0_f32; 8];
+        lagged_sub_f32(&current, &lagged, &mut output);
+        for &val in &output {
+            assert!((val - 4.0).abs() < EPSILON_F32);
+        }
     }
 }

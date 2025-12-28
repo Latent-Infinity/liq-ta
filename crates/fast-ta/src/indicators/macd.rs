@@ -54,7 +54,6 @@
 
 use crate::error::{Error, Result};
 use crate::traits::SeriesElement;
-use crate::utils::is_invalid;
 
 /// Returns the lookback period for the MACD line.
 ///
@@ -374,6 +373,7 @@ pub fn macd_into<T: SeriesElement>(
 /// Fused MACD computation: computes fast/slow EMAs together and signal/histogram together.
 ///
 /// This reduces the number of passes over the data from 5 to 2 for better cache efficiency.
+/// Uses IEEE 754 NaN propagation instead of explicit validity checks for performance.
 ///
 /// Pass 1: Compute both fast and slow EMAs in a single loop, output MACD line
 /// Pass 2: Compute signal line and histogram in a single loop
@@ -410,93 +410,42 @@ fn compute_macd_fused<T: SeriesElement>(
     // Initialize lookback period with NaN
     let first_valid_slow = slow_period - 1;
 
-    // Compute SMA seeds for both EMAs
-    let mut fast_sum = T::zero();
-    let mut slow_sum = T::zero();
-    let mut fast_nan_count = 0usize;
-    let mut slow_nan_count = 0usize;
-
-    // Accumulate for fast EMA seed
-    for &value in data.iter().take(fast_period) {
-        if is_invalid(value) {
-            fast_nan_count += 1;
-        } else {
-            fast_sum = fast_sum + value;
-        }
-    }
-
-    // Accumulate for slow EMA seed (includes fast_period values already summed)
-    for &value in data.iter().take(slow_period) {
-        if is_invalid(value) {
-            slow_nan_count += 1;
-        } else {
-            slow_sum = slow_sum + value;
-        }
-    }
-
-    // Initialize EMA values
-    let mut fast_ema = if fast_nan_count == 0 {
-        fast_sum / fast_period_t
-    } else {
-        T::nan()
-    };
-
-    let mut slow_ema = if slow_nan_count == 0 {
-        slow_sum / slow_period_t
-    } else {
-        T::nan()
-    };
-
     // Fill NaN for lookback period
-    for value in macd_output.iter_mut().take(first_valid_slow) {
-        *value = T::nan();
+    macd_output[..first_valid_slow].fill(T::nan());
+
+    // Compute SMA seeds for both EMAs using simple summation.
+    // IEEE 754: NaN + x = NaN, so any NaN in the seed window propagates automatically.
+    let mut fast_sum = T::zero();
+    for &value in data.iter().take(fast_period) {
+        fast_sum = fast_sum + value;
     }
 
-    // Compute MACD values starting from first_valid_slow
-    // But we need to advance fast_ema to the right position first
+    let mut slow_sum = T::zero();
+    for &value in data.iter().take(slow_period) {
+        slow_sum = slow_sum + value;
+    }
+
+    // Initialize EMA values - NaN propagates through division
+    let mut fast_ema = fast_sum / fast_period_t;
+    let mut slow_ema = slow_sum / slow_period_t;
 
     // Advance fast EMA from first_valid_fast to first_valid_slow - 1
+    // IEEE 754: alpha * NaN + ... = NaN, so NaN propagates through EMA
     for i in fast_period..slow_period {
         let value = data[i];
-        if is_invalid(fast_ema) || is_invalid(value) {
-            fast_ema = T::nan();
-        } else {
-            fast_ema = fast_alpha * value + fast_one_minus_alpha * fast_ema;
-        }
+        fast_ema = fast_alpha * value + fast_one_minus_alpha * fast_ema;
     }
 
-    // Now at index first_valid_slow, both EMAs are valid
-    // Set first MACD value
-    if !is_invalid(fast_ema) && !is_invalid(slow_ema) {
-        macd_output[first_valid_slow] = fast_ema - slow_ema;
-    } else {
-        macd_output[first_valid_slow] = T::nan();
-    }
+    // Set first MACD value - NaN propagates through subtraction
+    macd_output[first_valid_slow] = fast_ema - slow_ema;
 
     // Continue computing both EMAs and MACD line
+    // All arithmetic naturally propagates NaN per IEEE 754
     for i in (first_valid_slow + 1)..n {
         let value = data[i];
-
-        // Update fast EMA
-        if is_invalid(fast_ema) || is_invalid(value) {
-            fast_ema = T::nan();
-        } else {
-            fast_ema = fast_alpha * value + fast_one_minus_alpha * fast_ema;
-        }
-
-        // Update slow EMA
-        if is_invalid(slow_ema) || is_invalid(value) {
-            slow_ema = T::nan();
-        } else {
-            slow_ema = slow_alpha * value + slow_one_minus_alpha * slow_ema;
-        }
-
-        // Compute MACD line
-        if !is_invalid(fast_ema) && !is_invalid(slow_ema) {
-            macd_output[i] = fast_ema - slow_ema;
-        } else {
-            macd_output[i] = T::nan();
-        }
+        fast_ema = fast_alpha * value + fast_one_minus_alpha * fast_ema;
+        slow_ema = slow_alpha * value + slow_one_minus_alpha * slow_ema;
+        macd_output[i] = fast_ema - slow_ema;
     }
 
     // =========================================================================
@@ -506,12 +455,8 @@ fn compute_macd_fused<T: SeriesElement>(
     let first_valid_signal = first_valid_slow + signal_period - 1;
 
     // Fill NaN for signal and histogram lookback
-    for value in signal_output.iter_mut().take(first_valid_signal) {
-        *value = T::nan();
-    }
-    for value in histogram_output.iter_mut().take(first_valid_signal) {
-        *value = T::nan();
-    }
+    signal_output[..first_valid_signal].fill(T::nan());
+    histogram_output[..first_valid_signal].fill(T::nan());
 
     // Early return if not enough data for signal
     if first_valid_signal >= n {
@@ -519,6 +464,7 @@ fn compute_macd_fused<T: SeriesElement>(
     }
 
     // Compute SMA seed for signal line from first signal_period valid MACD values
+    // NaN propagates through summation
     let mut signal_sum = T::zero();
     for &value in macd_output
         .iter()
@@ -534,18 +480,12 @@ fn compute_macd_fused<T: SeriesElement>(
     histogram_output[first_valid_signal] = macd_output[first_valid_signal] - signal_ema;
 
     // Compute remaining signal and histogram values
+    // All arithmetic naturally propagates NaN per IEEE 754
     for i in (first_valid_signal + 1)..n {
         let macd_val = macd_output[i];
-
-        if is_invalid(signal_ema) || is_invalid(macd_val) {
-            signal_ema = T::nan();
-            signal_output[i] = T::nan();
-            histogram_output[i] = T::nan();
-        } else {
-            signal_ema = signal_alpha * macd_val + signal_one_minus_alpha * signal_ema;
-            signal_output[i] = signal_ema;
-            histogram_output[i] = macd_val - signal_ema;
-        }
+        signal_ema = signal_alpha * macd_val + signal_one_minus_alpha * signal_ema;
+        signal_output[i] = signal_ema;
+        histogram_output[i] = macd_val - signal_ema;
     }
 
     Ok(())

@@ -86,21 +86,27 @@ pub fn mom_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -
 
     // Fill lookback period with NaN
     let lookback = mom_lookback(period);
-    for i in 0..lookback {
-        output[i] = T::nan();
-    }
+    output[..lookback].fill(T::nan());
 
     // Calculate MOM: current price - price N periods ago
-    // Optimization: do subtraction first, then check result.is_finite()
-    // This catches NaN/Inf in either operand with a single check instead of 4
-    // IEEE 754: NaN - x = NaN, x - NaN = NaN, Inf - finite = Inf, finite - Inf = -Inf
-    let lagged = &data[..n - period];
+    //
+    // NaN/Infinity propagation policy: if either input is non-finite, output NaN.
+    // IEEE 754 handles NaN naturally (NaN - x = NaN, x - NaN = NaN), but
+    // INFINITY - x = INFINITY, which we convert to NaN per project policy.
+    //
+    // Use slice iterators for optimal auto-vectorization by LLVM.
+    // This pattern allows the compiler to prove no aliasing and vectorize.
     let current = &data[period..];
-    let out_slice = &mut output[lookback..n];
+    let lagged = &data[..n - period];
+    let out = &mut output[lookback..n];
 
-    for ((out, cur), lag) in out_slice.iter_mut().zip(current.iter()).zip(lagged.iter()) {
-        let result = *cur - *lag;
-        *out = if result.is_finite() { result } else { T::nan() };
+    for ((o, c), l) in out.iter_mut().zip(current.iter()).zip(lagged.iter()) {
+        // Check if either input is non-finite (NaN or Infinity)
+        if c.is_finite() && l.is_finite() {
+            *o = *c - *l;
+        } else {
+            *o = T::nan();
+        }
     }
 
     Ok(())

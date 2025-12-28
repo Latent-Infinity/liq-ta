@@ -122,9 +122,14 @@ pub fn midpoint_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [
     }
 
     // For period 1, MIDPOINT equals the input (highest = lowest = data[i])
+    // Handle NaN/Infinity: non-finite values propagate to NaN output
     if period == 1 {
         for i in 0..n {
-            output[i] = data[i];
+            if data[i].is_finite() {
+                output[i] = data[i];
+            } else {
+                output[i] = T::nan();
+            }
         }
         return Ok(());
     }
@@ -135,22 +140,52 @@ pub fn midpoint_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [
     let mut max_deque: MonotonicDeque<T> = MonotonicDeque::new(period);
     let mut min_deque: MonotonicDeque<T> = MonotonicDeque::new(period);
 
+    // Ring buffer for tracking invalid value indices (for NaN/Infinity propagation)
+    let mut invalid_buf = vec![0usize; period];
+    let mut invalid_head = 0usize;
+    let mut invalid_tail = 0usize;
+    let mut invalid_len = 0usize;
+    let wrap = |idx: usize| idx % period;
+
     // Single pass through data
     for i in 0..n {
+        let val = data[i];
+
+        // Track non-finite values for propagation policy
+        if !val.is_finite() {
+            invalid_buf[invalid_tail] = i;
+            invalid_tail = wrap(invalid_tail + 1);
+            invalid_len += 1;
+        }
+
         // Update deques with current element
         max_deque.push_max(i, data);
         min_deque.push_min(i, data);
 
+        // Remove expired invalid indices from the window
+        if i >= period {
+            let window_start = i + 1 - period;
+            while invalid_len > 0 && invalid_buf[invalid_head] < window_start {
+                invalid_head = wrap(invalid_head + 1);
+                invalid_len -= 1;
+            }
+        }
+
         // Output valid values after lookback period
         if i >= lookback {
-            let highest = max_deque.get_extremum(data);
-            let lowest = min_deque.get_extremum(data);
-
-            // If either deque is empty (all values were NaN), output NaN
-            if !highest.is_finite() || !lowest.is_finite() {
+            // If any invalid value is still in the window, output NaN (propagation policy)
+            if invalid_len > 0 {
                 output[i] = T::nan();
             } else {
-                output[i] = (highest + lowest) / two;
+                let highest = max_deque.get_extremum(data);
+                let lowest = min_deque.get_extremum(data);
+
+                // If either deque is empty (all values were NaN), output NaN
+                if !highest.is_finite() || !lowest.is_finite() {
+                    output[i] = T::nan();
+                } else {
+                    output[i] = (highest + lowest) / two;
+                }
             }
         }
     }

@@ -238,8 +238,9 @@ pub fn t3_full_into<T: SeriesElement>(
     }
     let mut e6 = temp_real / period as f64;
 
-    // Now `today` should be at `lookback` position
-    debug_assert_eq!(today, lookback);
+    // After initialization, `today` points to next unread element (lookback + 1)
+    // We've read data[0..lookback] inclusive, so today = lookback + 1
+    debug_assert_eq!(today, lookback + 1);
 
     // Write first output
     output[lookback] = T::from_f64(c1 * e6 + c2 * e5 + c3 * e4 + c4 * e3)?;

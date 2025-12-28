@@ -11,7 +11,6 @@
 use crate::error::{Error, Result};
 use crate::indicators::adx::{adx, adx_lookback};
 use crate::traits::SeriesElement;
-use crate::utils::is_invalid;
 
 // =============================================================================
 // ADXR (ADX Rating)
@@ -89,21 +88,15 @@ pub fn adxr_into<T: SeriesElement>(
     let lookback = adxr_lookback(period);
     let two = T::from_f64(2.0)?;
 
-    // Fill lookback with NaN
-    for i in 0..lookback {
-        output[i] = T::nan();
-    }
+    // Fill lookback with NaN using efficient slice.fill()
+    output[..lookback].fill(T::nan());
 
     // ADXR = (ADX[i] + ADX[i - period]) / 2
+    // IEEE 754: NaN + x = NaN, NaN / 2 = NaN, so NaN propagates naturally
     for i in lookback..n {
         let current_adx = adx_values[i];
         let past_adx = adx_values[i - period];
-
-        if !is_invalid(current_adx) && !is_invalid(past_adx) {
-            output[i] = (current_adx + past_adx) / two;
-        } else {
-            output[i] = T::nan();
-        }
+        output[i] = (current_adx + past_adx) / two;
     }
 
     Ok(())
@@ -215,23 +208,23 @@ pub fn dx_into<T: SeriesElement>(
         let minus_di = &adx_result.minus_di;
         let hundred = T::from_f64(100.0)?;
 
-        // Fill lookback with NaN
-        for i in 0..period {
-            output[i] = T::nan();
-        }
+        // Fill lookback with NaN using efficient slice.fill()
+        output[..period].fill(T::nan());
 
         // DX = 100 * |+DI - -DI| / (+DI + -DI)
+        // Use IEEE 754 NaN propagation: if plus_di or minus_di is NaN,
+        // the arithmetic produces NaN naturally
         for i in period..n {
-            if !is_invalid(plus_di[i]) && !is_invalid(minus_di[i]) {
-                let di_sum = plus_di[i] + minus_di[i];
-                let di_diff = (plus_di[i] - minus_di[i]).abs();
-                if di_sum > T::zero() {
-                    output[i] = hundred * di_diff / di_sum;
-                } else {
-                    output[i] = T::zero();
-                }
-            } else {
+            let di_sum = plus_di[i] + minus_di[i];
+            let di_diff = (plus_di[i] - minus_di[i]).abs();
+            // For NaN inputs: di_sum will be NaN, di_sum > T::zero() is false,
+            // so we output T::zero(). But we want NaN. Check di_sum.is_finite().
+            if !di_sum.is_finite() {
                 output[i] = T::nan();
+            } else if di_sum > T::zero() {
+                output[i] = hundred * di_diff / di_sum;
+            } else {
+                output[i] = T::zero();
             }
         }
     } else {
@@ -340,66 +333,52 @@ pub fn plus_dm_into<T: SeriesElement>(
 
     let period_t = T::from_usize(period)?;
 
-    // Fill lookback with NaN
-    for i in 0..period {
-        output[i] = T::nan();
-    }
+    // Fill lookback with NaN using efficient slice.fill()
+    output[..period].fill(T::nan());
 
     // Calculate initial sum of +DM for the first period
     let mut sum_plus_dm = T::zero();
-    let mut nan_active = false;
     for i in 1..=period {
-        if is_invalid(high[i])
-            || is_invalid(high[i - 1])
-            || is_invalid(low[i])
-            || is_invalid(low[i - 1])
-        {
-            nan_active = true;
-            continue;
-        }
         let up_move = high[i] - high[i - 1];
         let down_move = low[i - 1] - low[i];
 
-        let plus_dm = if up_move > down_move && up_move > T::zero() {
-            up_move
+        // Handle NaN: if up_move or down_move is NaN, comparisons fail and plus_dm = 0
+        // But we want NaN propagation. Check for finite before comparison.
+        let plus_dm = if up_move.is_finite() && down_move.is_finite() {
+            if up_move > down_move && up_move > T::zero() {
+                up_move
+            } else {
+                T::zero()
+            }
         } else {
-            T::zero()
+            T::nan()
         };
         sum_plus_dm = sum_plus_dm + plus_dm;
     }
 
-    // First smoothed value
+    // First smoothed value - NaN propagates through sum
     let mut smoothed_plus_dm = sum_plus_dm;
-    if nan_active || is_invalid(smoothed_plus_dm) {
-        nan_active = true;
-        smoothed_plus_dm = T::nan();
-        output[period] = T::nan();
-    } else {
-        output[period] = smoothed_plus_dm;
-    }
+    output[period] = smoothed_plus_dm;
 
     // Continue with Wilder smoothing
+    // Once smoothed_plus_dm is NaN, it stays NaN through Wilder smoothing
     for i in (period + 1)..n {
-        if nan_active
-            || is_invalid(high[i])
-            || is_invalid(high[i - 1])
-            || is_invalid(low[i])
-            || is_invalid(low[i - 1])
-        {
-            nan_active = true;
-            output[i] = T::nan();
-            continue;
-        }
         let up_move = high[i] - high[i - 1];
         let down_move = low[i - 1] - low[i];
 
-        let plus_dm = if up_move > down_move && up_move > T::zero() {
-            up_move
+        // Handle NaN with single check on computed values
+        let plus_dm = if up_move.is_finite() && down_move.is_finite() {
+            if up_move > down_move && up_move > T::zero() {
+                up_move
+            } else {
+                T::zero()
+            }
         } else {
-            T::zero()
+            T::nan()
         };
 
         // Wilder smoothing: smoothed = prev - prev/period + current
+        // IEEE 754: if smoothed_plus_dm is NaN or plus_dm is NaN, result is NaN
         smoothed_plus_dm = smoothed_plus_dm - smoothed_plus_dm / period_t + plus_dm;
         output[i] = smoothed_plus_dm;
     }
@@ -476,66 +455,52 @@ pub fn minus_dm_into<T: SeriesElement>(
 
     let period_t = T::from_usize(period)?;
 
-    // Fill lookback with NaN
-    for i in 0..period {
-        output[i] = T::nan();
-    }
+    // Fill lookback with NaN using efficient slice.fill()
+    output[..period].fill(T::nan());
 
     // Calculate initial sum of -DM for the first period
     let mut sum_minus_dm = T::zero();
-    let mut nan_active = false;
     for i in 1..=period {
-        if is_invalid(high[i])
-            || is_invalid(high[i - 1])
-            || is_invalid(low[i])
-            || is_invalid(low[i - 1])
-        {
-            nan_active = true;
-            continue;
-        }
         let up_move = high[i] - high[i - 1];
         let down_move = low[i - 1] - low[i];
 
-        let minus_dm = if down_move > up_move && down_move > T::zero() {
-            down_move
+        // Handle NaN: if up_move or down_move is NaN, comparisons fail
+        // Check for finite before comparison for proper NaN propagation
+        let minus_dm = if up_move.is_finite() && down_move.is_finite() {
+            if down_move > up_move && down_move > T::zero() {
+                down_move
+            } else {
+                T::zero()
+            }
         } else {
-            T::zero()
+            T::nan()
         };
         sum_minus_dm = sum_minus_dm + minus_dm;
     }
 
-    // First smoothed value
+    // First smoothed value - NaN propagates through sum
     let mut smoothed_minus_dm = sum_minus_dm;
-    if nan_active || is_invalid(smoothed_minus_dm) {
-        nan_active = true;
-        smoothed_minus_dm = T::nan();
-        output[period] = T::nan();
-    } else {
-        output[period] = smoothed_minus_dm;
-    }
+    output[period] = smoothed_minus_dm;
 
     // Continue with Wilder smoothing
+    // Once smoothed_minus_dm is NaN, it stays NaN through Wilder smoothing
     for i in (period + 1)..n {
-        if nan_active
-            || is_invalid(high[i])
-            || is_invalid(high[i - 1])
-            || is_invalid(low[i])
-            || is_invalid(low[i - 1])
-        {
-            nan_active = true;
-            output[i] = T::nan();
-            continue;
-        }
         let up_move = high[i] - high[i - 1];
         let down_move = low[i - 1] - low[i];
 
-        let minus_dm = if down_move > up_move && down_move > T::zero() {
-            down_move
+        // Handle NaN with single check on computed values
+        let minus_dm = if up_move.is_finite() && down_move.is_finite() {
+            if down_move > up_move && down_move > T::zero() {
+                down_move
+            } else {
+                T::zero()
+            }
         } else {
-            T::zero()
+            T::nan()
         };
 
         // Wilder smoothing: smoothed = prev - prev/period + current
+        // IEEE 754: if smoothed_minus_dm is NaN or minus_dm is NaN, result is NaN
         smoothed_minus_dm = smoothed_minus_dm - smoothed_minus_dm / period_t + minus_dm;
         output[i] = smoothed_minus_dm;
     }
