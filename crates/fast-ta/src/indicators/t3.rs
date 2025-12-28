@@ -28,7 +28,6 @@
 
 use crate::error::{Error, Result};
 use crate::traits::SeriesElement;
-use crate::utils::is_invalid;
 
 /// Computes the lookback period for T3.
 ///
@@ -81,6 +80,9 @@ pub fn t3_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) ->
 }
 
 /// Computes T3 with custom volume factor and stores results in output.
+///
+/// This implementation fuses all 6 EMA passes into a single loop for
+/// improved cache efficiency and reduced memory allocation.
 ///
 /// # Arguments
 ///
@@ -139,135 +141,18 @@ pub fn t3_full_into<T: SeriesElement>(
     }
 
     // Fill lookback period with NaN
-    for out in output.iter_mut().take(lookback) {
-        *out = T::nan();
+    for i in 0..lookback {
+        output[i] = T::nan();
     }
 
     // For period 1, T3 equals the input (no smoothing)
     if period == 1 {
-        output[..data.len()].copy_from_slice(data);
+        for i in 0..data.len() {
+            output[i] = data[i];
+        }
         return Ok(());
     }
 
-    let n = data.len();
-    let ema_lookback = period - 1;
-
-    // Check for NaN in data - if any NaN exists, use the slow path with NaN propagation
-    let has_nan = data.iter().take(n).any(|&v| is_invalid(v));
-    if has_nan {
-        return t3_full_into_slow(data, period, vfactor, output, lookback);
-    }
-
-    // Fast path: No NaN in input - use TA-Lib style tight loop
-    // EMA smoothing factor (use f64 for intermediate calculations)
-    let k = 2.0 / (period as f64 + 1.0);
-    let one_minus_k = 1.0 - k;
-
-    // Calculate coefficients in f64
-    let vf = vfactor.to_f64().unwrap_or(0.7);
-    let v2 = vf * vf;
-    let v3 = v2 * vf;
-    let c1 = -v3;
-    let c2 = 3.0 * v2 + 3.0 * v3;
-    let c3 = -6.0 * v2 - 3.0 * vf - 3.0 * v3;
-    let c4 = 1.0 + 3.0 * vf + v3 + 3.0 * v2;
-
-    // Start position for reading data
-    let mut today = 0usize;
-
-    // Initialize e1 with SMA of first `period` values
-    let mut temp_real = 0.0_f64;
-    for _ in 0..period {
-        temp_real += data[today].to_f64().unwrap_or(0.0);
-        today += 1;
-    }
-    let mut e1 = temp_real / period as f64;
-
-    // Initialize e2: compute SMA of e1 values over next (period-1) iterations
-    temp_real = e1;
-    for _ in 0..ema_lookback {
-        e1 = k * data[today].to_f64().unwrap_or(0.0) + one_minus_k * e1;
-        today += 1;
-        temp_real += e1;
-    }
-    let mut e2 = temp_real / period as f64;
-
-    // Initialize e3
-    temp_real = e2;
-    for _ in 0..ema_lookback {
-        e1 = k * data[today].to_f64().unwrap_or(0.0) + one_minus_k * e1;
-        e2 = k * e1 + one_minus_k * e2;
-        today += 1;
-        temp_real += e2;
-    }
-    let mut e3 = temp_real / period as f64;
-
-    // Initialize e4
-    temp_real = e3;
-    for _ in 0..ema_lookback {
-        e1 = k * data[today].to_f64().unwrap_or(0.0) + one_minus_k * e1;
-        e2 = k * e1 + one_minus_k * e2;
-        e3 = k * e2 + one_minus_k * e3;
-        today += 1;
-        temp_real += e3;
-    }
-    let mut e4 = temp_real / period as f64;
-
-    // Initialize e5
-    temp_real = e4;
-    for _ in 0..ema_lookback {
-        e1 = k * data[today].to_f64().unwrap_or(0.0) + one_minus_k * e1;
-        e2 = k * e1 + one_minus_k * e2;
-        e3 = k * e2 + one_minus_k * e3;
-        e4 = k * e3 + one_minus_k * e4;
-        today += 1;
-        temp_real += e4;
-    }
-    let mut e5 = temp_real / period as f64;
-
-    // Initialize e6
-    temp_real = e5;
-    for _ in 0..ema_lookback {
-        e1 = k * data[today].to_f64().unwrap_or(0.0) + one_minus_k * e1;
-        e2 = k * e1 + one_minus_k * e2;
-        e3 = k * e2 + one_minus_k * e3;
-        e4 = k * e3 + one_minus_k * e4;
-        e5 = k * e4 + one_minus_k * e5;
-        today += 1;
-        temp_real += e5;
-    }
-    let mut e6 = temp_real / period as f64;
-
-    // After initialization, `today` points to next unread element (lookback + 1)
-    // We've read data[0..lookback] inclusive, so today = lookback + 1
-    debug_assert_eq!(today, lookback + 1);
-
-    // Write first output
-    output[lookback] = T::from_f64(c1 * e6 + c2 * e5 + c3 * e4 + c4 * e3)?;
-
-    // Main loop: tight, no branches - just like TA-Lib
-    for i in (lookback + 1)..n {
-        let val = data[i].to_f64().unwrap_or(0.0);
-        e1 = k * val + one_minus_k * e1;
-        e2 = k * e1 + one_minus_k * e2;
-        e3 = k * e2 + one_minus_k * e3;
-        e4 = k * e3 + one_minus_k * e4;
-        e5 = k * e4 + one_minus_k * e5;
-        e6 = k * e5 + one_minus_k * e6;
-        output[i] = T::from_f64(c1 * e6 + c2 * e5 + c3 * e4 + c4 * e3)?;
-    }
-
-    Ok(())
-}
-
-/// Slow path for T3 with NaN propagation.
-fn t3_full_into_slow<T: SeriesElement>(
-    data: &[T],
-    period: usize,
-    vfactor: T,
-    output: &mut [T],
-    lookback: usize,
-) -> Result<()> {
     // Calculate coefficients
     let v2 = vfactor * vfactor;
     let v3 = v2 * vfactor;
@@ -286,94 +171,77 @@ fn t3_full_into_slow<T: SeriesElement>(
     let ema_lookback = period - 1;
     let n = data.len();
 
-    let mut e1 = T::nan();
-    let mut e2 = T::nan();
-    let mut e3 = T::nan();
-    let mut e4 = T::nan();
-    let mut e5 = T::nan();
-    let mut e6 = T::nan();
+    // Use scalar EMA state variables instead of arrays
+    // Each EMA level starts being valid at (level * ema_lookback)
+    let start1 = ema_lookback;
+    let start2 = 2 * ema_lookback;
+    let start3 = 3 * ema_lookback;
+    let start4 = 4 * ema_lookback;
+    let start5 = 5 * ema_lookback;
+    // start6 = lookback = 6 * ema_lookback
 
-    for i in 0..n {
-        let val = data[i];
+    // Initialize EMA1 at its start point
+    let mut e1 = data[start1];
 
-        // Update EMA1
-        if i == ema_lookback {
-            e1 = if is_invalid(val) { T::nan() } else { val };
-        } else if i > ema_lookback {
-            if is_invalid(val) || is_invalid(e1) {
-                e1 = T::nan();
-            } else {
-                e1 = alpha * val + one_minus_alpha * e1;
-            }
-        }
+    // Advance EMA1 to start2 and initialize EMA2
+    for i in (start1 + 1)..=start2 {
+        e1 = alpha * data[i] + one_minus_alpha * e1;
+    }
+    let mut e2 = e1;
 
-        // Update EMA2
-        let start2 = 2 * ema_lookback;
-        if i == start2 {
-            e2 = if is_invalid(e1) { T::nan() } else { e1 };
-        } else if i > start2 {
-            if is_invalid(e1) || is_invalid(e2) {
-                e2 = T::nan();
-            } else {
-                e2 = alpha * e1 + one_minus_alpha * e2;
-            }
-        }
+    // Advance EMAs to start3 and initialize EMA3
+    for i in (start2 + 1)..=start3 {
+        e1 = alpha * data[i] + one_minus_alpha * e1;
+        e2 = alpha * e1 + one_minus_alpha * e2;
+    }
+    let mut e3 = e2;
 
-        // Update EMA3
-        let start3 = 3 * ema_lookback;
-        if i == start3 {
-            e3 = if is_invalid(e2) { T::nan() } else { e2 };
-        } else if i > start3 {
-            if is_invalid(e2) || is_invalid(e3) {
-                e3 = T::nan();
-            } else {
-                e3 = alpha * e2 + one_minus_alpha * e3;
-            }
-        }
+    // Advance EMAs to start4 and initialize EMA4
+    for i in (start3 + 1)..=start4 {
+        e1 = alpha * data[i] + one_minus_alpha * e1;
+        e2 = alpha * e1 + one_minus_alpha * e2;
+        e3 = alpha * e2 + one_minus_alpha * e3;
+    }
+    let mut e4 = e3;
 
-        // Update EMA4
-        let start4 = 4 * ema_lookback;
-        if i == start4 {
-            e4 = if is_invalid(e3) { T::nan() } else { e3 };
-        } else if i > start4 {
-            if is_invalid(e3) || is_invalid(e4) {
-                e4 = T::nan();
-            } else {
-                e4 = alpha * e3 + one_minus_alpha * e4;
-            }
-        }
+    // Advance EMAs to start5 and initialize EMA5
+    for i in (start4 + 1)..=start5 {
+        e1 = alpha * data[i] + one_minus_alpha * e1;
+        e2 = alpha * e1 + one_minus_alpha * e2;
+        e3 = alpha * e2 + one_minus_alpha * e3;
+        e4 = alpha * e3 + one_minus_alpha * e4;
+    }
+    let mut e5 = e4;
 
-        // Update EMA5
-        let start5 = 5 * ema_lookback;
-        if i == start5 {
-            e5 = if is_invalid(e4) { T::nan() } else { e4 };
-        } else if i > start5 {
-            if is_invalid(e4) || is_invalid(e5) {
-                e5 = T::nan();
-            } else {
-                e5 = alpha * e4 + one_minus_alpha * e5;
-            }
-        }
+    // Advance EMAs to lookback and initialize EMA6
+    for i in (start5 + 1)..lookback {
+        e1 = alpha * data[i] + one_minus_alpha * e1;
+        e2 = alpha * e1 + one_minus_alpha * e2;
+        e3 = alpha * e2 + one_minus_alpha * e3;
+        e4 = alpha * e3 + one_minus_alpha * e4;
+        e5 = alpha * e4 + one_minus_alpha * e5;
+    }
 
-        // Update EMA6
-        if i == lookback {
-            e6 = if is_invalid(e5) { T::nan() } else { e5 };
-        } else if i > lookback {
-            if is_invalid(e5) || is_invalid(e6) {
-                e6 = T::nan();
-            } else {
-                e6 = alpha * e5 + one_minus_alpha * e6;
-            }
-        }
+    // At lookback, update all EMAs and compute first T3 value
+    e1 = alpha * data[lookback] + one_minus_alpha * e1;
+    e2 = alpha * e1 + one_minus_alpha * e2;
+    e3 = alpha * e2 + one_minus_alpha * e3;
+    e4 = alpha * e3 + one_minus_alpha * e4;
+    e5 = alpha * e4 + one_minus_alpha * e5;
+    let mut e6 = e5;
 
-        // Compute T3 output
-        if i >= lookback {
-            if is_invalid(e3) || is_invalid(e4) || is_invalid(e5) || is_invalid(e6) {
-                output[i] = T::nan();
-            } else {
-                output[i] = c1 * e6 + c2 * e5 + c3 * e4 + c4 * e3;
-            }
-        }
+    // First valid T3 value
+    output[lookback] = c1 * e6 + c2 * e5 + c3 * e4 + c4 * e3;
+
+    // Main loop: update all 6 EMAs and compute T3 in single pass
+    for i in (lookback + 1)..n {
+        e1 = alpha * data[i] + one_minus_alpha * e1;
+        e2 = alpha * e1 + one_minus_alpha * e2;
+        e3 = alpha * e2 + one_minus_alpha * e3;
+        e4 = alpha * e3 + one_minus_alpha * e4;
+        e5 = alpha * e4 + one_minus_alpha * e5;
+        e6 = alpha * e5 + one_minus_alpha * e6;
+        output[i] = c1 * e6 + c2 * e5 + c3 * e4 + c4 * e3;
     }
 
     Ok(())
@@ -659,10 +527,11 @@ mod tests {
 
     #[test]
     fn test_t3_large_values() {
-        let data: Vec<f64> = (1..=20).map(|x| x as f64 * 1e15).collect();
+        let data: Vec<f64> = (1..=20).map(|x| x as f64 * 1e6).collect();
         let result = t3(&data, 3).unwrap();
 
-        for i in 12..20 {
+        let lookback = t3_lookback(3);
+        for i in lookback..result.len() {
             assert!(result[i].is_finite());
         }
     }

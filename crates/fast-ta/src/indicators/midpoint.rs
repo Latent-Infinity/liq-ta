@@ -11,9 +11,10 @@
 //!
 //! The lookback period is `period - 1`.
 //!
-//! # Performance
+//! # Complexity
 //!
-//! Uses O(n) monotonic deque algorithm instead of naive O(n×period) approach.
+//! - Time: O(n) for n elements using monotonic deque algorithm
+//! - Space: O(k) for the deques, where k is the period
 
 use crate::error::{Error, Result};
 use crate::kernels::rolling_extrema::MonotonicDeque;

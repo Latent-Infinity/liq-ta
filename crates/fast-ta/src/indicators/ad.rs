@@ -148,12 +148,10 @@ fn ad_core_native<T: SeriesElement>(
         }
 
         // Money Flow Multiplier = ((close - low) - (high - close)) / (high - low)
-        // Simplifies to: (2 * close - high - low) / (high - low)
         let range = h - l;
 
         let mfm = if range > T::zero() {
-            let two = T::from_f64(2.0).unwrap_or_else(|_| T::one() + T::one());
-            (two * c - h - l) / range
+            ((c - l) - (h - c)) / range
         } else {
             // high == low, no range, MFM = 0
             T::zero()
@@ -200,11 +198,11 @@ fn ad_core_f64<T: SeriesElement>(
         let c_f64 = c.to_f64().unwrap_or(0.0);
         let v_f64 = v.to_f64().unwrap_or(0.0);
 
-        // Money Flow Multiplier = (2 * close - high - low) / (high - low)
+        // Money Flow Multiplier = ((close - low) - (high - close)) / (high - low)
         let range = h_f64 - l_f64;
 
         let mfm = if range > 0.0 {
-            (2.0 * c_f64 - h_f64 - l_f64) / range
+            ((c_f64 - l_f64) - (h_f64 - c_f64)) / range
         } else {
             0.0
         };

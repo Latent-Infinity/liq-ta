@@ -503,7 +503,7 @@ fn mfi_core_f64_fast<T: SeriesElement>(
     if sum_negative == 0.0 {
         output[lookback] = T::from_f64(100.0)?;
     } else if sum_positive == 0.0 {
-        output[lookback] = T::zero();
+        output[lookback] = T::from_f64(0.0)?;
     } else {
         let mfr = sum_positive / sum_negative;
         let mfi_val = 100.0 - (100.0 / (1.0 + mfr));
@@ -543,7 +543,7 @@ fn mfi_core_f64_fast<T: SeriesElement>(
         if sum_negative == 0.0 {
             output[i] = T::from_f64(100.0)?;
         } else if sum_positive == 0.0 {
-            output[i] = T::zero();
+            output[i] = T::from_f64(0.0)?;
         } else {
             let mfr = sum_positive / sum_negative;
             let mfi_val = 100.0 - (100.0 / (1.0 + mfr));
@@ -573,7 +573,6 @@ fn mfi_core_f64_slow<T: SeriesElement>(
     }
 
     // Ring buffers of size `period` - O(period) space instead of O(n)
-    // Use f64 for all ring buffers for precision
     let mut positive_ring = vec![0.0_f64; period];
     let mut negative_ring = vec![0.0_f64; period];
     let mut nan_ring = vec![false; period];
@@ -583,7 +582,7 @@ fn mfi_core_f64_slow<T: SeriesElement>(
     let mut sum_negative: f64 = 0.0;
     let mut nan_count = 0usize;
 
-    // Compute first typical price in f64
+    // Compute first typical price
     let h0 = high[0].to_f64().unwrap_or(0.0);
     let l0 = low[0].to_f64().unwrap_or(0.0);
     let c0 = close[0].to_f64().unwrap_or(0.0);
@@ -611,10 +610,9 @@ fn mfi_core_f64_slow<T: SeriesElement>(
             let c = close[i].to_f64().unwrap_or(0.0);
             let v = volume[i].to_f64().unwrap_or(0.0);
             let tp = (h + l + c) * inv_three;
-
             let prev_invalid = if i == 1 { first_invalid } else { nan_ring[(i - 2) % period] };
 
-            if prev_tp.is_nan() || prev_invalid {
+            if is_invalid(prev_tp) || prev_invalid {
                 prev_tp = tp;
                 true
             } else {
@@ -643,7 +641,7 @@ fn mfi_core_f64_slow<T: SeriesElement>(
     } else if sum_negative == 0.0 {
         output[lookback] = T::from_f64(100.0)?;
     } else if sum_positive == 0.0 {
-        output[lookback] = T::zero();
+        output[lookback] = T::from_f64(0.0)?;
     } else {
         let mfr = sum_positive / sum_negative;
         let mfi_val = 100.0 - (100.0 / (1.0 + mfr));
@@ -656,8 +654,10 @@ fn mfi_core_f64_slow<T: SeriesElement>(
         let ring_idx = (i - 1) % period;
 
         // Remove old value from sums
-        sum_positive -= positive_ring[ring_idx];
-        sum_negative -= negative_ring[ring_idx];
+        let old_positive = positive_ring[ring_idx];
+        let old_negative = negative_ring[ring_idx];
+        sum_positive -= old_positive;
+        sum_negative -= old_negative;
         if nan_ring[ring_idx] {
             nan_count -= 1;
         }
@@ -683,8 +683,7 @@ fn mfi_core_f64_slow<T: SeriesElement>(
             let c = close[i].to_f64().unwrap_or(0.0);
             let v = volume[i].to_f64().unwrap_or(0.0);
             let tp = (h + l + c) * inv_three;
-
-            if prev_tp.is_nan() {
+            if is_invalid(prev_tp) {
                 prev_tp = tp;
                 true
             } else {
@@ -712,7 +711,7 @@ fn mfi_core_f64_slow<T: SeriesElement>(
         } else if sum_negative == 0.0 {
             output[i] = T::from_f64(100.0)?;
         } else if sum_positive == 0.0 {
-            output[i] = T::zero();
+            output[i] = T::from_f64(0.0)?;
         } else {
             let mfr = sum_positive / sum_negative;
             let mfi_val = 100.0 - (100.0 / (1.0 + mfr));
@@ -759,7 +758,7 @@ fn mfi_core_f64_slow<T: SeriesElement>(
 /// - The input arrays have different lengths (`Error::LengthMismatch`)
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
-pub fn mfi<T: SeriesElement + 'static>(
+pub fn mfi<T: SeriesElement>(
     high: &[T],
     low: &[T],
     close: &[T],

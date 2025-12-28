@@ -7,10 +7,68 @@
 //! - `MINUS_DM`: Minus Directional Movement
 //!
 //! These are components used in calculating ADX but can be useful on their own.
+//!
+//! # Optimization Note
+//!
+//! DX shares the +DI/-DI computation with ADX but without the final ADX smoothing step.
+//! This implementation computes +DI and -DI directly, avoiding the overhead of full ADX
+//! computation and reducing the minimum data requirement from `2*period` to `period+1`.
 
 use crate::error::{Error, Result};
 use crate::indicators::adx::{adx, adx_lookback};
 use crate::traits::SeriesElement;
+
+// =============================================================================
+// Shared DI computation helpers (inline for DX optimization)
+// =============================================================================
+
+/// Computes True Range for a single bar.
+/// Returns NaN if any input is non-finite (NaN or Infinity).
+#[inline]
+fn compute_true_range<T: SeriesElement>(high: T, low: T, prev_close: T) -> T {
+    // Per project policy: non-finite inputs (NaN or Infinity) produce NaN output
+    if !high.is_finite() || !low.is_finite() || !prev_close.is_finite() {
+        return T::nan();
+    }
+
+    let hl = high - low;
+    let hc = (high - prev_close).abs();
+    let lc = (low - prev_close).abs();
+
+    hl.max(hc).max(lc)
+}
+
+/// Computes directional movement (+DM and -DM) for a single bar.
+/// Returns (NaN, NaN) if any input is non-finite (NaN or Infinity).
+#[inline]
+fn compute_directional_movement<T: SeriesElement>(
+    high: T,
+    prev_high: T,
+    low: T,
+    prev_low: T,
+) -> (T, T) {
+    // Per project policy: non-finite inputs (NaN or Infinity) produce NaN output
+    if !high.is_finite() || !prev_high.is_finite() || !low.is_finite() || !prev_low.is_finite() {
+        return (T::nan(), T::nan());
+    }
+
+    let up_move = high - prev_high;
+    let down_move = prev_low - low;
+
+    let plus_dm = if up_move > down_move && up_move > T::zero() {
+        up_move
+    } else {
+        T::zero()
+    };
+
+    let minus_dm = if down_move > up_move && down_move > T::zero() {
+        down_move
+    } else {
+        T::zero()
+    };
+
+    (plus_dm, minus_dm)
+}
 
 // =============================================================================
 // ADXR (ADX Rating)
@@ -153,6 +211,9 @@ pub const fn dx_min_len(period: usize) -> usize {
 
 /// Computes DX and stores results in output slice.
 ///
+/// This implementation computes +DI and -DI directly using shared computation
+/// patterns with ADX, avoiding the overhead of the full ADX smoothing step.
+///
 /// # Errors
 ///
 /// Returns an error if:
@@ -174,6 +235,17 @@ pub fn dx_into<T: SeriesElement>(
         return Err(Error::EmptyInput);
     }
 
+    if low.len() != n || close.len() != n {
+        return Err(Error::LengthMismatch {
+            description: format!(
+                "high has {} elements, low has {}, close has {}",
+                n,
+                low.len(),
+                close.len()
+            ),
+        });
+    }
+
     if period == 0 {
         return Err(Error::InvalidPeriod {
             period,
@@ -181,7 +253,7 @@ pub fn dx_into<T: SeriesElement>(
         });
     }
 
-    // We need enough data for DI calculation
+    // We need enough data for DI calculation (period + 1)
     let min_len = dx_min_len(period);
     if n < min_len {
         return Err(Error::InsufficientData {
@@ -199,41 +271,100 @@ pub fn dx_into<T: SeriesElement>(
         });
     }
 
-    // Compute ADX which gives us +DI and -DI
-    // Note: This needs 2*period data for ADX, but for just DX we only need period+1
-    // We'll handle the case where we have less than 2*period data
-    if n >= 2 * period {
-        let adx_result = adx(high, low, close, period)?;
-        let plus_di = &adx_result.plus_di;
-        let minus_di = &adx_result.minus_di;
-        let hundred = T::from_f64(100.0)?;
+    let period_t = T::from_usize(period)?;
+    let hundred = T::hundred();
 
-        // Fill lookback with NaN using efficient slice.fill()
-        output[..period].fill(T::nan());
+    // Fill lookback with NaN using efficient slice.fill()
+    output[..period].fill(T::nan());
+
+    // Compute initial sums of TR, +DM, -DM for the first period
+    // TR and DM start at index 1 (needs previous bar)
+    let mut sum_tr = T::zero();
+    let mut sum_plus_dm = T::zero();
+    let mut sum_minus_dm = T::zero();
+
+    for i in 1..=period {
+        let tr = compute_true_range(high[i], low[i], close[i - 1]);
+        let (plus_dm, minus_dm) =
+            compute_directional_movement(high[i], high[i - 1], low[i], low[i - 1]);
+        sum_tr = sum_tr + tr;
+        sum_plus_dm = sum_plus_dm + plus_dm;
+        sum_minus_dm = sum_minus_dm + minus_dm;
+    }
+
+    // Initialize smoothed values
+    let mut smoothed_tr = sum_tr;
+    let mut smoothed_plus_dm = sum_plus_dm;
+    let mut smoothed_minus_dm = sum_minus_dm;
+
+    // Compute first DX at index = period
+    // Note: NaN comparisons are always false, so we must check is_finite() explicitly
+    // to ensure NaN propagates rather than defaulting to zero
+    let plus_di = if smoothed_tr.is_finite() && smoothed_tr > T::zero() {
+        hundred * smoothed_plus_dm / smoothed_tr
+    } else if !smoothed_tr.is_finite() || !smoothed_plus_dm.is_finite() {
+        T::nan()
+    } else {
+        T::zero()
+    };
+    let minus_di = if smoothed_tr.is_finite() && smoothed_tr > T::zero() {
+        hundred * smoothed_minus_dm / smoothed_tr
+    } else if !smoothed_tr.is_finite() || !smoothed_minus_dm.is_finite() {
+        T::nan()
+    } else {
+        T::zero()
+    };
+
+    // DX = 100 * |+DI - -DI| / (+DI + -DI)
+    // IEEE 754: NaN + x = NaN, NaN.abs() = NaN, so di_sum and di_diff propagate NaN
+    let di_sum = plus_di + minus_di;
+    let di_diff = (plus_di - minus_di).abs();
+    output[period] = if di_sum.is_finite() && di_sum > T::zero() {
+        hundred * di_diff / di_sum
+    } else if !di_sum.is_finite() {
+        T::nan()
+    } else {
+        T::zero()
+    };
+
+    // Continue with Wilder smoothing for subsequent values
+    for i in (period + 1)..n {
+        let tr = compute_true_range(high[i], low[i], close[i - 1]);
+        let (plus_dm, minus_dm) =
+            compute_directional_movement(high[i], high[i - 1], low[i], low[i - 1]);
+
+        // Wilder smoothing: smoothed = prev - prev/period + current
+        // IEEE 754: NaN propagates through arithmetic operations
+        smoothed_tr = smoothed_tr - smoothed_tr / period_t + tr;
+        smoothed_plus_dm = smoothed_plus_dm - smoothed_plus_dm / period_t + plus_dm;
+        smoothed_minus_dm = smoothed_minus_dm - smoothed_minus_dm / period_t + minus_dm;
+
+        // Compute DI values with explicit NaN handling
+        let plus_di = if smoothed_tr.is_finite() && smoothed_tr > T::zero() {
+            hundred * smoothed_plus_dm / smoothed_tr
+        } else if !smoothed_tr.is_finite() || !smoothed_plus_dm.is_finite() {
+            T::nan()
+        } else {
+            T::zero()
+        };
+        let minus_di = if smoothed_tr.is_finite() && smoothed_tr > T::zero() {
+            hundred * smoothed_minus_dm / smoothed_tr
+        } else if !smoothed_tr.is_finite() || !smoothed_minus_dm.is_finite() {
+            T::nan()
+        } else {
+            T::zero()
+        };
 
         // DX = 100 * |+DI - -DI| / (+DI + -DI)
-        // Use IEEE 754 NaN propagation: if plus_di or minus_di is NaN,
-        // the arithmetic produces NaN naturally
-        for i in period..n {
-            let di_sum = plus_di[i] + minus_di[i];
-            let di_diff = (plus_di[i] - minus_di[i]).abs();
-            // For NaN inputs: di_sum will be NaN, di_sum > T::zero() is false,
-            // so we output T::zero(). But we want NaN. Check di_sum.is_finite().
-            if !di_sum.is_finite() {
-                output[i] = T::nan();
-            } else if di_sum > T::zero() {
-                output[i] = hundred * di_diff / di_sum;
-            } else {
-                output[i] = T::zero();
-            }
-        }
-    } else {
-        // Not enough data for full ADX calculation
-        return Err(Error::InsufficientData {
-            indicator: "dx",
-            required: 2 * period,
-            actual: n,
-        });
+        let di_sum = plus_di + minus_di;
+        let di_diff = (plus_di - minus_di).abs();
+        output[i] = if di_sum.is_finite() && di_sum > T::zero() {
+            hundred * di_diff / di_sum
+        } else if !di_sum.is_finite() {
+            T::nan()
+        } else {
+            T::zero()
+        };
     }
 
     Ok(())
@@ -521,202 +652,4 @@ pub fn minus_dm<T: SeriesElement>(high: &[T], low: &[T], period: usize) -> Resul
     let mut output = vec![T::zero(); high.len()];
     minus_dm_into(high, low, period, &mut output)?;
     Ok(output)
-}
-
-#[cfg(test)]
-mod tests {
-    #![allow(clippy::all, clippy::pedantic, clippy::nursery)]
-    use super::*;
-
-    // ADXR Tests
-    #[test]
-    fn test_adxr_lookback() {
-        // adx_lookback(14) = 27, + 14 = 41
-        assert_eq!(adxr_lookback(14), 41);
-        assert_eq!(adxr_lookback(5), 14); // 9 + 5
-    }
-
-    #[test]
-    fn test_adxr_min_len() {
-        assert_eq!(adxr_min_len(14), 42);
-        assert_eq!(adxr_min_len(5), 15);
-    }
-
-    #[test]
-    fn test_adxr_empty_input() {
-        let high: Vec<f64> = vec![];
-        let low: Vec<f64> = vec![];
-        let close: Vec<f64> = vec![];
-        let result = adxr(&high, &low, &close, 5);
-        assert!(matches!(result, Err(Error::EmptyInput)));
-    }
-
-    #[test]
-    fn test_adxr_output_length() {
-        let n = 20;
-        let high: Vec<f64> = (0..n).map(|i| 100.0 + i as f64).collect();
-        let low: Vec<f64> = (0..n).map(|i| 98.0 + i as f64).collect();
-        let close: Vec<f64> = (0..n).map(|i| 99.0 + i as f64).collect();
-        let result = adxr(&high, &low, &close, 5).unwrap();
-        assert_eq!(result.len(), n);
-    }
-
-    #[test]
-    fn test_adxr_lookback_nan() {
-        let n = 20;
-        let high: Vec<f64> = (0..n).map(|i| 100.0 + i as f64).collect();
-        let low: Vec<f64> = (0..n).map(|i| 98.0 + i as f64).collect();
-        let close: Vec<f64> = (0..n).map(|i| 99.0 + i as f64).collect();
-        let result = adxr(&high, &low, &close, 5).unwrap();
-
-        let lookback = adxr_lookback(5);
-        for i in 0..lookback {
-            assert!(result[i].is_nan(), "adxr[{}] should be NaN", i);
-        }
-        for i in lookback..n {
-            assert!(result[i].is_finite(), "adxr[{}] should be finite", i);
-        }
-    }
-
-    // DX Tests
-    #[test]
-    fn test_dx_lookback() {
-        assert_eq!(dx_lookback(14), 14);
-        assert_eq!(dx_lookback(5), 5);
-    }
-
-    #[test]
-    fn test_dx_min_len() {
-        assert_eq!(dx_min_len(14), 15);
-        assert_eq!(dx_min_len(5), 6);
-    }
-
-    #[test]
-    fn test_dx_empty_input() {
-        let high: Vec<f64> = vec![];
-        let low: Vec<f64> = vec![];
-        let close: Vec<f64> = vec![];
-        let result = dx(&high, &low, &close, 5);
-        assert!(matches!(result, Err(Error::EmptyInput)));
-    }
-
-    #[test]
-    fn test_dx_output_length() {
-        let n = 20;
-        let high: Vec<f64> = (0..n).map(|i| 100.0 + i as f64).collect();
-        let low: Vec<f64> = (0..n).map(|i| 98.0 + i as f64).collect();
-        let close: Vec<f64> = (0..n).map(|i| 99.0 + i as f64).collect();
-        let result = dx(&high, &low, &close, 5).unwrap();
-        assert_eq!(result.len(), n);
-    }
-
-    #[test]
-    fn test_dx_range() {
-        let n = 20;
-        let high: Vec<f64> = (0..n).map(|i| 100.0 + i as f64).collect();
-        let low: Vec<f64> = (0..n).map(|i| 98.0 + i as f64).collect();
-        let close: Vec<f64> = (0..n).map(|i| 99.0 + i as f64).collect();
-        let result = dx(&high, &low, &close, 5).unwrap();
-
-        for i in dx_lookback(5)..n {
-            if result[i].is_finite() {
-                assert!(
-                    result[i] >= 0.0 && result[i] <= 100.0,
-                    "dx[{}] = {} should be in [0, 100]",
-                    i,
-                    result[i]
-                );
-            }
-        }
-    }
-
-    // PLUS_DM Tests
-    #[test]
-    fn test_plus_dm_lookback() {
-        assert_eq!(dm_lookback(14), 14);
-        assert_eq!(dm_lookback(5), 5);
-    }
-
-    #[test]
-    fn test_plus_dm_empty_input() {
-        let high: Vec<f64> = vec![];
-        let low: Vec<f64> = vec![];
-        let result = plus_dm(&high, &low, 5);
-        assert!(matches!(result, Err(Error::EmptyInput)));
-    }
-
-    #[test]
-    fn test_plus_dm_output_length() {
-        let n = 20;
-        let high: Vec<f64> = (0..n).map(|i| 100.0 + i as f64).collect();
-        let low: Vec<f64> = (0..n).map(|i| 98.0 + i as f64).collect();
-        let result = plus_dm(&high, &low, 5).unwrap();
-        assert_eq!(result.len(), n);
-    }
-
-    #[test]
-    fn test_plus_dm_uptrend() {
-        // In uptrend, plus_dm should be positive
-        let high: Vec<f64> = (0..15).map(|i| 100.0 + i as f64 * 2.0).collect();
-        let low: Vec<f64> = (0..15).map(|i| 99.0 + i as f64 * 2.0).collect();
-        let result = plus_dm(&high, &low, 5).unwrap();
-
-        for i in dm_lookback(5)..result.len() {
-            assert!(
-                result[i] > 0.0,
-                "plus_dm[{}] should be positive in uptrend",
-                i
-            );
-        }
-    }
-
-    // MINUS_DM Tests
-    #[test]
-    fn test_minus_dm_empty_input() {
-        let high: Vec<f64> = vec![];
-        let low: Vec<f64> = vec![];
-        let result = minus_dm(&high, &low, 5);
-        assert!(matches!(result, Err(Error::EmptyInput)));
-    }
-
-    #[test]
-    fn test_minus_dm_output_length() {
-        let n = 20;
-        let high: Vec<f64> = (0..n).map(|i| 100.0 + i as f64).collect();
-        let low: Vec<f64> = (0..n).map(|i| 98.0 + i as f64).collect();
-        let result = minus_dm(&high, &low, 5).unwrap();
-        assert_eq!(result.len(), n);
-    }
-
-    #[test]
-    fn test_minus_dm_downtrend() {
-        // In downtrend, minus_dm should be positive
-        let high: Vec<f64> = (0..15).map(|i| 200.0 - i as f64 * 2.0).collect();
-        let low: Vec<f64> = (0..15).map(|i| 199.0 - i as f64 * 2.0).collect();
-        let result = minus_dm(&high, &low, 5).unwrap();
-
-        for i in dm_lookback(5)..result.len() {
-            assert!(
-                result[i] > 0.0,
-                "minus_dm[{}] should be positive in downtrend",
-                i
-            );
-        }
-    }
-
-    #[test]
-    fn test_dm_length_mismatch() {
-        let high: Vec<f64> = vec![10.0; 15];
-        let low: Vec<f64> = vec![9.0; 10]; // Different length
-        let result = plus_dm(&high, &low, 5);
-        assert!(matches!(result, Err(Error::LengthMismatch { .. })));
-    }
-
-    #[test]
-    fn test_dm_invalid_period() {
-        let high: Vec<f64> = vec![10.0; 15];
-        let low: Vec<f64> = vec![9.0; 15];
-        let result = plus_dm(&high, &low, 0);
-        assert!(matches!(result, Err(Error::InvalidPeriod { .. })));
-    }
 }

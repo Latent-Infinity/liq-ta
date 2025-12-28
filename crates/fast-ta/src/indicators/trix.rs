@@ -44,6 +44,9 @@ pub const fn trix_min_len(period: usize) -> usize {
 
 /// Computes TRIX and stores results in output slice.
 ///
+/// This implementation fuses the triple EMA and ROC calculations into a single
+/// pass, eliminating the need for intermediate arrays.
+///
 /// # Arguments
 ///
 /// * `data` - Price data (typically closing prices)
@@ -89,72 +92,80 @@ pub fn trix_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) 
     }
 
     let lookback = trix_lookback(period);
-    let hundred = T::from_f64(100.0)?;
     let ema_lb = ema_lookback(period);
-    let alpha = T::from_f64(2.0)? / (T::from_usize(period)? + T::from_f64(1.0)?);
-    let one_minus_alpha = T::from_f64(1.0)? - alpha;
+
+    // Pre-compute constants
+    let alpha = T::from_f64(2.0 / (period as f64 + 1.0))?;
+    let one_minus_alpha = T::one() - alpha;
+    let hundred = T::from_f64(100.0)?;
     let period_t = T::from_usize(period)?;
 
-    // Calculate first EMA (of data)
-    // Use IEEE 754 NaN propagation: sum + NaN = NaN, NaN * alpha = NaN
-    let mut ema1 = vec![T::nan(); n];
-    // First valid EMA1 is at index ema_lb, using SMA of first `period` values
-    let mut sum = T::zero();
-    for i in 0..period {
-        sum = sum + data[i]; // NaN propagates naturally
-    }
-    ema1[ema_lb] = sum / period_t;
-    // EMA propagation: if prev is NaN or data[i] is NaN, result is NaN
-    for i in (ema_lb + 1)..n {
-        ema1[i] = alpha * data[i] + one_minus_alpha * ema1[i - 1];
-    }
-
-    // Calculate second EMA (of EMA1)
-    let ema2_start = 2 * ema_lb;
-    let mut ema2 = vec![T::nan(); n];
-    // First valid EMA2 at index 2*ema_lb
-    let mut sum2 = T::zero();
-    for i in 0..period {
-        sum2 = sum2 + ema1[ema_lb + i]; // NaN propagates naturally
-    }
-    ema2[ema2_start] = sum2 / period_t;
-    // EMA propagation
-    for i in (ema2_start + 1)..n {
-        ema2[i] = alpha * ema1[i] + one_minus_alpha * ema2[i - 1];
-    }
-
-    // Calculate third EMA (of EMA2)
-    let ema3_start = 3 * ema_lb;
-    let mut ema3 = vec![T::nan(); n];
-    // First valid EMA3 at index 3*ema_lb
-    let mut sum3 = T::zero();
-    for i in 0..period {
-        sum3 = sum3 + ema2[ema2_start + i]; // NaN propagates naturally
-    }
-    ema3[ema3_start] = sum3 / period_t;
-    // EMA propagation
-    for i in (ema3_start + 1)..n {
-        ema3[i] = alpha * ema2[i] + one_minus_alpha * ema3[i - 1];
-    }
-
-    // Fill lookback period with NaN using efficient slice.fill()
+    // Fill lookback period with NaN
     output[..lookback].fill(T::nan());
 
-    // Calculate TRIX (ROC of triple EMA)
-    // First valid TRIX at lookback = 3*ema_lb + 1
-    // Use IEEE 754 propagation for NaN, handle zero-division for rate of change
-    for i in lookback..n {
-        let prev = ema3[i - 1];
-        let curr = ema3[i];
-        // For ROC: (curr - prev) / prev
-        // If prev is NaN, curr is NaN, or prev is zero, handle appropriately
-        if !prev.is_finite() || !curr.is_finite() {
+    // Phase 1: Build initial SMA for EMA1 (indices 0..period)
+    let mut ema1_sum = T::zero();
+    for i in 0..period {
+        ema1_sum = ema1_sum + data[i];
+    }
+    let mut ema1 = ema1_sum / period_t;
+
+    // Phase 2: Continue EMA1 and build initial SMA for EMA2
+    // EMA1 is now valid at index ema_lb (= period - 1)
+    // We need `period` EMA1 values for EMA2's SMA: indices ema_lb through 2*ema_lb
+    let mut ema2_sum = ema1;
+    for i in (ema_lb + 1)..=(2 * ema_lb) {
+        ema1 = alpha * data[i] + one_minus_alpha * ema1;
+        ema2_sum = ema2_sum + ema1;
+    }
+    let mut ema2 = ema2_sum / period_t;
+
+    // Phase 3: Continue EMA1, EMA2 and build initial SMA for EMA3
+    // EMA2 is now valid at index 2*ema_lb
+    // We need `period` EMA2 values for EMA3's SMA: indices 2*ema_lb through 3*ema_lb
+    let mut ema3_sum = ema2;
+    for i in (2 * ema_lb + 1)..=(3 * ema_lb) {
+        ema1 = alpha * data[i] + one_minus_alpha * ema1;
+        ema2 = alpha * ema1 + one_minus_alpha * ema2;
+        ema3_sum = ema3_sum + ema2;
+    }
+    let mut ema3 = ema3_sum / period_t;
+
+    // Phase 4: Calculate TRIX (ROC of triple EMA)
+    // First valid TRIX is at index lookback = 3*ema_lb + 1
+    // We need prev_ema3 (at index 3*ema_lb) for the ROC calculation
+    let mut prev_ema3 = ema3;
+
+    // Process first TRIX value at lookback
+    ema1 = alpha * data[lookback] + one_minus_alpha * ema1;
+    ema2 = alpha * ema1 + one_minus_alpha * ema2;
+    ema3 = alpha * ema2 + one_minus_alpha * ema3;
+
+    // For ROC: (curr - prev) / prev
+    // Handle NaN propagation and zero-division appropriately
+    if !prev_ema3.is_finite() || !ema3.is_finite() {
+        output[lookback] = T::nan();
+    } else if prev_ema3 != T::zero() {
+        output[lookback] = hundred * (ema3 - prev_ema3) / prev_ema3;
+    } else {
+        output[lookback] = T::zero();
+    }
+    prev_ema3 = ema3;
+
+    // Continue for rest of data
+    for i in (lookback + 1)..n {
+        ema1 = alpha * data[i] + one_minus_alpha * ema1;
+        ema2 = alpha * ema1 + one_minus_alpha * ema2;
+        ema3 = alpha * ema2 + one_minus_alpha * ema3;
+
+        if !prev_ema3.is_finite() || !ema3.is_finite() {
             output[i] = T::nan();
-        } else if prev != T::zero() {
-            output[i] = hundred * (curr - prev) / prev;
+        } else if prev_ema3 != T::zero() {
+            output[i] = hundred * (ema3 - prev_ema3) / prev_ema3;
         } else {
             output[i] = T::zero();
         }
+        prev_ema3 = ema3;
     }
 
     Ok(())

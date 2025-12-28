@@ -190,15 +190,15 @@ pub const fn true_range_lookback() -> usize {
 /// assert!(!tr[1].is_nan()); // Valid TR
 /// ```
 #[must_use = "this returns a Result with the True Range values, which should be used"]
-pub fn true_range<T: SeriesElement>(high: &[T], low: &[T], close: &[T]) -> Result<Vec<T>> {
+pub fn true_range<T: SeriesElement + 'static>(high: &[T], low: &[T], close: &[T]) -> Result<Vec<T>> {
     // Validate inputs
     validate_ohlc_inputs(high, low, close)?;
 
     let n = high.len();
     let mut tr = vec![T::nan(); n];
 
-    // First value is NaN - no previous close available
-    // Start from index 1
+    // Scalar path for all types - handles NaN/infinity correctly via compute_true_range
+    // Note: SIMD was attempted but the NaN/infinity handling overhead exceeded the speedup
     for i in 1..n {
         tr[i] = compute_true_range(high[i], low[i], close[i - 1]);
     }

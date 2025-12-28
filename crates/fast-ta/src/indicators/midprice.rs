@@ -11,9 +11,10 @@
 //!
 //! The lookback period is `period - 1`.
 //!
-//! # Performance
+//! # Complexity
 //!
-//! Uses O(n) monotonic deque algorithm instead of naive O(n×period) approach.
+//! - Time: O(n) for n elements (amortized O(1) per element using monotonic deques)
+//! - Space: O(n) for output + O(2k) for the deques, where k is the period
 
 use crate::error::{Error, Result};
 use crate::kernels::rolling_extrema::MonotonicDeque;
@@ -129,15 +130,15 @@ pub fn midprice_into<T: SeriesElement>(
 
     let lookback = midprice_lookback(period);
     let n = high.len();
+    let two = T::from_usize(2)?;
 
     // Fill lookback period with NaN
-    for i in 0..lookback {
-        output[i] = T::nan();
+    for value in output.iter_mut().take(lookback) {
+        *value = T::nan();
     }
 
     // For period 1, MIDPRICE = (high + low) / 2
     if period == 1 {
-        let two = T::from_usize(2)?;
         for i in 0..n {
             let h = high[i];
             let l = low[i];
@@ -149,8 +150,6 @@ pub fn midprice_into<T: SeriesElement>(
         }
         return Ok(());
     }
-
-    let two = T::from_usize(2)?;
 
     // Use O(n) monotonic deques for rolling max (on high) and min (on low)
     let mut max_deque: MonotonicDeque<T> = MonotonicDeque::new(period);

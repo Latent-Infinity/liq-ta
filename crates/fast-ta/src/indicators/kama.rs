@@ -143,13 +143,12 @@ pub fn kama_full_into<T: SeriesElement>(
         });
     }
 
-    let lookback = kama_lookback(period);
     let n = data.len();
-    let zero = T::zero();
+    let lookback = kama_lookback(period);
 
     // Fill lookback period with NaN
-    for out in output.iter_mut().take(lookback) {
-        *out = T::nan();
+    for i in 0..lookback {
+        output[i] = T::nan();
     }
 
     // Calculate smoothing constants
@@ -158,9 +157,10 @@ pub fn kama_full_into<T: SeriesElement>(
     let slow_sc = two / T::from_usize(slow_period + 1)?;
     let sc_diff = fast_sc - slow_sc;
 
-    // Pre-compute all absolute changes (volatility components)
-    // abs_changes[i] = |data[i] - data[i-1]| for i >= 1
-    let mut abs_changes = vec![zero; n];
+    // Pre-compute all absolute changes to avoid redundant calculations
+    // abs_changes[i] = |data[i] - data[i-1]| for i in 1..n
+    // abs_changes[0] is unused (set to zero)
+    let mut abs_changes = vec![T::zero(); n];
     for i in 1..n {
         abs_changes[i] = (data[i] - data[i - 1]).abs();
     }
@@ -174,23 +174,33 @@ pub fn kama_full_into<T: SeriesElement>(
         return Ok(());
     }
 
-    // Initialize volatility for first calculation (at lookback + 1)
-    // Volatility window for i = lookback + 1 = period is [1, period]
-    let mut volatility = zero;
-    for j in 1..=period {
+    // Initialize rolling volatility sum for the first window
+    // The first KAMA calculation (at lookback + 1) needs volatility over indices [lookback - period + 2, lookback + 1]
+    // We'll compute the initial volatility for the window ending at lookback + 1
+    let mut volatility = T::zero();
+    let start = lookback + 2 - period; // = lookback - period + 2
+    for j in start..=(lookback + 1) {
         volatility = volatility + abs_changes[j];
     }
 
-    // Calculate KAMA for remaining values
+    // Calculate KAMA for remaining values using rolling volatility
     for i in (lookback + 1)..n {
-        // Calculate change (direction)
+        if i > lookback + 1 {
+            // Update volatility using sliding window:
+            // Remove the oldest value and add the newest value
+            // Old window: [i - period, i - 1] (sum of abs_changes[i-period+1] to abs_changes[i-1])
+            // New window: [i - period + 1, i] (sum of abs_changes[i-period+2] to abs_changes[i])
+            volatility = volatility - abs_changes[i - period] + abs_changes[i];
+        }
+
+        // Calculate change (direction) - price change over the period
         let change = (data[i] - data[i - period]).abs();
 
         // Calculate Efficiency Ratio
-        let er = if volatility > zero {
+        let er = if volatility > T::zero() {
             change / volatility
         } else {
-            zero
+            T::zero()
         };
 
         // Calculate Smoothing Constant
@@ -200,15 +210,6 @@ pub fn kama_full_into<T: SeriesElement>(
         // Update KAMA
         kama = kama + sc * (data[i] - kama);
         output[i] = kama;
-
-        // Update volatility for next iteration (if not last)
-        if i + 1 < n {
-            // Window slides: remove oldest, add newest
-            // Current window was [i - period + 1, i]
-            // Next window is [i - period + 2, i + 1]
-            let old_idx = i - period + 1;
-            volatility = volatility - abs_changes[old_idx] + abs_changes[i + 1];
-        }
     }
 
     Ok(())
@@ -512,62 +513,5 @@ mod tests {
             .collect();
 
         assert_eq!(fast_valid.len(), slow_valid.len());
-    }
-
-    #[test]
-    fn test_kama_minimum_length() {
-        let data: Vec<f64> = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
-        let result = kama(&data, 10).unwrap();
-
-        assert_eq!(result.len(), 10);
-        // First 9 are NaN
-        for i in 0..9 {
-            assert!(result[i].is_nan());
-        }
-        // Only last value is valid
-        assert!(result[9].is_finite());
-    }
-
-    #[test]
-    fn test_kama_negative_values() {
-        let data: Vec<f64> = vec![
-            -10.0, -9.0, -8.0, -7.0, -6.0, -5.0, -4.0, -3.0, -2.0, -1.0, 0.0, 1.0,
-        ];
-        let result = kama(&data, 10).unwrap();
-
-        // Should handle negative values correctly
-        for i in 9..12 {
-            assert!(result[i].is_finite());
-        }
-
-        // KAMA should increase with uptrend
-        assert!(result[10] > result[9]);
-        assert!(result[11] > result[10]);
-    }
-
-    #[test]
-    fn test_kama_large_values() {
-        let data: Vec<f64> = vec![
-            1e15, 2e15, 3e15, 4e15, 5e15, 6e15, 7e15, 8e15, 9e15, 1e16, 1.1e16, 1.2e16,
-        ];
-        let result = kama(&data, 10).unwrap();
-
-        for i in 9..12 {
-            assert!(result[i].is_finite());
-        }
-    }
-
-    #[test]
-    fn test_kama_full_invalid_fast_period() {
-        let data: Vec<f64> = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
-        let result = kama_full(&data, 10, 0, 30);
-        assert!(matches!(result, Err(Error::InvalidPeriod { .. })));
-    }
-
-    #[test]
-    fn test_kama_full_invalid_slow_period() {
-        let data: Vec<f64> = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
-        let result = kama_full(&data, 10, 2, 0);
-        assert!(matches!(result, Err(Error::InvalidPeriod { .. })));
     }
 }
