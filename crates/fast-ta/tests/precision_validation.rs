@@ -532,8 +532,9 @@ fn precision_var_random_walk() {
 #[test]
 fn precision_var_near_constant() {
     // Near-constant data triggers catastrophic cancellation in sum-of-squares
-    let data_f32 = generate_near_constant_f32(LARGE_SIZE, 1000.0, 1e-5);
-    let data_f64 = generate_near_constant(LARGE_SIZE, 1000.0, 1e-5);
+    // Use base=10.0 so noise=1e-5 is representable in f32 (f32 ULP at 1000 is 1.19e-4, too large)
+    let data_f32 = generate_near_constant_f32(LARGE_SIZE, 10.0, 1e-5);
+    let data_f64 = generate_near_constant(LARGE_SIZE, 10.0, 1e-5);
 
     let reference = with_precision_mode(PrecisionMode::Fast, || var(&data_f64, 20).unwrap());
 

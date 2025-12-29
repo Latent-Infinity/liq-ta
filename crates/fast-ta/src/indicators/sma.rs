@@ -11,6 +11,13 @@
 //! 2. For each subsequent element, we add the new value and subtract the oldest value
 //! 3. This maintains the rolling sum with O(1) operations per element
 //!
+//! # Performance Optimizations
+//!
+//! - **SIMD fast path**: When all data is finite (no NaN/Inf), uses SIMD-accelerated
+//!   rolling sum without per-element validity checks
+//! - **SIMD initial window**: Uses vectorized sum for the first window computation
+//! - **Pre-computed reciprocal**: Multiplies by 1/period instead of dividing
+//!
 //! # Formula
 //!
 //! ```text
@@ -38,7 +45,215 @@
 //! ```
 
 use crate::error::{Error, Result};
+use crate::kernels::simd;
 use crate::traits::SeriesElement;
+use std::any::TypeId;
+use std::simd::{f64x4, num::SimdFloat};
+
+/// Number of f64 lanes for SIMD operations.
+const LANES: usize = 4;
+
+/// Prefix-sum based SIMD SMA for f64 when all data is finite.
+///
+/// This approach has two phases:
+/// 1. Compute prefix sums (sequential, O(n))
+/// 2. Compute differences with SIMD (parallel, O(n/LANES))
+///
+/// The difference phase is embarrassingly parallel - no loop-carried
+/// dependencies - allowing full SIMD utilization.
+#[inline]
+fn sma_f64_prefix_simd(data: &[f64], period: usize, output: &mut [f64]) {
+    let n = data.len();
+    let inv_period = 1.0 / period as f64;
+
+    // Fill lookback with NaN
+    for item in output.iter_mut().take(period - 1) {
+        *item = f64::NAN;
+    }
+
+    // Build prefix sums: p[i] = sum of data[0..i]
+    // p[0] = 0, p[1] = data[0], p[2] = data[0] + data[1], ...
+    let mut prefix = vec![0.0f64; n + 1];
+    for i in 0..n {
+        prefix[i + 1] = prefix[i] + data[i];
+    }
+
+    // SIMD vectorized difference computation
+    // SMA[i] = (prefix[i+1] - prefix[i+1-period]) / period
+    // Output index: period-1 + j maps to prefix indices (period + j) - (j) = period apart
+    let m = n - period + 1; // number of valid outputs
+    let inv_vec = f64x4::splat(inv_period);
+
+    let mut j = 0;
+    while j + LANES <= m {
+        let out_idx = period - 1 + j;
+        let end_idx = period + j; // prefix[end_idx] = sum of data[0..end_idx]
+        let start_idx = j; // prefix[start_idx] = sum of data[0..start_idx]
+
+        let end_sums = f64x4::from_slice(&prefix[end_idx..end_idx + LANES]);
+        let start_sums = f64x4::from_slice(&prefix[start_idx..start_idx + LANES]);
+        let sma_vals = (end_sums - start_sums) * inv_vec;
+
+        sma_vals.copy_to_slice(&mut output[out_idx..out_idx + LANES]);
+        j += LANES;
+    }
+
+    // Scalar tail
+    while j < m {
+        let out_idx = period - 1 + j;
+        output[out_idx] = (prefix[period + j] - prefix[j]) * inv_period;
+        j += 1;
+    }
+}
+
+/// Check if all values in a slice are finite using SIMD.
+#[inline]
+fn all_finite_f64(data: &[f64]) -> bool {
+    let chunks = data.len() / LANES;
+    let remainder = data.len() % LANES;
+
+    for i in 0..chunks {
+        let offset = i * LANES;
+        let chunk = f64x4::from_slice(&data[offset..offset + LANES]);
+        if !chunk.is_finite().all() {
+            return false;
+        }
+    }
+
+    let tail_start = chunks * LANES;
+    for &value in &data[tail_start..tail_start + remainder] {
+        if !value.is_finite() {
+            return false;
+        }
+    }
+
+    true
+}
+
+/// SIMD-optimized SMA for f64 - single pass with adaptive fast path.
+///
+/// Uses SIMD for initial window sum. If no invalid values are found during
+/// initial window computation, switches to branchless rolling sum.
+/// Otherwise uses nan_count tracking.
+#[inline]
+fn sma_f64_optimized(data: &[f64], period: usize, output: &mut [f64]) {
+    let n = data.len();
+    let inv_period = 1.0 / period as f64;
+
+    // Fill lookback with NaN
+    for item in output.iter_mut().take(period - 1) {
+        *item = f64::NAN;
+    }
+
+    // Compute initial sum and count using SIMD
+    let (mut sum, valid_count) = simd::sum_and_count_f64(&data[..period]);
+    let invalid_count = period - valid_count;
+
+    // First valid output
+    if invalid_count == 0 {
+        output[period - 1] = sum * inv_period;
+    } else {
+        output[period - 1] = f64::NAN;
+    }
+
+    // If initial window has no invalids, check if remaining data is also clean
+    // by doing fast path with lazy validity detection
+    if invalid_count == 0 {
+        // Optimistic fast path - assume rest is clean, bail if we find invalid
+        for i in period..n {
+            let new_value = data[i];
+            let old_value = data[i - period];
+
+            // Branchless update when both values are finite
+            // Most common case: both values are valid
+            if new_value.is_finite() && old_value.is_finite() {
+                sum = sum + new_value - old_value;
+                output[i] = sum * inv_period;
+            } else {
+                // Hit an invalid value - fall back to tracking mode for rest
+                sma_f64_tracking_tail(data, period, output, i, sum, new_value, old_value, inv_period);
+                return;
+            }
+        }
+    } else {
+        // Slow path from start - use full tracking
+        sma_f64_tracking_loop(data, period, output, period, sum, invalid_count, inv_period);
+    }
+}
+
+/// Continue SMA computation with full NaN tracking from a given index.
+#[inline]
+fn sma_f64_tracking_tail(
+    data: &[f64],
+    period: usize,
+    output: &mut [f64],
+    start_i: usize,
+    mut sum: f64,
+    new_value: f64,
+    old_value: f64,
+    inv_period: f64,
+) {
+    // Process the current element that triggered the switch
+    let mut invalid_count = 0usize;
+
+    if !new_value.is_finite() {
+        invalid_count += 1;
+    } else {
+        sum += new_value;
+    }
+
+    if !old_value.is_finite() {
+        // old_value was invalid, so invalid_count was already 0, decrement not needed
+    } else {
+        sum -= old_value;
+    }
+
+    if invalid_count == 0 {
+        output[start_i] = sum * inv_period;
+    } else {
+        output[start_i] = f64::NAN;
+    }
+
+    // Continue with tracking loop
+    sma_f64_tracking_loop(data, period, output, start_i + 1, sum, invalid_count, inv_period);
+}
+
+/// Rolling sum loop with full invalid_count tracking.
+#[inline]
+fn sma_f64_tracking_loop(
+    data: &[f64],
+    period: usize,
+    output: &mut [f64],
+    start_i: usize,
+    mut sum: f64,
+    mut invalid_count: usize,
+    inv_period: f64,
+) {
+    let n = data.len();
+
+    for i in start_i..n {
+        let new_value = data[i];
+        let old_value = data[i - period];
+
+        if !new_value.is_finite() {
+            invalid_count += 1;
+        } else {
+            sum += new_value;
+        }
+
+        if !old_value.is_finite() {
+            invalid_count = invalid_count.saturating_sub(1);
+        } else {
+            sum -= old_value;
+        }
+
+        if invalid_count == 0 {
+            output[i] = sum * inv_period;
+        } else {
+            output[i] = f64::NAN;
+        }
+    }
+}
 
 /// Returns the lookback period for SMA.
 ///
@@ -108,6 +323,7 @@ pub const fn sma_min_len(period: usize) -> usize {
 ///
 /// - Time complexity: O(n) where n is the length of the input data
 /// - Space complexity: O(n) for the output vector
+/// - For f64 data: Uses SIMD-accelerated fast path when all values are finite
 ///
 /// # NaN Handling
 ///
@@ -132,11 +348,38 @@ pub fn sma<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
     // Validate inputs
     crate::traits::validate_indicator_input(data, period, "sma")?;
 
+    let mut result = vec![T::nan(); data.len()];
+
+    // Use SIMD-optimized path for f64
+    if TypeId::of::<T>() == TypeId::of::<f64>() {
+        // SAFETY: We've verified T is f64, so these pointer casts are valid
+        let data_f64: &[f64] =
+            unsafe { std::slice::from_raw_parts(data.as_ptr() as *const f64, data.len()) };
+        let result_f64: &mut [f64] =
+            unsafe { std::slice::from_raw_parts_mut(result.as_mut_ptr() as *mut f64, result.len()) };
+
+        // Use prefix-sum SIMD when all data is finite (common case)
+        // This approach vectorizes the output computation with no loop-carried dependencies
+        if all_finite_f64(data_f64) {
+            sma_f64_prefix_simd(data_f64, period, result_f64);
+        } else {
+            // Fall back to tracking-based approach for data with NaN/Inf
+            sma_f64_optimized(data_f64, period, result_f64);
+        }
+
+        return Ok(result);
+    }
+
+    // Generic fallback for f32 and other types
+    sma_generic(data, period, &mut result)?;
+    Ok(result)
+}
+
+/// Generic SMA implementation for non-f64 types.
+#[inline]
+fn sma_generic<T: SeriesElement>(data: &[T], period: usize, result: &mut [T]) -> Result<()> {
     // Pre-compute reciprocal of period for faster multiply instead of divide
     let inv_period = T::one() / T::from_usize(period)?;
-
-    // Initialize result vector with NaN
-    let mut result = vec![T::nan(); data.len()];
 
     // Compute initial sum for the first window, tracking non-finite values
     // Per project NaN propagation policy: both NaN and Infinity produce NaN output
@@ -179,7 +422,7 @@ pub fn sma<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
         }
     }
 
-    Ok(result)
+    Ok(())
 }
 
 /// Computes the Simple Moving Average into a pre-allocated output buffer.
@@ -233,6 +476,31 @@ pub fn sma_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -
         });
     }
 
+    // Use SIMD-optimized path for f64
+    if TypeId::of::<T>() == TypeId::of::<f64>() {
+        // SAFETY: We've verified T is f64, so these pointer casts are valid
+        let data_f64: &[f64] =
+            unsafe { std::slice::from_raw_parts(data.as_ptr() as *const f64, data.len()) };
+        let output_f64: &mut [f64] =
+            unsafe { std::slice::from_raw_parts_mut(output.as_mut_ptr() as *mut f64, output.len()) };
+
+        // Use prefix-sum SIMD when all data is finite (common case)
+        if all_finite_f64(data_f64) {
+            sma_f64_prefix_simd(data_f64, period, output_f64);
+        } else {
+            sma_f64_optimized(data_f64, period, output_f64);
+        }
+
+        return Ok(data.len() - period + 1);
+    }
+
+    // Generic fallback for f32 and other types
+    sma_generic_into(data, period, output)
+}
+
+/// Generic SMA into buffer implementation for non-f64 types.
+#[inline]
+fn sma_generic_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -> Result<usize> {
     // Pre-compute reciprocal of period for faster multiply instead of divide
     let inv_period = T::one() / T::from_usize(period)?;
 

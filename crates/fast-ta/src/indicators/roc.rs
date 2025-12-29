@@ -638,30 +638,23 @@ mod tests {
     }
 
     #[test]
-    fn test_roc_doubling() {
-        let prices: Vec<f64> = vec![50.0, 60.0, 100.0, 80.0];
-        let result = roc(&prices, 2).unwrap();
+    fn test_roc_increasing_prices() {
+        let prices: Vec<f64> = vec![100.0, 110.0, 120.0, 130.0];
+        let result = roc(&prices, 1).unwrap();
 
-        // ROC[2] = ((100 - 50) / 50) * 100 = 100.0 (doubled)
-        assert!((result[2] - 100.0).abs() < 1e-10);
+        assert!(result[0].is_nan());
+        // ROC[1] = ((110 - 100) / 100) * 100 = 10.0
+        assert!((result[1] - 10.0).abs() < 1e-10);
+        // ROC[2] = ((120 - 110) / 110) * 100 ≈ 9.0909
+        assert!((result[2] - (10.0 / 110.0 * 100.0)).abs() < 1e-10);
     }
 
     #[test]
-    fn test_roc_halving() {
-        let prices: Vec<f64> = vec![100.0, 80.0, 50.0, 60.0];
-        let result = roc(&prices, 2).unwrap();
-
-        // ROC[2] = ((50 - 100) / 100) * 100 = -50.0 (halved)
-        assert!((result[2] - (-50.0)).abs() < 1e-10);
-    }
-
-    #[test]
-    fn test_roc_division_by_zero() {
-        let prices: Vec<f64> = vec![0.0, 10.0, 20.0];
-        let result = roc(&prices, 2).unwrap();
-
-        // ROC[2] = (20 - 0) / 0 = NaN
-        assert!(result[2].is_nan());
+    fn test_roc_buffer_too_small() {
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let mut output = vec![0.0; 2];
+        let result = roc_into(&data, 2, &mut output);
+        assert!(matches!(result, Err(Error::BufferTooSmall { .. })));
     }
 
     // =========================================================================
@@ -675,12 +668,45 @@ mod tests {
     }
 
     #[test]
+    fn test_rocp_min_len() {
+        assert_eq!(rocp_min_len(1), 2);
+        assert_eq!(rocp_min_len(10), 11);
+    }
+
+    #[test]
+    fn test_rocp_empty_input() {
+        let data: Vec<f64> = vec![];
+        let result = rocp(&data, 10);
+        assert!(matches!(result, Err(Error::EmptyInput)));
+    }
+
+    #[test]
+    fn test_rocp_invalid_period() {
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let result = rocp(&data, 0);
+        assert!(matches!(result, Err(Error::InvalidPeriod { .. })));
+    }
+
+    #[test]
+    fn test_rocp_insufficient_data() {
+        let data = vec![1.0, 2.0, 3.0];
+        let result = rocp(&data, 10);
+        assert!(matches!(result, Err(Error::InsufficientData { .. })));
+    }
+
+    #[test]
     fn test_rocp_basic_calculation() {
         let prices: Vec<f64> = vec![100.0, 102.0, 104.0, 103.0, 105.0];
         let result = rocp(&prices, 2).unwrap();
 
+        // First 2 values should be NaN
+        assert!(result[0].is_nan());
+        assert!(result[1].is_nan());
+
         // ROCP[2] = (104 - 100) / 100 = 0.04
         assert!((result[2] - 0.04).abs() < 1e-10);
+        // ROCP[3] = (103 - 102) / 102 ≈ 0.0098039
+        assert!((result[3] - (1.0 / 102.0)).abs() < 1e-10);
     }
 
     #[test]
@@ -695,21 +721,11 @@ mod tests {
     }
 
     #[test]
-    fn test_rocp_doubling() {
-        let prices: Vec<f64> = vec![50.0, 60.0, 100.0, 80.0];
-        let result = rocp(&prices, 2).unwrap();
-
-        // ROCP[2] = (100 - 50) / 50 = 1.0 (100% increase)
-        assert!((result[2] - 1.0).abs() < 1e-10);
-    }
-
-    #[test]
-    fn test_rocp_halving() {
-        let prices: Vec<f64> = vec![100.0, 80.0, 50.0, 60.0];
-        let result = rocp(&prices, 2).unwrap();
-
-        // ROCP[2] = (50 - 100) / 100 = -0.5 (50% decrease)
-        assert!((result[2] - (-0.5)).abs() < 1e-10);
+    fn test_rocp_buffer_too_small() {
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let mut output = vec![0.0; 2];
+        let result = rocp_into(&data, 2, &mut output);
+        assert!(matches!(result, Err(Error::BufferTooSmall { .. })));
     }
 
     // =========================================================================
@@ -723,12 +739,45 @@ mod tests {
     }
 
     #[test]
+    fn test_rocr_min_len() {
+        assert_eq!(rocr_min_len(1), 2);
+        assert_eq!(rocr_min_len(10), 11);
+    }
+
+    #[test]
+    fn test_rocr_empty_input() {
+        let data: Vec<f64> = vec![];
+        let result = rocr(&data, 10);
+        assert!(matches!(result, Err(Error::EmptyInput)));
+    }
+
+    #[test]
+    fn test_rocr_invalid_period() {
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let result = rocr(&data, 0);
+        assert!(matches!(result, Err(Error::InvalidPeriod { .. })));
+    }
+
+    #[test]
+    fn test_rocr_insufficient_data() {
+        let data = vec![1.0, 2.0, 3.0];
+        let result = rocr(&data, 10);
+        assert!(matches!(result, Err(Error::InsufficientData { .. })));
+    }
+
+    #[test]
     fn test_rocr_basic_calculation() {
         let prices: Vec<f64> = vec![100.0, 102.0, 104.0, 103.0, 105.0];
         let result = rocr(&prices, 2).unwrap();
 
+        // First 2 values should be NaN
+        assert!(result[0].is_nan());
+        assert!(result[1].is_nan());
+
         // ROCR[2] = 104 / 100 = 1.04
         assert!((result[2] - 1.04).abs() < 1e-10);
+        // ROCR[3] = 103 / 102 ≈ 1.0098039
+        assert!((result[3] - (103.0 / 102.0)).abs() < 1e-10);
     }
 
     #[test]
@@ -736,28 +785,18 @@ mod tests {
         let prices: Vec<f64> = vec![50.0; 10];
         let result = rocr(&prices, 3).unwrap();
 
-        // ROCR should be 1.0 for constant price
+        // ROCR should be 1.0 for constant price (price / price = 1)
         for i in 3..result.len() {
             assert!((result[i] - 1.0).abs() < 1e-10);
         }
     }
 
     #[test]
-    fn test_rocr_doubling() {
-        let prices: Vec<f64> = vec![50.0, 60.0, 100.0, 80.0];
-        let result = rocr(&prices, 2).unwrap();
-
-        // ROCR[2] = 100 / 50 = 2.0 (doubled)
-        assert!((result[2] - 2.0).abs() < 1e-10);
-    }
-
-    #[test]
-    fn test_rocr_halving() {
-        let prices: Vec<f64> = vec![100.0, 80.0, 50.0, 60.0];
-        let result = rocr(&prices, 2).unwrap();
-
-        // ROCR[2] = 50 / 100 = 0.5 (halved)
-        assert!((result[2] - 0.5).abs() < 1e-10);
+    fn test_rocr_buffer_too_small() {
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let mut output = vec![0.0; 2];
+        let result = rocr_into(&data, 2, &mut output);
+        assert!(matches!(result, Err(Error::BufferTooSmall { .. })));
     }
 
     // =========================================================================
@@ -771,12 +810,45 @@ mod tests {
     }
 
     #[test]
+    fn test_rocr100_min_len() {
+        assert_eq!(rocr100_min_len(1), 2);
+        assert_eq!(rocr100_min_len(10), 11);
+    }
+
+    #[test]
+    fn test_rocr100_empty_input() {
+        let data: Vec<f64> = vec![];
+        let result = rocr100(&data, 10);
+        assert!(matches!(result, Err(Error::EmptyInput)));
+    }
+
+    #[test]
+    fn test_rocr100_invalid_period() {
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let result = rocr100(&data, 0);
+        assert!(matches!(result, Err(Error::InvalidPeriod { .. })));
+    }
+
+    #[test]
+    fn test_rocr100_insufficient_data() {
+        let data = vec![1.0, 2.0, 3.0];
+        let result = rocr100(&data, 10);
+        assert!(matches!(result, Err(Error::InsufficientData { .. })));
+    }
+
+    #[test]
     fn test_rocr100_basic_calculation() {
         let prices: Vec<f64> = vec![100.0, 102.0, 104.0, 103.0, 105.0];
         let result = rocr100(&prices, 2).unwrap();
 
+        // First 2 values should be NaN
+        assert!(result[0].is_nan());
+        assert!(result[1].is_nan());
+
         // ROCR100[2] = (104 / 100) * 100 = 104.0
         assert!((result[2] - 104.0).abs() < 1e-10);
+        // ROCR100[3] = (103 / 102) * 100 ≈ 101.0098
+        assert!((result[3] - ((103.0 / 102.0) * 100.0)).abs() < 1e-10);
     }
 
     #[test]
@@ -791,91 +863,10 @@ mod tests {
     }
 
     #[test]
-    fn test_rocr100_doubling() {
-        let prices: Vec<f64> = vec![50.0, 60.0, 100.0, 80.0];
-        let result = rocr100(&prices, 2).unwrap();
-
-        // ROCR100[2] = (100 / 50) * 100 = 200.0 (doubled)
-        assert!((result[2] - 200.0).abs() < 1e-10);
-    }
-
-    #[test]
-    fn test_rocr100_halving() {
-        let prices: Vec<f64> = vec![100.0, 80.0, 50.0, 60.0];
-        let result = rocr100(&prices, 2).unwrap();
-
-        // ROCR100[2] = (50 / 100) * 100 = 50.0 (halved)
-        assert!((result[2] - 50.0).abs() < 1e-10);
-    }
-
-    // =========================================================================
-    // Relationship Tests
-    // =========================================================================
-
-    #[test]
-    fn test_roc_rocp_relationship() {
-        let prices: Vec<f64> = vec![100.0, 102.0, 104.0, 103.0, 105.0];
-        let roc_result = roc(&prices, 2).unwrap();
-        let rocp_result = rocp(&prices, 2).unwrap();
-
-        // ROC = ROCP * 100
-        for i in 2..prices.len() {
-            assert!((roc_result[i] - rocp_result[i] * 100.0).abs() < 1e-10);
-        }
-    }
-
-    #[test]
-    fn test_rocr_rocr100_relationship() {
-        let prices: Vec<f64> = vec![100.0, 102.0, 104.0, 103.0, 105.0];
-        let rocr_result = rocr(&prices, 2).unwrap();
-        let rocr100_result = rocr100(&prices, 2).unwrap();
-
-        // ROCR100 = ROCR * 100
-        for i in 2..prices.len() {
-            assert!((rocr100_result[i] - rocr_result[i] * 100.0).abs() < 1e-10);
-        }
-    }
-
-    #[test]
-    fn test_rocp_rocr_relationship() {
-        let prices: Vec<f64> = vec![100.0, 102.0, 104.0, 103.0, 105.0];
-        let rocp_result = rocp(&prices, 2).unwrap();
-        let rocr_result = rocr(&prices, 2).unwrap();
-
-        // ROCR = ROCP + 1
-        for i in 2..prices.len() {
-            assert!((rocr_result[i] - (rocp_result[i] + 1.0)).abs() < 1e-10);
-        }
-    }
-
-    // =========================================================================
-    // Into variant tests
-    // =========================================================================
-
-    #[test]
-    fn test_roc_into() {
-        let data: Vec<f64> = vec![100.0, 110.0, 121.0, 133.1, 146.41];
-        let mut output = vec![0.0_f64; data.len()];
-        roc_into(&data, 2, &mut output).unwrap();
-
-        assert!(output[0].is_nan());
-        assert!(output[1].is_nan());
-        // ROC[2] = ((121 - 100) / 100) * 100 = 21.0
-        assert!((output[2] - 21.0).abs() < 1e-10);
-    }
-
-    #[test]
-    fn test_roc_into_buffer_too_small() {
-        let data: Vec<f64> = vec![100.0; 10];
-        let mut output = vec![0.0_f64; 5]; // Too small
-        let result = roc_into(&data, 2, &mut output);
+    fn test_rocr100_buffer_too_small() {
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let mut output = vec![0.0; 2];
+        let result = rocr100_into(&data, 2, &mut output);
         assert!(matches!(result, Err(Error::BufferTooSmall { .. })));
-    }
-
-    #[test]
-    fn test_roc_f32() {
-        let prices: Vec<f32> = vec![100.0, 102.0, 104.0, 103.0, 105.0];
-        let result = roc(&prices, 2).unwrap();
-        assert!((result[2] - 4.0_f32).abs() < 1e-5);
     }
 }

@@ -29,39 +29,207 @@ Applies to all indicators in `crates/fast-ta/src/indicators`, including single- 
   - Provide fluent setters and `compute()` / `compute_into()` methods.
   - Use the existing pattern in `macd`, `bollinger`, `stochastic`, `adx` as examples.
 
-## Output Shape and NaN/Infinity Policy
+## Output Shape and NaN Policy
 - **Full-length outputs**: output length equals input length.
 - **NaN prefix**: first `indicator_lookback(...)` elements are NaN.
-- **Rolling-window rule**: any NaN in the current window yields NaN output at that position.
-- **Cumulative rule**: if a NaN is encountered in the input/state, outputs are NaN at that index and all subsequent indices (`nan_active`).
-  - Examples: OBV, VWAP, running sums/ratios.
-- **Infinity handling**: treat `+/-inf` as invalid (NaN-like). Any window containing `+/-inf` yields NaN output.
-- **Warmup/lookback**: outputs are NaN until the full window required by `*_lookback(...)` is available.
-- **Multi-period indicators**: if any required internal window contains NaN (e.g., MACD fast/slow/signal windows), all output fields at that index are NaN.
-- **Mixed behavior**: if an indicator combines rolling and cumulative state, a NaN in the rolling window yields NaN output and activates cumulative NaN propagation.
+- **NaN propagation**: any NaN within a rolling window yields NaN output at that position.
+- **Infinity propagation**: any `+/-inf` in the window propagates to the output.
 - **Subnormal values**: processed normally; no special handling.
 - **Indeterminate operations**: use explicitly defined outputs:
-  - RSI: `avg_loss = 0` -> RSI = 100; `avg_gain = 0` -> RSI = 0
+  - RSI: `avg_loss = 0` -> RSI = 100; `avg_gain = 0` -> RSI = 0; `both = 0` -> RSI = 50
   - Stochastic: `high == low` -> %K = 50
   - Bollinger: `stddev = 0` -> upper = middle = lower
   - ATR: first value uses SMA of initial TR window (Wilder seed)
+  - ROC/ROCP/ROCR: `prev = 0` -> output = 0 (division by zero edge case)
+  - AD: `range = 0` (high == low) -> CLV = 0 (neutral, no position)
+  - MFI: `negative_mf = 0` -> MFI = 100; `positive_mf = 0` -> MFI = 0
 - **Multi-output alignment**: all fields align to the same lookback and input index.
 - **Lookback canonical**: `*_lookback()` defines the NaN prefix length; `*_min_len()` defines the minimum input length.
 
-### Internal Helper API Shape (NaN Handling)
-Use a shared internal helper for rolling NaN tracking and cumulative propagation to keep behavior consistent and SIMD-friendly.
+## IEEE 754 NaN Propagation Strategy
 
-**Rolling-window helpers (proposed shape):**
-- `fn build_nan_mask<T: SeriesElement>(data: &[T]) -> Vec<u8>` where `1` indicates NaN or +/-inf.
-- `fn init_nan_count(mask: &[u8], start: usize, period: usize) -> usize`
-- `fn update_nan_count(count: &mut usize, old_is_nan: bool, new_is_nan: bool)`
+fast-ta leverages IEEE 754 floating-point semantics for NaN propagation wherever appropriate.
+The IEEE 754 standard guarantees:
+- **Arithmetic propagation**: `NaN + x = NaN`, `NaN - x = NaN`, `NaN * x = NaN`, `NaN / x = NaN`
+- **Comparison behavior**: `NaN < x = false`, `NaN > x = false`, `NaN == x = false`
+- **Special results**: `0.0 / 0.0 = NaN`, `Inf - Inf = NaN`, `x / 0.0 = ±Inf`
 
-**Cumulative helpers (proposed shape):**
-- `struct NanActive { active: bool }` with `fn step(&mut self, input_has_nan: bool) -> bool` returning whether output should be NaN.
+### Pattern Selection Decision Matrix
 
-**SIMD note:**
-- SIMD paths are always active unless a per-period scalar fast path is demonstrably faster.
-- SIMD NaN detection uses lane masks; any-lane NaN (or +/-inf) marks the window as invalid.
+| Indicator Type | Example Indicators | Recommended Pattern | IEEE 754 Applicable? |
+|---------------|-------------------|---------------------|---------------------|
+| **Pointwise arithmetic** | avgprice, medprice, typprice | IEEE 754 auto-propagation | Yes |
+| **Rolling min/max** | midpoint, midprice | IEEE 754 + sum accumulator | Partial (comparisons don't propagate) |
+| **Rolling sum** | SMA | `nan_count` tracking | No (NaN must exit window) |
+| **Weighted rolling** | WMA | `has_nan` + rescan | No (weighted sums need all positions) |
+| **Cumulative/recursive** | EMA, RSI, ADX | Explicit NaN checks | Partial (IEEE 754 would work but explicit is clearer) |
+| **Window sum** | MFI | IEEE 754 + `has_nan` window check | Yes (fresh sums per output) |
+| **Division-based** | ROC, AD, BOP | IEEE 754 + explicit zero check | Yes for NaN, No for zero |
+
+### Implementation Patterns
+
+#### Pattern 1: IEEE 754 Auto-Propagation (Simple Arithmetic)
+
+Use for indicators with simple pointwise operations (2-4 ops per element):
+
+```rust
+// Example: Typical Price = (H + L + C) / 3
+// No explicit NaN checks needed - IEEE 754 propagates automatically
+for i in 0..n {
+    output[i] = (high[i] + low[i] + close[i]) / three;
+}
+```
+
+**Applicable to:** avgprice, medprice, typprice, wclprice
+
+#### Pattern 2: IEEE 754 with Division Edge Cases
+
+Use for division-based indicators where divisor can legitimately be zero:
+
+```rust
+// Example: BOP = (Close - Open) / (High - Low)
+for i in 0..n {
+    let range = high[i] - low[i];
+    if range == T::zero() {
+        // Doji candle (high == low): return neutral value
+        output[i] = if (close[i] - open[i]).is_finite() { T::zero() } else { T::nan() };
+    } else {
+        let result = (close[i] - open[i]) / range;
+        // IEEE 754: if any input was NaN, result is NaN
+        output[i] = if result.is_finite() { result } else { T::nan() };
+    }
+}
+```
+
+**Applicable to:** BOP, ROC, ROCP, ROCR, ROCR100, AD
+
+#### Pattern 3: Sum Accumulator for Min/Max Detection
+
+Use for rolling min/max indicators where IEEE 754 comparisons don't propagate NaN:
+
+```rust
+// Example: MIDPOINT = (Highest + Lowest) / 2
+// Problem: NaN comparisons return false, so NaN won't be selected as min/max
+// Solution: Track window sum which WILL become NaN if any element is NaN
+let mut window_sum = T::zero();
+for &val in &data[0..period] {
+    window_sum = window_sum + val;  // IEEE 754: NaN + x = NaN
+    // ... track min/max ...
+}
+
+if window_sum.is_finite() {
+    output[i] = (highest + lowest) / two;
+} else {
+    output[i] = T::nan();
+}
+```
+
+**Applicable to:** midpoint, midprice
+
+#### Pattern 4: nan_count Tracking (Rolling Windows)
+
+Use for rolling window indicators where NaN can exit the window:
+
+```rust
+// Example: SMA with NaN recovery
+let mut nan_count = 0usize;
+let mut sum = T::zero();
+
+// Initial window
+for &value in data.iter().take(period) {
+    if value.is_nan() {
+        nan_count += 1;
+    } else {
+        sum = sum + value;
+    }
+}
+
+// Rolling updates - O(1) per element
+for i in period..n {
+    let new_val = data[i];
+    let old_val = data[i - period];
+
+    if new_val.is_nan() { nan_count += 1; } else { sum = sum + new_val; }
+    if old_val.is_nan() { nan_count -= 1; } else { sum = sum - old_val; }
+
+    output[i] = if nan_count == 0 { sum / period_t } else { T::nan() };
+}
+```
+
+**Why IEEE 754 doesn't work here:** If we used `sum = sum + new_val - old_val` directly,
+a single NaN would permanently corrupt the sum with no recovery path. The `nan_count`
+pattern allows recovery when NaN exits the window.
+
+**Applicable to:** SMA, Bollinger, Stochastic (for SMA smoothing)
+
+#### Pattern 5: Explicit NaN Checks (Cumulative/Recursive)
+
+Use for recursive indicators where NaN permanently corrupts state:
+
+```rust
+// Example: EMA with permanent NaN propagation
+for i in period..n {
+    let value = data[i];
+    if ema_prev.is_nan() || value.is_nan() {
+        output[i] = T::nan();
+        ema_prev = T::nan();  // State is permanently corrupted
+    } else {
+        let ema_current = alpha * value + one_minus_alpha * ema_prev;
+        output[i] = ema_current;
+        ema_prev = ema_current;
+    }
+}
+```
+
+**Note:** IEEE 754 would also work here (`alpha * NaN = NaN`), but explicit checks
+provide clearer intent and enable early short-circuit for remaining elements.
+
+**Applicable to:** EMA, RSI, MACD, ADX, ATR
+
+### NaN Propagation Audit Results (2024-12)
+
+The comprehensive NaN propagation audit examined all indicator files and classified each by
+the optimal pattern for their use case.
+
+#### Audit Summary by Category
+
+| Category | Files Audited | Status | Notes |
+|----------|---------------|--------|-------|
+| Pointwise | price_transform.rs | OPTIMAL | Already uses IEEE 754 auto-propagation |
+| Rolling min/max | midpoint.rs, midprice.rs | OPTIMIZED | Added sum accumulator for NaN detection |
+| Division-based | roc.rs, ad.rs, bop.rs | VALIDATED | Zero checks required and correctly placed |
+| Rolling sum | sma.rs | OPTIMAL | nan_count pattern is correct and efficient |
+| Weighted rolling | wma.rs | VALIDATED | has_nan + rescan is required for weighted sums |
+| Cumulative | ema.rs, rsi.rs | VALIDATED | Explicit checks appropriate for recursive state |
+| Composite | macd.rs, adx.rs | FIXED (ADX) | ADX had NaN propagation bug in comparisons |
+| Volume-based | mfi.rs, ad.rs | OPTIMIZED | Added proper window NaN checking |
+
+#### Key Audit Findings
+
+1. **No `is_invalid()` function exists** - The codebase uses `.is_nan()` and `.is_finite()`
+   from `num_traits::Float` via the `SeriesElement` trait.
+
+2. **Simple pointwise indicators already optimal** - price_transform.rs indicators
+   (avgprice, medprice, typprice, wclprice) naturally use IEEE 754 propagation through
+   simple arithmetic with no explicit checks needed.
+
+3. **Rolling window indicators correctly use `nan_count`** - SMA, Bollinger, and Stochastic
+   properly track NaN count to allow recovery when NaN exits the window.
+
+4. **Recursive indicators correctly propagate NaN permanently** - EMA, RSI, MACD use
+   explicit checks and permanently corrupt state when NaN enters (intentional design
+   for indicators with infinite memory).
+
+5. **ADX comparison pattern bug fixed** - The original code used `smoothed_tr > T::zero()`
+   which returns false when `smoothed_tr` is NaN (IEEE 754 comparison semantics), causing
+   zero output instead of NaN. Fixed by adding explicit `is_nan()` checks before comparisons.
+
+6. **WMA requires different pattern than SMA** - WMA cannot use `nan_count` because weighted
+   sums require all window positions. Uses `has_nan` boolean with O(period) rescan when
+   NaN exits window.
+
+7. **Min/max comparisons don't propagate NaN** - midpoint and midprice use a sum accumulator
+   to detect NaN in window because IEEE 754 comparisons (`NaN > x`) always return false.
 
 ## Input Validation and Errors
 - Use `validate_indicator_input` for single-series indicators.

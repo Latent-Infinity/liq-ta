@@ -26,10 +26,11 @@
 //! - **Linear regression**: Uses least-squares method over rolling windows
 
 use crate::error::{Error, Result};
+use crate::precision::{current_precision_mode, PrecisionMode};
 use crate::traits::SeriesElement;
 
 // =============================================================================
-// Helper: Finite value check
+// Helper: Finite value check and precision mode
 // =============================================================================
 
 /// Inline helper to check if a value is finite (not NaN or Infinity).
@@ -37,6 +38,13 @@ use crate::traits::SeriesElement;
 #[inline(always)]
 fn is_not_finite<T: SeriesElement>(val: T) -> bool {
     !val.is_finite()
+}
+
+/// Returns true if we should use f64 precision for the given type.
+#[inline]
+fn use_f64_precision<T: 'static>() -> bool {
+    use std::any::TypeId;
+    TypeId::of::<T>() == TypeId::of::<f32>() && current_precision_mode() == PrecisionMode::High
 }
 
 // =============================================================================
@@ -65,6 +73,12 @@ pub const fn var_min_len(period: usize) -> usize {
 ///
 /// Uses population variance (÷n, not ÷(n-1)) to match TA-Lib.
 ///
+/// # Precision Mode
+///
+/// - For f32 inputs with PrecisionMode::High: Uses f64 accumulators internally
+///   to avoid catastrophic cancellation with near-constant data
+/// - For f64 inputs or PrecisionMode::Fast: Uses native type accumulators
+///
 /// # Errors
 ///
 /// Returns an error if:
@@ -72,7 +86,11 @@ pub const fn var_min_len(period: usize) -> usize {
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 /// - The output buffer is too small (`Error::BufferTooSmall`)
-pub fn var_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -> Result<()> {
+pub fn var_into<T: SeriesElement + 'static>(
+    data: &[T],
+    period: usize,
+    output: &mut [T],
+) -> Result<()> {
     if data.is_empty() {
         return Err(Error::EmptyInput);
     }
@@ -113,12 +131,21 @@ pub fn var_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -
     // Pre-scan adds only ~26µs but allows fast path without any checks
     let has_nan = data.iter().take(n).any(|&v| is_not_finite(v));
 
-    if has_nan {
-        // Slow path with per-element NaN tracking
-        var_rolling_slow(data, period, output, lookback)
+    // Check if we should use f64 precision for f32 inputs
+    if use_f64_precision::<T>() {
+        // High precision mode for f32 - use f64 accumulators
+        if has_nan {
+            var_rolling_slow_f64(data, period, output, lookback)
+        } else {
+            var_rolling_fast_f64(data, period, output, lookback)
+        }
     } else {
-        // Fast path - no NaN checks in hot loop (matches TA-Lib performance)
-        var_rolling_fast(data, period, output, lookback)
+        // Native precision mode
+        if has_nan {
+            var_rolling_slow(data, period, output, lookback)
+        } else {
+            var_rolling_fast(data, period, output, lookback)
+        }
     }
 }
 
@@ -225,6 +252,147 @@ fn var_rolling_slow<T: SeriesElement>(
     Ok(())
 }
 
+/// Fast VAR implementation with f64 accumulators (for f32 inputs with High precision mode).
+/// Uses shifted variance formula to avoid catastrophic cancellation with near-constant data.
+///
+/// # Why Shifted Variance?
+///
+/// Standard formula `VAR = E[X²] - E[X]²` suffers catastrophic cancellation when:
+/// - Data has large magnitude with small variation (e.g., [1000.0001, 1000.0002, ...])
+/// - Computing 1000000.0002 - 1000000.0000 loses precision in subtraction
+///
+/// Shifted formula `VAR = E[(X-k)²] - (E[X-k])²` fixes this by:
+/// - Subtracting shift k first → [0.0001, 0.0002, ...] (small numbers)
+/// - No large number subtraction → no catastrophic cancellation
+/// - Shift = first value in window for simplicity and numerical stability
+#[inline]
+fn var_rolling_fast_f64<T: SeriesElement>(
+    data: &[T],
+    period: usize,
+    output: &mut [T],
+    lookback: usize,
+) -> Result<()> {
+    let n = data.len();
+    let period_f64 = period as f64;
+
+    // Use first value as shift for numerical stability
+    let shift = data[0].to_f64().unwrap_or(0.0);
+
+    // Calculate initial sums for first window using shifted values
+    let mut sum_shifted = 0.0_f64;
+    let mut sum_sq_shifted = 0.0_f64;
+    for i in 0..period {
+        let val_f64 = data[i].to_f64().unwrap_or(0.0);
+        let shifted = val_f64 - shift;
+        sum_shifted += shifted;
+        sum_sq_shifted += shifted * shifted;
+    }
+
+    // Calculate first variance using shifted formula
+    // VAR = E[(X-k)²] - (E[X-k])² where k is the shift
+    let mean_shifted = sum_shifted / period_f64;
+    let var_f64 = sum_sq_shifted / period_f64 - mean_shifted * mean_shifted;
+    output[lookback] = T::from_f64(var_f64.max(0.0))?; // Clamp to prevent negative due to rounding
+
+    // Rolling calculation - tight loop, no NaN checks
+    for i in (lookback + 1)..n {
+        let old_val_f64 = data[i - period].to_f64().unwrap_or(0.0);
+        let new_val_f64 = data[i].to_f64().unwrap_or(0.0);
+        let old_shifted = old_val_f64 - shift;
+        let new_shifted = new_val_f64 - shift;
+
+        // Update sums
+        sum_shifted += new_shifted - old_shifted;
+        sum_sq_shifted += new_shifted * new_shifted - old_shifted * old_shifted;
+
+        // Compute variance
+        let mean_shifted = sum_shifted / period_f64;
+        let var_f64 = sum_sq_shifted / period_f64 - mean_shifted * mean_shifted;
+        output[i] = T::from_f64(var_f64.max(0.0))?;
+    }
+
+    Ok(())
+}
+
+/// Slow VAR implementation with f64 accumulators and per-element NaN tracking.
+/// Uses shifted variance formula for numerical stability.
+/// Used for f32 inputs with High precision mode when input contains NaN/Infinity.
+#[inline]
+fn var_rolling_slow_f64<T: SeriesElement>(
+    data: &[T],
+    period: usize,
+    output: &mut [T],
+    lookback: usize,
+) -> Result<()> {
+    let n = data.len();
+    let period_f64 = period as f64;
+
+    // Find first valid value to use as shift
+    let shift = data
+        .iter()
+        .find(|&&v| is_not_finite(v) == false)
+        .and_then(|&v| v.to_f64())
+        .unwrap_or(0.0);
+
+    // Calculate initial sums for first window
+    let mut sum_shifted = 0.0_f64;
+    let mut sum_sq_shifted = 0.0_f64;
+    let mut invalid_count = 0usize;
+    for i in 0..period {
+        if is_not_finite(data[i]) {
+            invalid_count += 1;
+        } else {
+            let val_f64 = data[i].to_f64().unwrap_or(0.0);
+            let shifted = val_f64 - shift;
+            sum_shifted += shifted;
+            sum_sq_shifted += shifted * shifted;
+        }
+    }
+
+    // Set first value
+    if invalid_count > 0 {
+        output[lookback] = T::nan();
+    } else {
+        let mean_shifted = sum_shifted / period_f64;
+        let var_f64 = sum_sq_shifted / period_f64 - mean_shifted * mean_shifted;
+        output[lookback] = T::from_f64(var_f64.max(0.0))?;
+    }
+
+    // Rolling calculation with NaN tracking
+    for i in (lookback + 1)..n {
+        let old_val = data[i - period];
+        let new_val = data[i];
+
+        if is_not_finite(old_val) {
+            invalid_count -= 1;
+        } else {
+            let old_val_f64 = old_val.to_f64().unwrap_or(0.0);
+            let old_shifted = old_val_f64 - shift;
+            sum_shifted -= old_shifted;
+            sum_sq_shifted -= old_shifted * old_shifted;
+        }
+        if is_not_finite(new_val) {
+            invalid_count += 1;
+        } else {
+            let new_val_f64 = new_val.to_f64().unwrap_or(0.0);
+            let new_shifted = new_val_f64 - shift;
+            sum_shifted += new_shifted;
+            sum_sq_shifted += new_shifted * new_shifted;
+        }
+
+        if invalid_count > 0 {
+            output[i] = T::nan();
+            continue;
+        }
+
+        let mean_shifted = sum_shifted / period_f64;
+        let var_f64 = sum_sq_shifted / period_f64 - mean_shifted * mean_shifted;
+        output[i] = T::from_f64(var_f64.max(0.0))?;
+    }
+
+    Ok(())
+}
+
 /// Computes VAR (Variance).
 ///
 /// Uses population variance (÷n, not ÷(n-1)) to match TA-Lib.
@@ -235,7 +403,7 @@ fn var_rolling_slow<T: SeriesElement>(
 /// - The input data is empty (`Error::EmptyInput`)
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
-pub fn var<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
+pub fn var<T: SeriesElement + 'static>(data: &[T], period: usize) -> Result<Vec<T>> {
     let mut output = vec![T::nan(); data.len()];
     var_into(data, period, &mut output)?;
     Ok(output)
@@ -275,7 +443,11 @@ pub const fn stddev_min_len(period: usize) -> usize {
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 /// - The output buffer is too small (`Error::BufferTooSmall`)
-pub fn stddev_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -> Result<()> {
+pub fn stddev_into<T: SeriesElement + 'static>(
+    data: &[T],
+    period: usize,
+    output: &mut [T],
+) -> Result<()> {
     // Compute variance first
     var_into(data, period, output)?;
 
@@ -300,7 +472,7 @@ pub fn stddev_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]
 /// - The input data is empty (`Error::EmptyInput`)
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
-pub fn stddev<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
+pub fn stddev<T: SeriesElement + 'static>(data: &[T], period: usize) -> Result<Vec<T>> {
     let mut output = vec![T::nan(); data.len()];
     stddev_into(data, period, &mut output)?;
     Ok(output)

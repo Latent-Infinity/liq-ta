@@ -123,14 +123,14 @@ pub fn midpoint_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [
     }
 
     // For period 1, MIDPOINT equals the input (highest = lowest = data[i])
-    // Handle NaN/Infinity: non-finite values propagate to NaN output
+    // Normalize non-finite values to NaN per indicator policy.
     if period == 1 {
         for i in 0..n {
-            if data[i].is_finite() {
-                output[i] = data[i];
+            output[i] = if data[i].is_finite() {
+                data[i]
             } else {
-                output[i] = T::nan();
-            }
+                T::nan()
+            };
         }
         return Ok(());
     }

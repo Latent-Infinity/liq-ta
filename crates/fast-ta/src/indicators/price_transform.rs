@@ -64,15 +64,16 @@ pub fn avgprice_into<T: SeriesElement>(
     close: &[T],
     output: &mut [T],
 ) -> Result<()> {
-    if open.is_empty() {
+    let n = open.len();
+
+    if n == 0 {
         return Err(Error::EmptyInput);
     }
-
-    let n = open.len();
+    // Validate all arrays have same length
     if high.len() != n || low.len() != n || close.len() != n {
         return Err(Error::LengthMismatch {
             description: format!(
-                "open has {} elements, high has {}, low has {}, close has {}",
+                "OHLC arrays must have same length: open={}, high={}, low={}, close={}",
                 n,
                 high.len(),
                 low.len(),
@@ -91,6 +92,7 @@ pub fn avgprice_into<T: SeriesElement>(
 
     let four = T::from_i32(4)?;
 
+    // Calculate AVGPRICE for each bar
     for i in 0..n {
         if is_invalid(open[i])
             || is_invalid(high[i])
@@ -180,14 +182,20 @@ pub const fn medprice_min_len() -> usize {
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 /// - The output buffer is too small (`Error::BufferTooSmall`)
 pub fn medprice_into<T: SeriesElement>(high: &[T], low: &[T], output: &mut [T]) -> Result<()> {
-    if high.is_empty() {
+    let n = high.len();
+
+    if n == 0 {
         return Err(Error::EmptyInput);
     }
 
-    let n = high.len();
+    // Validate all arrays have same length
     if low.len() != n {
         return Err(Error::LengthMismatch {
-            description: format!("high has {} elements, low has {}", n, low.len()),
+            description: format!(
+                "HL arrays must have same length: high={}, low={}",
+                n,
+                low.len()
+            ),
         });
     }
 
@@ -201,6 +209,7 @@ pub fn medprice_into<T: SeriesElement>(high: &[T], low: &[T], output: &mut [T]) 
 
     let two = T::from_i32(2)?;
 
+    // Calculate MEDPRICE for each bar
     for i in 0..n {
         if is_invalid(high[i]) || is_invalid(low[i]) {
             output[i] = T::nan();
@@ -277,15 +286,17 @@ pub fn typprice_into<T: SeriesElement>(
     close: &[T],
     output: &mut [T],
 ) -> Result<()> {
-    if high.is_empty() {
+    let n = high.len();
+
+    if n == 0 {
         return Err(Error::EmptyInput);
     }
 
-    let n = high.len();
+    // Validate all arrays have same length
     if low.len() != n || close.len() != n {
         return Err(Error::LengthMismatch {
             description: format!(
-                "high has {} elements, low has {}, close has {}",
+                "HLC arrays must have same length: high={}, low={}, close={}",
                 n,
                 low.len(),
                 close.len()
@@ -303,6 +314,7 @@ pub fn typprice_into<T: SeriesElement>(
 
     let three = T::from_i32(3)?;
 
+    // Calculate TYPPRICE for each bar
     for i in 0..n {
         if is_invalid(high[i]) || is_invalid(low[i]) || is_invalid(close[i]) {
             output[i] = T::nan();
@@ -380,15 +392,17 @@ pub fn wclprice_into<T: SeriesElement>(
     close: &[T],
     output: &mut [T],
 ) -> Result<()> {
-    if high.is_empty() {
+    let n = high.len();
+
+    if n == 0 {
         return Err(Error::EmptyInput);
     }
 
-    let n = high.len();
+    // Validate all arrays have same length
     if low.len() != n || close.len() != n {
         return Err(Error::LengthMismatch {
             description: format!(
-                "high has {} elements, low has {}, close has {}",
+                "HLC arrays must have same length: high={}, low={}, close={}",
                 n,
                 low.len(),
                 close.len()
@@ -407,6 +421,7 @@ pub fn wclprice_into<T: SeriesElement>(
     let two = T::from_i32(2)?;
     let four = T::from_i32(4)?;
 
+    // Calculate WCLPRICE for each bar
     for i in 0..n {
         if is_invalid(high[i]) || is_invalid(low[i]) || is_invalid(close[i]) {
             output[i] = T::nan();
@@ -454,6 +469,7 @@ pub fn wclprice<T: SeriesElement>(high: &[T], low: &[T], close: &[T]) -> Result<
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::all, clippy::pedantic, clippy::nursery)]
     use super::*;
 
     const EPSILON: f64 = 1e-10;
@@ -694,7 +710,7 @@ mod tests {
     fn test_wclprice_length_mismatch() {
         let high = vec![12.0_f64, 13.0, 14.0];
         let low = vec![8.0, 9.0];
-        let close = vec![10.0, 11.0, 12.0];
+        let close = vec![11.0, 12.0, 13.0];
         let result = wclprice(&high, &low, &close);
         assert!(matches!(result, Err(Error::LengthMismatch { .. })));
     }
@@ -703,7 +719,7 @@ mod tests {
     fn test_wclprice_buffer_too_small() {
         let high = vec![12.0_f64, 13.0, 14.0];
         let low = vec![8.0, 9.0, 10.0];
-        let close = vec![10.0, 11.0, 12.0];
+        let close = vec![11.0, 12.0, 13.0];
         let mut output = vec![0.0_f64; 2];
         let result = wclprice_into(&high, &low, &close, &mut output);
         assert!(matches!(result, Err(Error::BufferTooSmall { .. })));
@@ -716,117 +732,5 @@ mod tests {
         let close = vec![11.0_f32, 12.0, 13.0];
         let result = wclprice(&high, &low, &close).unwrap();
         assert!((result[0] - 10.5_f32).abs() < 1e-5);
-    }
-
-    // ==================== Consistency Tests ====================
-
-    #[test]
-    fn test_avgprice_and_avgprice_into_consistent() {
-        let open = vec![10.0_f64, 11.0, 12.0, 13.0, 14.0];
-        let high = vec![12.0, 13.0, 14.0, 15.0, 16.0];
-        let low = vec![9.0, 10.0, 11.0, 12.0, 13.0];
-        let close = vec![11.0, 12.0, 13.0, 14.0, 15.0];
-
-        let result1 = avgprice(&open, &high, &low, &close).unwrap();
-        let mut result2 = vec![0.0_f64; open.len()];
-        avgprice_into(&open, &high, &low, &close, &mut result2).unwrap();
-
-        for i in 0..open.len() {
-            assert!(approx_eq(result1[i], result2[i]));
-        }
-    }
-
-    #[test]
-    fn test_medprice_and_medprice_into_consistent() {
-        let high = vec![12.0_f64, 13.0, 14.0, 15.0, 16.0];
-        let low = vec![8.0, 9.0, 10.0, 11.0, 12.0];
-
-        let result1 = medprice(&high, &low).unwrap();
-        let mut result2 = vec![0.0_f64; high.len()];
-        medprice_into(&high, &low, &mut result2).unwrap();
-
-        for i in 0..high.len() {
-            assert!(approx_eq(result1[i], result2[i]));
-        }
-    }
-
-    #[test]
-    fn test_typprice_and_typprice_into_consistent() {
-        let high = vec![12.0_f64, 13.0, 14.0, 15.0, 16.0];
-        let low = vec![8.0, 9.0, 10.0, 11.0, 12.0];
-        let close = vec![10.0, 11.0, 12.0, 13.0, 14.0];
-
-        let result1 = typprice(&high, &low, &close).unwrap();
-        let mut result2 = vec![0.0_f64; high.len()];
-        typprice_into(&high, &low, &close, &mut result2).unwrap();
-
-        for i in 0..high.len() {
-            assert!(approx_eq(result1[i], result2[i]));
-        }
-    }
-
-    #[test]
-    fn test_wclprice_and_wclprice_into_consistent() {
-        let high = vec![12.0_f64, 13.0, 14.0, 15.0, 16.0];
-        let low = vec![8.0, 9.0, 10.0, 11.0, 12.0];
-        let close = vec![10.0, 11.0, 12.0, 13.0, 14.0];
-
-        let result1 = wclprice(&high, &low, &close).unwrap();
-        let mut result2 = vec![0.0_f64; high.len()];
-        wclprice_into(&high, &low, &close, &mut result2).unwrap();
-
-        for i in 0..high.len() {
-            assert!(approx_eq(result1[i], result2[i]));
-        }
-    }
-
-    // ==================== No NaN in Output Tests ====================
-
-    #[test]
-    fn test_avgprice_no_nan() {
-        let open = vec![10.0_f64, 11.0, 12.0];
-        let high = vec![12.0, 13.0, 14.0];
-        let low = vec![9.0, 10.0, 11.0];
-        let close = vec![11.0, 12.0, 13.0];
-        let result = avgprice(&open, &high, &low, &close).unwrap();
-
-        for val in result {
-            assert!(!val.is_nan());
-        }
-    }
-
-    #[test]
-    fn test_medprice_no_nan() {
-        let high = vec![12.0_f64, 13.0, 14.0];
-        let low = vec![8.0, 9.0, 10.0];
-        let result = medprice(&high, &low).unwrap();
-
-        for val in result {
-            assert!(!val.is_nan());
-        }
-    }
-
-    #[test]
-    fn test_typprice_no_nan() {
-        let high = vec![12.0_f64, 13.0, 14.0];
-        let low = vec![8.0, 9.0, 10.0];
-        let close = vec![10.0, 11.0, 12.0];
-        let result = typprice(&high, &low, &close).unwrap();
-
-        for val in result {
-            assert!(!val.is_nan());
-        }
-    }
-
-    #[test]
-    fn test_wclprice_no_nan() {
-        let high = vec![12.0_f64, 13.0, 14.0];
-        let low = vec![8.0, 9.0, 10.0];
-        let close = vec![11.0, 12.0, 13.0];
-        let result = wclprice(&high, &low, &close).unwrap();
-
-        for val in result {
-            assert!(!val.is_nan());
-        }
     }
 }

@@ -25,8 +25,9 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use std::time::Duration;
 use fast_ta::indicators::{
-    adx::adx, atr::atr, bollinger::bollinger, donchian::donchian, ema::ema, macd::macd, obv::obv,
-    rsi::rsi, sma::sma, stochastic::stochastic, vwap::vwap, williams_r::williams_r,
+    ad::ad, adx::adx, atr::atr, bollinger::bollinger, donchian::donchian, ema::ema, macd::macd, obv::obv,
+    price_transform::{avgprice, medprice, typprice, wclprice},
+    roc::roc, rsi::rsi, sma::sma, stochastic::stochastic, vwap::vwap, williams_r::williams_r,
 };
 
 /// Generate synthetic OHLCV data for benchmarks.
@@ -249,6 +250,101 @@ fn bench_vwap(c: &mut Criterion) {
     group.finish();
 }
 
+// Price transform indicators - simple IEEE 754 NaN propagation pattern
+fn bench_avgprice(c: &mut Criterion) {
+    let mut group = c.benchmark_group("avgprice");
+    for &size in SIZES {
+        let (open, high, low, close, _) = generate_ohlcv(size);
+        group.throughput(Throughput::Elements(size as u64));
+        group.bench_with_input(
+            BenchmarkId::from_parameter(size),
+            &(open, high, low, close),
+            |b, (o, h, l, c)| {
+                b.iter(|| avgprice(black_box(o), black_box(h), black_box(l), black_box(c)));
+            },
+        );
+    }
+    group.finish();
+}
+
+fn bench_medprice(c: &mut Criterion) {
+    let mut group = c.benchmark_group("medprice");
+    for &size in SIZES {
+        let (_, high, low, _, _) = generate_ohlcv(size);
+        group.throughput(Throughput::Elements(size as u64));
+        group.bench_with_input(
+            BenchmarkId::from_parameter(size),
+            &(high, low),
+            |b, (h, l)| {
+                b.iter(|| medprice(black_box(h), black_box(l)));
+            },
+        );
+    }
+    group.finish();
+}
+
+fn bench_typprice(c: &mut Criterion) {
+    let mut group = c.benchmark_group("typprice");
+    for &size in SIZES {
+        let (_, high, low, close, _) = generate_ohlcv(size);
+        group.throughput(Throughput::Elements(size as u64));
+        group.bench_with_input(
+            BenchmarkId::from_parameter(size),
+            &(high, low, close),
+            |b, (h, l, c)| {
+                b.iter(|| typprice(black_box(h), black_box(l), black_box(c)));
+            },
+        );
+    }
+    group.finish();
+}
+
+fn bench_wclprice(c: &mut Criterion) {
+    let mut group = c.benchmark_group("wclprice");
+    for &size in SIZES {
+        let (_, high, low, close, _) = generate_ohlcv(size);
+        group.throughput(Throughput::Elements(size as u64));
+        group.bench_with_input(
+            BenchmarkId::from_parameter(size),
+            &(high, low, close),
+            |b, (h, l, c)| {
+                b.iter(|| wclprice(black_box(h), black_box(l), black_box(c)));
+            },
+        );
+    }
+    group.finish();
+}
+
+// AD (Accumulation/Distribution) - Division-based with IEEE 754 NaN propagation
+fn bench_ad(c: &mut Criterion) {
+    let mut group = c.benchmark_group("ad");
+    for &size in SIZES {
+        let (_, high, low, close, volume) = generate_ohlcv(size);
+        group.throughput(Throughput::Elements(size as u64));
+        group.bench_with_input(
+            BenchmarkId::from_parameter(size),
+            &(high, low, close, volume),
+            |b, (h, l, c, v)| {
+                b.iter(|| ad(black_box(h), black_box(l), black_box(c), black_box(v)));
+            },
+        );
+    }
+    group.finish();
+}
+
+// ROC (Rate of Change) - Division-based with IEEE 754 NaN propagation
+fn bench_roc(c: &mut Criterion) {
+    let mut group = c.benchmark_group("roc");
+    for &size in SIZES {
+        let data = generate_series(size);
+        group.throughput(Throughput::Elements(size as u64));
+        group.bench_with_input(BenchmarkId::from_parameter(size), &data, |b, data| {
+            b.iter(|| roc(black_box(data), black_box(10)));
+        });
+    }
+    group.finish();
+}
+
 // Standard benchmarks with default configuration
 criterion_group!(
     benches,
@@ -263,6 +359,12 @@ criterion_group!(
     bench_donchian,
     bench_obv,
     bench_vwap,
+    bench_avgprice,
+    bench_medprice,
+    bench_typprice,
+    bench_wclprice,
+    bench_ad,
+    bench_roc,
 );
 
 // Slower benchmarks need extended measurement time

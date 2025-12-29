@@ -6,15 +6,27 @@
 //! # Formula
 //!
 //! ```text
-//! Money Flow Multiplier = ((close - low) - (high - close)) / (high - low)
-//! Money Flow Volume = Money Flow Multiplier × volume
+//! CLV (Close Location Value) = ((close - low) - (high - close)) / (high - low)
+//!                            = (2 * close - high - low) / (high - low)
+//! Money Flow Volume = CLV × volume
 //! AD = cumulative sum of Money Flow Volume
 //! ```
 //!
+//! # CLV Range
+//!
+//! CLV ranges from -1 to +1:
+//! - +1: Close at high (maximum buying pressure)
+//! - -1: Close at low (maximum selling pressure)
+//! - 0: Close at midpoint of range
+//!
 //! # Edge Cases
 //!
-//! - When `high == low`, the Money Flow Multiplier is 0 (no range to compute)
-//! - First value is the first Money Flow Volume
+//! - When `high == low`, CLV is 0 (no range to compute)
+//! - NaN/Inf in any input propagates NaN to all subsequent outputs (cumulative)
+//!
+//! # Lookback
+//!
+//! No lookback period (calculated per bar, cumulative sum).
 //!
 //! # Precision Behavior
 //!
@@ -43,7 +55,6 @@
 use crate::error::{Error, Result};
 use crate::precision::{current_precision_mode, PrecisionMode};
 use crate::traits::SeriesElement;
-use crate::utils::is_invalid;
 
 /// Returns true if we should use f64 precision for the given type.
 #[inline]
@@ -70,6 +81,12 @@ pub const fn ad_min_len() -> usize {
 
 /// Computes AD (Chaikin A/D Line) into a pre-allocated output buffer.
 ///
+/// AD = cumulative sum of (CLV × volume)
+///
+/// Uses IEEE 754 NaN propagation: instead of checking each input for validity,
+/// we compute the result and check once. NaN arithmetic naturally propagates.
+/// Since AD is cumulative, once a NaN enters the sum, all subsequent values are NaN.
+///
 /// # Arguments
 ///
 /// * `high` - High prices
@@ -81,9 +98,9 @@ pub const fn ad_min_len() -> usize {
 /// # Errors
 ///
 /// Returns an error if:
-/// - Any input is empty
-/// - Input lengths don't match
-/// - Output buffer is too small
+/// - The input arrays are empty (`Error::EmptyInput`)
+/// - The input arrays have different lengths (`Error::LengthMismatch`)
+/// - The output buffer is too small (`Error::BufferTooSmall`)
 pub fn ad_into<T: SeriesElement + 'static>(
     high: &[T],
     low: &[T],
@@ -91,28 +108,30 @@ pub fn ad_into<T: SeriesElement + 'static>(
     volume: &[T],
     output: &mut [T],
 ) -> Result<()> {
-    let len = high.len();
+    let n = high.len();
 
-    // Validate inputs
-    if len == 0 {
+    if n == 0 {
         return Err(Error::EmptyInput);
     }
-    if low.len() != len || close.len() != len || volume.len() != len {
+
+    // Validate all arrays have same length
+    if low.len() != n || close.len() != n || volume.len() != n {
         return Err(Error::LengthMismatch {
             description: format!(
-                "high has {} elements, low has {}, close has {}, volume has {}",
-                len,
+                "HLCV arrays must have same length: high={}, low={}, close={}, volume={}",
+                n,
                 low.len(),
                 close.len(),
                 volume.len()
             ),
         });
     }
-    if output.len() < len {
+
+    if output.len() < n {
         return Err(Error::BufferTooSmall {
-            required: len,
-            actual: output.len(),
             indicator: "ad",
+            required: n,
+            actual: output.len(),
         });
     }
 
@@ -131,37 +150,52 @@ fn ad_core_native<T: SeriesElement>(
     volume: &[T],
     output: &mut [T],
 ) -> Result<()> {
-    let len = high.len();
     let mut ad_value = T::zero();
-    let mut nan_active = false;
 
-    for i in 0..len {
+    // Calculate AD using IEEE 754 NaN propagation
+    for i in 0..high.len() {
         let h = high[i];
         let l = low[i];
         let c = close[i];
         let v = volume[i];
 
-        if nan_active || is_invalid(h) || is_invalid(l) || is_invalid(c) || is_invalid(v) {
-            nan_active = true;
-            output[i] = T::nan();
-            continue;
-        }
-
-        // Money Flow Multiplier = ((close - low) - (high - close)) / (high - low)
+        // CLV = ((close - low) - (high - close)) / (high - low)
+        //     = (2 * close - high - low) / (high - low)
+        //     = (close + close - high - low) / range
         let range = h - l;
+        let numerator = c + c - h - l; // Avoids T::from_f64(2.0)
 
-        let mfm = if range > T::zero() {
-            ((c - l) - (h - c)) / range
+        let clv = if range == T::zero() {
+            // When high == low (valid finite values), CLV = 0
+            // If any input was NaN/Inf, numerator will be non-finite
+            if numerator.is_finite() {
+                T::zero()
+            } else {
+                T::nan()
+            }
         } else {
-            // high == low, no range, MFM = 0
-            T::zero()
+            // Normal case: compute CLV
+            let result = numerator / range;
+            // Normalize non-finite (NaN or Inf) to NaN
+            if result.is_finite() {
+                result
+            } else {
+                T::nan()
+            }
         };
 
-        // Money Flow Volume = MFM * volume
-        let mfv = mfm * v;
+        // Money Flow Volume = CLV × volume
+        // IEEE propagates NaN from either clv or volume
+        let mfv = clv * v;
 
-        // AD is cumulative
+        // AD is cumulative - IEEE propagates NaN through addition
         ad_value = ad_value + mfv;
+
+        // Normalize any non-finite result to NaN (handles Inf edge cases)
+        if !ad_value.is_finite() {
+            ad_value = T::nan();
+        }
+
         output[i] = ad_value;
     }
 
@@ -176,21 +210,14 @@ fn ad_core_f64<T: SeriesElement>(
     volume: &[T],
     output: &mut [T],
 ) -> Result<()> {
-    let len = high.len();
     let mut ad_accum: f64 = 0.0;
-    let mut nan_active = false;
 
-    for i in 0..len {
+    // Calculate AD using IEEE 754 NaN propagation with f64 accumulation
+    for i in 0..high.len() {
         let h = high[i];
         let l = low[i];
         let c = close[i];
         let v = volume[i];
-
-        if nan_active || is_invalid(h) || is_invalid(l) || is_invalid(c) || is_invalid(v) {
-            nan_active = true;
-            output[i] = T::nan();
-            continue;
-        }
 
         // Convert to f64 for precision
         let h_f64 = h.to_f64().unwrap_or(0.0);
@@ -198,20 +225,41 @@ fn ad_core_f64<T: SeriesElement>(
         let c_f64 = c.to_f64().unwrap_or(0.0);
         let v_f64 = v.to_f64().unwrap_or(0.0);
 
-        // Money Flow Multiplier = ((close - low) - (high - close)) / (high - low)
+        // CLV = ((close - low) - (high - close)) / (high - low)
         let range = h_f64 - l_f64;
+        let numerator = c_f64 + c_f64 - h_f64 - l_f64;
 
-        let mfm = if range > 0.0 {
-            ((c_f64 - l_f64) - (h_f64 - c_f64)) / range
+        let clv = if range == 0.0 {
+            // When high == low (valid finite values), CLV = 0
+            // If any input was NaN/Inf, numerator will be non-finite
+            if numerator.is_finite() {
+                0.0
+            } else {
+                f64::NAN
+            }
         } else {
-            0.0
+            // Normal case: compute CLV
+            let result = numerator / range;
+            // Normalize non-finite (NaN or Inf) to NaN
+            if result.is_finite() {
+                result
+            } else {
+                f64::NAN
+            }
         };
 
-        // Money Flow Volume = MFM * volume
-        let mfv = mfm * v_f64;
+        // Money Flow Volume = CLV × volume
+        // IEEE propagates NaN from either clv or volume
+        let mfv = clv * v_f64;
 
-        // AD is cumulative in f64
+        // AD is cumulative - IEEE propagates NaN through addition
         ad_accum += mfv;
+
+        // Normalize any non-finite result to NaN (handles Inf edge cases)
+        if !ad_accum.is_finite() {
+            ad_accum = f64::NAN;
+        }
+
         output[i] = T::from_f64(ad_accum)?;
     }
 
@@ -219,6 +267,8 @@ fn ad_core_f64<T: SeriesElement>(
 }
 
 /// Computes AD (Chaikin A/D Line) and returns a newly allocated vector.
+///
+/// AD = cumulative sum of (CLV × volume)
 ///
 /// # Arguments
 ///
@@ -229,13 +279,8 @@ fn ad_core_f64<T: SeriesElement>(
 ///
 /// # Returns
 ///
-/// A vector containing the AD values.
-///
-/// # Errors
-///
-/// Returns an error if:
-/// - Any input is empty
-/// - Input lengths don't match
+/// * `Ok(Vec<T>)` - Vector of AD values (cumulative money flow)
+/// * `Err(Error)` if inputs are invalid
 ///
 /// # Example
 ///
@@ -249,7 +294,15 @@ fn ad_core_f64<T: SeriesElement>(
 ///
 /// let result = ad(&high, &low, &close, &volume).unwrap();
 /// assert_eq!(result.len(), 5);
+/// // First bar with close at midpoint: CLV = 0, AD = 0
+/// assert!((result[0] - 0.0).abs() < 1e-10);
 /// ```
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The input arrays are empty (`Error::EmptyInput`)
+/// - The input arrays have different lengths (`Error::LengthMismatch`)
 pub fn ad<T: SeriesElement + 'static>(
     high: &[T],
     low: &[T],
@@ -261,13 +314,14 @@ pub fn ad<T: SeriesElement + 'static>(
         return Err(Error::EmptyInput);
     }
 
-    let mut output = vec![T::nan(); len];
+    let mut output = vec![T::zero(); len];
     ad_into(high, low, close, volume, &mut output)?;
     Ok(output)
 }
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::all, clippy::pedantic, clippy::nursery)]
     use super::*;
 
     fn approx_eq(a: f64, b: f64, tol: f64) -> bool {
@@ -442,5 +496,105 @@ mod tests {
 
         let result = ad(&high, &low, &close, &volume).unwrap();
         assert_eq!(result.len(), 100);
+    }
+
+    #[test]
+    fn test_ad_nan_in_high_propagates() {
+        // NaN in high should propagate to output and all subsequent values
+        let high = [25.0_f64, f64::NAN, 25.5];
+        let low = [24.0_f64, 24.5, 24.5];
+        let close = [25.0_f64, 25.0, 25.0];
+        let volume = [1000.0_f64, 1500.0, 1200.0];
+
+        let result = ad(&high, &low, &close, &volume).unwrap();
+        // First value is valid
+        assert!(result[0].is_finite());
+        // NaN at index 1 propagates to all subsequent values
+        assert!(result[1].is_nan());
+        assert!(result[2].is_nan());
+    }
+
+    #[test]
+    fn test_ad_nan_in_low_propagates() {
+        // NaN in low should propagate to output and all subsequent values
+        let high = [25.0_f64, 26.0, 25.5];
+        let low = [24.0_f64, f64::NAN, 24.5];
+        let close = [25.0_f64, 25.5, 25.0];
+        let volume = [1000.0_f64, 1500.0, 1200.0];
+
+        let result = ad(&high, &low, &close, &volume).unwrap();
+        assert!(result[0].is_finite());
+        assert!(result[1].is_nan());
+        assert!(result[2].is_nan());
+    }
+
+    #[test]
+    fn test_ad_nan_in_close_propagates() {
+        // NaN in close should propagate to output and all subsequent values
+        let high = [25.0_f64, 26.0, 25.5];
+        let low = [24.0_f64, 25.0, 24.5];
+        let close = [25.0_f64, f64::NAN, 25.0];
+        let volume = [1000.0_f64, 1500.0, 1200.0];
+
+        let result = ad(&high, &low, &close, &volume).unwrap();
+        assert!(result[0].is_finite());
+        assert!(result[1].is_nan());
+        assert!(result[2].is_nan());
+    }
+
+    #[test]
+    fn test_ad_nan_in_volume_propagates() {
+        // NaN in volume should propagate to output and all subsequent values
+        let high = [25.0_f64, 26.0, 25.5];
+        let low = [24.0_f64, 25.0, 24.5];
+        let close = [25.0_f64, 25.5, 25.0];
+        let volume = [1000.0_f64, f64::NAN, 1200.0];
+
+        let result = ad(&high, &low, &close, &volume).unwrap();
+        assert!(result[0].is_finite());
+        assert!(result[1].is_nan());
+        assert!(result[2].is_nan());
+    }
+
+    #[test]
+    fn test_ad_nan_at_first_bar_propagates() {
+        // NaN at first bar should propagate to all values
+        let high = [f64::NAN, 26.0, 25.5];
+        let low = [24.0_f64, 25.0, 24.5];
+        let close = [25.0_f64, 25.5, 25.0];
+        let volume = [1000.0_f64, 1500.0, 1200.0];
+
+        let result = ad(&high, &low, &close, &volume).unwrap();
+        assert!(result[0].is_nan());
+        assert!(result[1].is_nan());
+        assert!(result[2].is_nan());
+    }
+
+    #[test]
+    fn test_ad_nan_with_zero_range() {
+        // When high == low and an input is NaN, should propagate NaN
+        let high = [25.0_f64, 26.0, 26.0];
+        let low = [24.0_f64, 26.0, 26.0]; // zero range at index 1 and 2
+        let close = [25.0_f64, f64::NAN, 26.0];
+        let volume = [1000.0_f64, 1500.0, 1200.0];
+
+        let result = ad(&high, &low, &close, &volume).unwrap();
+        assert!(result[0].is_finite());
+        assert!(result[1].is_nan()); // NaN in close with zero range
+        assert!(result[2].is_nan()); // Propagated from previous NaN
+    }
+
+    #[test]
+    fn test_ad_no_nan_for_valid_input() {
+        // AD with valid input should never produce NaN
+        let high = [25.0_f64, 26.0, 25.5];
+        let low = [24.0_f64, 25.0, 24.5];
+        let close = [25.0_f64, 25.5, 25.0];
+        let volume = [1000.0_f64, 1500.0, 1200.0];
+
+        let result = ad(&high, &low, &close, &volume).unwrap();
+        for &val in &result {
+            assert!(val.is_finite(), "Valid input should not produce NaN");
+        }
     }
 }

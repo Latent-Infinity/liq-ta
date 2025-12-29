@@ -244,20 +244,37 @@ All indicators have O(n) time complexity with high throughput:
 | Williams %R | ~147 Melem/s |
 | Stochastic | ~78 Melem/s |
 
-See [benchmark-baseline.md](docs/benchmark-baseline.md) for detailed benchmarks.
+### Running Benchmarks
+
+For reliable, variance-controlled benchmarks:
+
+```bash
+# Hybrid approach with multi-round execution (recommended)
+./scripts/run_benchmarks.sh
+
+# Traditional single-round benchmarks
+cargo bench --bench talib_comparison
+```
+
+See [docs/benchmarking-guide.md](docs/benchmarking-guide.md) for comprehensive benchmarking methodology and [docs/benchmark-baseline.md](docs/benchmark-baseline.md) for detailed baseline results.
 
 ## Numeric Behavior
 
-fast-ta follows strict numeric policies:
+fast-ta follows strict numeric policies for correctness and performance:
 
-- **NaN propagation**: NaN in window produces NaN output
+- **IEEE 754 NaN propagation**: Leverages automatic NaN propagation where possible for optimal performance
+- **Infinity handling**: Both NaN and ±Infinity propagate through all indicators
 - **Full-length output**: Output length equals input length (NaN prefix for lookback)
 - **Deterministic**: Same inputs always produce identical outputs
+- **Precision modes**: Optional f64 accumulators for f32 inputs (High precision mode)
 
 Edge case handling:
-- RSI: all gains -> 100, all losses -> 0
-- Stochastic: high == low -> %K = 50
-- Bollinger: constant series -> bands collapse to mean
+- RSI: all gains → 100, all losses → 0, both zero → 50
+- Stochastic: high == low → %K = 50
+- Bollinger: constant series → bands collapse to mean
+- Division by zero: Returns 0 or NaN depending on context
+
+See [docs/indicator-standards.md](docs/indicator-standards.md) for complete numeric policy details.
 
 ## License
 
