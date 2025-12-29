@@ -10,6 +10,12 @@
 //! 1. The first valid EMA value is the SMA of the first `period` elements
 //! 2. Subsequent values use the recursive formula: `EMA = α × Price + (1 - α) × EMA_prev`
 //!
+//! # Performance Optimizations
+//!
+//! - **SIMD initial window**: Uses vectorized sum for the SMA seed computation
+//! - **Branchless fast path**: When all data is finite, uses tight loop without validity checks
+//! - **Pre-computed coefficients**: α and (1-α) computed once, used throughout
+//!
 //! # Smoothing Variants
 //!
 //! Two smoothing factor (α) calculations are supported:
@@ -289,7 +295,7 @@ pub fn ema_with_alpha<T: SeriesElement>(data: &[T], period: usize, alpha: T) -> 
     // Initialize result vector with NaN
     let mut result = vec![T::nan(); data.len()];
 
-    // Compute EMA values into the result vector
+    // Compute EMA values
     compute_ema_core(data, period, alpha, &mut result);
 
     Ok(result)
@@ -334,7 +340,7 @@ pub fn ema_with_alpha_into<T: SeriesElement>(
         });
     }
 
-    // Initialize lookback period with NaN
+    // Initialize lookback with NaN
     for item in output.iter_mut().take(period - 1) {
         *item = T::nan();
     }

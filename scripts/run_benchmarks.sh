@@ -18,14 +18,14 @@ set -euo pipefail
 
 # Configuration
 ROUNDS=${ROUNDS:-3}                    # Number of benchmark rounds
-COOLDOWN=${COOLDOWN:-60}               # Cooldown between groups (seconds)
+COOLDOWN=${COOLDOWN:-10}               # Cooldown between groups (seconds)
 BENCHMARK_BIN="talib_comparison"       # Benchmark suite to run
 RESULTS_DIR="target/criterion"         # Criterion output directory
 BASELINE_PREFIX="round"                # Baseline name prefix
 
 # Benchmark groups (organized by computational similarity to minimize variance)
 # Format: "group_name:indicator1,indicator2,..."
-GROUPS=(
+BENCHMARK_GROUPS=(
     "moving_averages:sma,ema,wma,dema,tema,trima"
     "momentum:rsi,roc,mom,cmo,apo,trix"
     "volatility:atr,trange,bollinger"
@@ -68,32 +68,22 @@ Benchmark Configuration
 ========================================
 Rounds:          $ROUNDS
 Cooldown:        ${COOLDOWN}s (between groups)
-Groups:          ${#GROUPS[@]}
+Groups:          ${#BENCHMARK_GROUPS[@]}
 Benchmark Suite: $BENCHMARK_BIN
 Results Dir:     $RESULTS_DIR
 
-Estimated time per round: $((${#GROUPS[@]} * COOLDOWN / 60 + 5)) minutes
-Total estimated time:     $(($ROUNDS * (${#GROUPS[@]} * COOLDOWN / 60 + 5))) minutes
+Estimated time per round: $((${#BENCHMARK_GROUPS[@]} * COOLDOWN / 60 + 5)) minutes
+Total estimated time:     $(($ROUNDS * (${#BENCHMARK_GROUPS[@]} * COOLDOWN / 60 + 5))) minutes
 ========================================
 
 EOF
 }
 
-# Get CPU temperature (macOS)
-get_cpu_temp() {
-    if command -v osx-cpu-temp &> /dev/null; then
-        osx-cpu-temp | grep -oE '[0-9]+\.[0-9]+' | head -1
-    else
-        echo "N/A"
-    fi
-}
-
 # Wait for CPU cooldown
 wait_cooldown() {
     local group_name=$1
-    local temp_before=$(get_cpu_temp)
 
-    log_info "Cooling down for ${COOLDOWN}s after group: $group_name (temp: ${temp_before}°C)"
+    log_info "Cooling down for ${COOLDOWN}s after group: $group_name"
 
     # Show progress bar
     for ((i=1; i<=COOLDOWN; i++)); do
@@ -104,59 +94,74 @@ wait_cooldown() {
     done
     echo ""
 
-    local temp_after=$(get_cpu_temp)
-    log_info "Cooldown complete (temp: ${temp_after}°C)"
+    log_info "Cooldown complete"
+}
+
+# Find the benchmark binary
+find_benchmark_binary() {
+    # Find the most recent benchmark binary (macOS-compatible)
+    local binary_path=$(ls -t target/release/deps/${BENCHMARK_BIN}-* 2>/dev/null | grep -v '\.d$' | head -1)
+    if [ -z "$binary_path" ]; then
+        log_error "Benchmark binary not found: ${BENCHMARK_BIN}"
+        return 1
+    fi
+    if [ ! -x "$binary_path" ]; then
+        log_error "Benchmark binary not executable: $binary_path"
+        return 1
+    fi
+    echo "$binary_path"
 }
 
 # Run a single benchmark group in parallel
 run_group() {
     local round=$1
     local group_spec=$2
+    local benchmark_binary=$3
     local group_name="${group_spec%%:*}"
     local indicators="${group_spec#*:}"
 
     log_info "Round $round - Group: $group_name"
     log_info "Indicators: $indicators"
 
+    local baseline_name="${BASELINE_PREFIX}${round}_${group_name}"
+    log_info "Running with baseline: $baseline_name"
+
     # Convert comma-separated list to array
     IFS=',' read -ra INDICATOR_ARRAY <<< "$indicators"
 
-    # Build parallel command with proper quoting
-    local parallel_cmd=""
+    # Run each indicator as a background job for parallel execution
+    # Use pre-built binary directly to avoid Cargo lock contention
+    local pids=()
     for indicator in "${INDICATOR_ARRAY[@]}"; do
-        if [ -n "$parallel_cmd" ]; then
-            parallel_cmd="$parallel_cmd ::: "
-        fi
-        parallel_cmd="${parallel_cmd}${indicator}"
+        (
+            log_info "  Starting: $indicator (warmup 5s, measurement 10s, 500 samples)"
+            # Run benchmark with explicit bench mode and save baseline
+            if "$benchmark_binary" \
+                --bench \
+                "^$indicator\$" \
+                --save-baseline "$baseline_name" \
+                2>&1 | grep -E "Benchmarking|time:|found" | sed "s/^/    [$indicator] /"; then
+                log_success "  Completed: $indicator"
+            else
+                log_error "  Failed: $indicator"
+                exit 1
+            fi
+        ) &
+        pids+=($!)
     done
 
-    # Run benchmarks in parallel using GNU parallel
-    # --jobs: Number of parallel jobs (number of indicators in group)
-    # --line-buffer: Print output line-by-line (better progress visibility)
-    # --halt: Stop all jobs if one fails
-    local baseline_name="${BASELINE_PREFIX}${round}_${group_name}"
-
-    log_info "Running with baseline: $baseline_name"
-
-    # Use xargs -P for parallel execution (more portable than GNU parallel)
-    echo "$indicators" | tr ',' '\n' | while read -r indicator; do
-        log_info "  Starting: $indicator"
-        cargo bench \
-            --bench "$BENCHMARK_BIN" \
-            -- --exact "^$indicator\$" \
-            --save-baseline "$baseline_name" \
-            2>&1 | sed "s/^/    [$indicator] /"
-
-        if [ ${PIPESTATUS[0]} -eq 0 ]; then
-            log_success "  Completed: $indicator"
-        else
-            log_error "  Failed: $indicator"
-            return 1
-        fi
-    done &
-
     # Wait for all background jobs to complete
-    wait
+    local failed=0
+    for pid in "${pids[@]}"; do
+        if ! wait "$pid"; then
+            failed=1
+        fi
+    done
+
+    if [ $failed -eq 1 ]; then
+        log_error "Group $group_name had failures"
+        return 1
+    fi
 
     log_success "Group $group_name completed"
 }
@@ -165,6 +170,15 @@ run_group() {
 run_all_rounds() {
     local start_time=$(date +%s)
 
+    # Find the benchmark binary once
+    log_info "Locating benchmark binary..."
+    local benchmark_binary
+    if ! benchmark_binary=$(find_benchmark_binary); then
+        log_error "Failed to locate benchmark binary"
+        return 1
+    fi
+    log_info "Using binary: $benchmark_binary"
+
     for round in $(seq 1 "$ROUNDS"); do
         log_info "========================================="
         log_info "Starting Round $round/$ROUNDS"
@@ -172,17 +186,21 @@ run_all_rounds() {
 
         local round_start=$(date +%s)
 
-        for group_spec in "${GROUPS[@]}"; do
+        local group_count=0
+        local total_groups=${#BENCHMARK_GROUPS[@]}
+
+        for group_spec in "${BENCHMARK_GROUPS[@]}"; do
+            group_count=$((group_count + 1))
             local group_name="${group_spec%%:*}"
 
-            # Run the group
-            if ! run_group "$round" "$group_spec"; then
+            # Run the group with pre-built binary
+            if ! run_group "$round" "$group_spec" "$benchmark_binary"; then
                 log_error "Group $group_name failed in round $round"
                 return 1
             fi
 
             # Cooldown between groups (but not after the last group)
-            if [ "$group_spec" != "${GROUPS[-1]}" ]; then
+            if [ $group_count -lt $total_groups ]; then
                 wait_cooldown "$group_name"
             fi
         done
