@@ -25,15 +25,11 @@ BASELINE_PREFIX="round"                # Baseline name prefix
 
 # Benchmark groups (organized by computational similarity to minimize variance)
 # Format: "group_name:indicator1,indicator2,..."
+# Reorganized for higher parallelism (up to 12 cores per group on 16-core system)
 BENCHMARK_GROUPS=(
-    "moving_averages:sma,ema,wma,dema,tema,trima"
-    "momentum:rsi,roc,mom,cmo,apo,trix"
-    "volatility:atr,trange,bollinger"
-    "trend:adx,dx,aroon"
-    "oscillators:cci,mfi,williams_r,bop,ultosc"
-    "stochastic:stochastic,stochastic_fast"
-    "volume_price:ad,obv,midpoint,midprice"
-    "advanced:var,tsf,linearreg,kama,t3,macd"
+    "fast_indicators:sma,ema,wma,dema,tema,trima,rsi,mom,roc,cmo,apo,trix"
+    "simple_volume:atr,trange,bollinger,bop,ad,obv,midpoint,midprice,var,tsf,linearreg,t3"
+    "complex_indicators:adx,dx,aroon,cci,mfi,williams_r,stochastic,stochastic_fast,macd,kama,ultosc"
 )
 
 # Colors for output
@@ -136,14 +132,17 @@ run_group() {
         (
             log_info "  Starting: $indicator (warmup 5s, measurement 10s, 500 samples)"
             # Run benchmark with explicit bench mode and save baseline
+            # Redirect output to log file to avoid terminal clutter
+            local log_file="target/criterion/.benchmark_${indicator}_${baseline_name}.log"
+            # Pattern matches "sma/..." or "sma$" (for exact group names)
             if "$benchmark_binary" \
                 --bench \
-                "^$indicator\$" \
+                "^${indicator}/" \
                 --save-baseline "$baseline_name" \
-                2>&1 | grep -E "Benchmarking|time:|found" | sed "s/^/    [$indicator] /"; then
+                > "$log_file" 2>&1; then
                 log_success "  Completed: $indicator"
             else
-                log_error "  Failed: $indicator"
+                log_error "  Failed: $indicator (see $log_file)"
                 exit 1
             fi
         ) &

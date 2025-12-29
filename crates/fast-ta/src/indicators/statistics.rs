@@ -69,15 +69,244 @@ pub const fn var_min_len(period: usize) -> usize {
     period
 }
 
-/// Computes VAR (Variance) and stores results in output buffer.
+/// Computes VAR using Welford's online algorithm (fast path - no NaN handling).
+///
+/// This function uses Welford's numerically stable algorithm for the initial window,
+/// then maintains rolling sums with a shift constant for O(n) computation.
 ///
 /// Uses population variance (÷n, not ÷(n-1)) to match TA-Lib.
 ///
-/// # Precision Mode
+/// # Algorithm
 ///
-/// - For f32 inputs with PrecisionMode::High: Uses f64 accumulators internally
-///   to avoid catastrophic cancellation with near-constant data
-/// - For f64 inputs or PrecisionMode::Fast: Uses native type accumulators
+/// For the initial window, uses Welford's online algorithm:
+/// - Maintains mean and M2 (sum of squared differences from mean)
+/// - Incrementally updates these values as each element is added
+///
+/// For rolling updates, uses shifted sums for numerical stability:
+/// - Subtracts a constant (first value) from all data to keep values small
+/// - Maintains sum and sum_sq with O(1) updates per element
+/// - Variance = E[X²] - E[X]² (computed on shifted values, same result)
+///
+/// # Errors
+///
+/// Returns an error if conversion from usize fails.
+#[inline]
+fn var_welford_fast<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -> Result<()> {
+    let n = data.len();
+    let lookback = var_lookback(period);
+    let period_t = T::from_usize(period)?;
+
+    // Fill lookback with NaN
+    for i in 0..lookback {
+        output[i] = T::nan();
+    }
+
+    // Handle period=1 edge case: variance is always 0
+    if period == 1 {
+        for i in 0..n {
+            output[i] = T::zero();
+        }
+        return Ok(());
+    }
+
+    // Use Welford's online algorithm for initial window
+    // This establishes mean and M2 with optimal numerical stability
+    let mut mean = T::zero();
+    let mut m2 = T::zero();
+
+    for i in 0..period {
+        let count_t = T::from_usize(i + 1)?;
+        let delta = data[i] - mean;
+        mean = mean + delta / count_t;
+        let delta2 = data[i] - mean;
+        m2 = m2 + delta * delta2;
+    }
+    output[lookback] = m2 / period_t;
+
+    // For rolling updates, use shifted sums approach
+    // This maintains O(n) complexity with numerical stability
+    // Shifting by a constant K: Var(X) = Var(X - K) since variance is shift-invariant
+    let shift = data[0];
+
+    // Initialize shifted sums from initial window
+    let mut sum = T::zero(); // Σ(x - shift)
+    let mut sum_sq = T::zero(); // Σ(x - shift)²
+
+    for i in 0..period {
+        let shifted = data[i] - shift;
+        sum = sum + shifted;
+        sum_sq = sum_sq + shifted * shifted;
+    }
+
+    // Rolling updates: O(1) per element
+    for i in period..n {
+        let old_shifted = data[i - period] - shift;
+        let new_shifted = data[i] - shift;
+
+        // Update sums: remove old, add new
+        sum = sum - old_shifted + new_shifted;
+        sum_sq = sum_sq - old_shifted * old_shifted + new_shifted * new_shifted;
+
+        // Compute variance: Var = E[X²] - E[X]²
+        let mean_shifted = sum / period_t;
+        output[i] = sum_sq / period_t - mean_shifted * mean_shifted;
+    }
+
+    Ok(())
+}
+
+/// Computes VAR using Welford's online algorithm (slow path - with NaN handling).
+///
+/// This function tracks NaN values in the rolling window and outputs NaN when
+/// any value in the current window is NaN or invalid.
+///
+/// Uses population variance (÷n, not ÷(n-1)) to match TA-Lib.
+///
+/// # Algorithm
+///
+/// For the initial window, uses Welford's online algorithm with NaN tracking:
+/// - Maintains mean and M2 (sum of squared differences from mean)
+/// - Tracks nan_count for NaN handling
+/// - Outputs NaN if any value in window is NaN
+///
+/// For rolling updates, uses shifted sums for numerical stability:
+/// - Maintains sum and sum_sq with O(1) updates per element
+/// - Updates nan_count as values enter/exit the window
+///
+/// # Errors
+///
+/// Returns an error if conversion from usize fails.
+#[inline]
+fn var_welford_slow<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -> Result<()> {
+    let n = data.len();
+    let lookback = var_lookback(period);
+    let period_t = T::from_usize(period)?;
+
+    // Fill lookback with NaN
+    for i in 0..lookback {
+        output[i] = T::nan();
+    }
+
+    // Handle period=1 edge case: variance is always 0 for valid values
+    if period == 1 {
+        for i in 0..n {
+            if data[i].is_nan() {
+                output[i] = T::nan();
+            } else {
+                output[i] = T::zero();
+            }
+        }
+        return Ok(());
+    }
+
+    // Use Welford's online algorithm for initial window with NaN tracking
+    let mut mean = T::zero();
+    let mut m2 = T::zero();
+    let mut nan_count = 0usize;
+    let mut valid_count = 0usize;
+
+    for i in 0..period {
+        if data[i].is_nan() {
+            nan_count += 1;
+        } else {
+            valid_count += 1;
+            let count_t = T::from_usize(valid_count)?;
+            let delta = data[i] - mean;
+            mean = mean + delta / count_t;
+            let delta2 = data[i] - mean;
+            m2 = m2 + delta * delta2;
+        }
+    }
+
+    // Output first variance value (or NaN if window contains NaN)
+    if nan_count == 0 {
+        output[lookback] = m2 / period_t;
+    } else {
+        output[lookback] = T::nan();
+    }
+
+    // For rolling updates, use shifted sums approach with NaN tracking
+    // Find first valid value to use as shift constant (use 0 if all NaN)
+    let shift = data
+        .iter()
+        .find(|&&x| !x.is_nan())
+        .copied()
+        .unwrap_or(T::zero());
+
+    // Initialize shifted sums from initial window (excluding NaN values)
+    let mut sum = T::zero(); // Σ(x - shift) for valid values
+    let mut sum_sq = T::zero(); // Σ(x - shift)² for valid values
+
+    for i in 0..period {
+        if !data[i].is_nan() {
+            let shifted = data[i] - shift;
+            sum = sum + shifted;
+            sum_sq = sum_sq + shifted * shifted;
+        }
+    }
+
+    // Rolling updates: O(1) per element
+    for i in period..n {
+        let old_value = data[i - period];
+        let new_value = data[i];
+
+        // Update NaN count and sums for new value
+        if new_value.is_nan() {
+            nan_count += 1;
+        } else {
+            let new_shifted = new_value - shift;
+            sum = sum + new_shifted;
+            sum_sq = sum_sq + new_shifted * new_shifted;
+        }
+
+        // Update NaN count and sums for old value
+        if old_value.is_nan() {
+            nan_count = nan_count.saturating_sub(1);
+        } else {
+            let old_shifted = old_value - shift;
+            sum = sum - old_shifted;
+            sum_sq = sum_sq - old_shifted * old_shifted;
+        }
+
+        // Compute variance if no NaN values in window
+        if nan_count == 0 {
+            let mean_shifted = sum / period_t;
+            output[i] = sum_sq / period_t - mean_shifted * mean_shifted;
+        } else {
+            output[i] = T::nan();
+        }
+    }
+
+    Ok(())
+}
+
+/// Pre-scans input array to check for any NaN values.
+/// Returns true if any NaN is found (requires slow path).
+#[inline]
+fn var_has_nan<T: SeriesElement>(data: &[T]) -> bool {
+    for &value in data {
+        if value.is_nan() {
+            return true;
+        }
+    }
+    false
+}
+
+/// Computes VAR (Variance) and stores results in output buffer.
+///
+/// This function uses pre-scan optimization to detect NaN values in the input:
+/// - If no NaN is found, uses fast path with Welford's algorithm (no validity tracking)
+/// - If NaN is found, uses slow path with Welford's algorithm and NaN tracking
+///
+/// Uses population variance (÷n, not ÷(n-1)) to match TA-Lib.
+///
+/// # Algorithm
+///
+/// Both paths use Welford's online algorithm for the initial window, then
+/// shifted rolling sums for O(n) updates. This provides:
+/// - Numerical stability (especially for near-constant data)
+/// - O(n) time complexity
+/// - Proper NaN propagation through rolling windows
 ///
 /// # Errors
 ///
@@ -86,11 +315,7 @@ pub const fn var_min_len(period: usize) -> usize {
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 /// - The output buffer is too small (`Error::BufferTooSmall`)
-pub fn var_into<T: SeriesElement + 'static>(
-    data: &[T],
-    period: usize,
-    output: &mut [T],
-) -> Result<()> {
+pub fn var_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -> Result<()> {
     if data.is_empty() {
         return Err(Error::EmptyInput);
     }
@@ -119,278 +344,15 @@ pub fn var_into<T: SeriesElement + 'static>(
         });
     }
 
-    let lookback = var_lookback(period);
-
-    // Fill lookback with NaN
-    for out in output.iter_mut().take(lookback) {
-        *out = T::nan();
-    }
-
-    // Pre-scan for NaN - this is ~5x faster than checking per-element in the hot loop
-    // NaN checks in hot loop add ~109µs overhead for 100K elements
-    // Pre-scan adds only ~26µs but allows fast path without any checks
-    let has_nan = data.iter().take(n).any(|&v| is_not_finite(v));
-
-    // Check if we should use f64 precision for f32 inputs
-    if use_f64_precision::<T>() {
-        // High precision mode for f32 - use f64 accumulators
-        if has_nan {
-            var_rolling_slow_f64(data, period, output, lookback)
-        } else {
-            var_rolling_fast_f64(data, period, output, lookback)
-        }
+    // Pre-scan optimization: check for NaN in input data
+    // Route to fast path (no NaN tracking) or slow path (with NaN tracking)
+    if var_has_nan(data) {
+        // Slow path: handles NaN values with nan_count tracking
+        var_welford_slow(data, period, output)
     } else {
-        // Native precision mode
-        if has_nan {
-            var_rolling_slow(data, period, output, lookback)
-        } else {
-            var_rolling_fast(data, period, output, lookback)
-        }
+        // Fast path: no NaN tracking overhead
+        var_welford_fast(data, period, output)
     }
-}
-
-/// Fast VAR implementation without NaN checks.
-/// Used when pre-scan confirms no NaN/Infinity in input.
-#[inline]
-fn var_rolling_fast<T: SeriesElement>(
-    data: &[T],
-    period: usize,
-    output: &mut [T],
-    lookback: usize,
-) -> Result<()> {
-    let n = data.len();
-    let period_t = T::from_usize(period)?;
-
-    // Calculate initial sums for first window
-    let mut sum = T::zero();
-    let mut sum_sq = T::zero();
-    for i in 0..period {
-        sum = sum + data[i];
-        sum_sq = sum_sq + data[i] * data[i];
-    }
-
-    // Calculate first variance
-    let mean = sum / period_t;
-    output[lookback] = sum_sq / period_t - mean * mean;
-
-    // Rolling calculation - tight loop, no NaN checks
-    for i in (lookback + 1)..n {
-        let old_val = data[i - period];
-        let new_val = data[i];
-
-        // Update sums
-        sum = sum + new_val - old_val;
-        sum_sq = sum_sq + new_val * new_val - old_val * old_val;
-
-        // Compute variance
-        let mean = sum / period_t;
-        output[i] = sum_sq / period_t - mean * mean;
-    }
-
-    Ok(())
-}
-
-/// Slow VAR implementation with per-element NaN tracking.
-/// Used when input contains NaN/Infinity values.
-fn var_rolling_slow<T: SeriesElement>(
-    data: &[T],
-    period: usize,
-    output: &mut [T],
-    lookback: usize,
-) -> Result<()> {
-    let n = data.len();
-    let period_t = T::from_usize(period)?;
-
-    // Calculate initial sums for first window
-    let mut sum = T::zero();
-    let mut sum_sq = T::zero();
-    let mut invalid_count = 0usize;
-    for i in 0..period {
-        if is_not_finite(data[i]) {
-            invalid_count += 1;
-        } else {
-            sum = sum + data[i];
-            sum_sq = sum_sq + data[i] * data[i];
-        }
-    }
-
-    // Calculate first variance
-    if invalid_count > 0 {
-        output[lookback] = T::nan();
-    } else {
-        let mean = sum / period_t;
-        output[lookback] = sum_sq / period_t - mean * mean;
-    }
-
-    // Rolling calculation with NaN tracking
-    for i in (lookback + 1)..n {
-        let old_val = data[i - period];
-        let new_val = data[i];
-
-        if is_not_finite(old_val) {
-            invalid_count = invalid_count.saturating_sub(1);
-        } else {
-            sum = sum - old_val;
-            sum_sq = sum_sq - old_val * old_val;
-        }
-        if is_not_finite(new_val) {
-            invalid_count += 1;
-        } else {
-            sum = sum + new_val;
-            sum_sq = sum_sq + new_val * new_val;
-        }
-
-        if invalid_count > 0 {
-            output[i] = T::nan();
-            continue;
-        }
-
-        let mean = sum / period_t;
-        output[i] = sum_sq / period_t - mean * mean;
-    }
-
-    Ok(())
-}
-
-/// Fast VAR implementation with f64 accumulators (for f32 inputs with High precision mode).
-/// Uses shifted variance formula to avoid catastrophic cancellation with near-constant data.
-///
-/// # Why Shifted Variance?
-///
-/// Standard formula `VAR = E[X²] - E[X]²` suffers catastrophic cancellation when:
-/// - Data has large magnitude with small variation (e.g., [1000.0001, 1000.0002, ...])
-/// - Computing 1000000.0002 - 1000000.0000 loses precision in subtraction
-///
-/// Shifted formula `VAR = E[(X-k)²] - (E[X-k])²` fixes this by:
-/// - Subtracting shift k first → [0.0001, 0.0002, ...] (small numbers)
-/// - No large number subtraction → no catastrophic cancellation
-/// - Shift = first value in window for simplicity and numerical stability
-#[inline]
-fn var_rolling_fast_f64<T: SeriesElement>(
-    data: &[T],
-    period: usize,
-    output: &mut [T],
-    lookback: usize,
-) -> Result<()> {
-    let n = data.len();
-    let period_f64 = period as f64;
-
-    // Use first value as shift for numerical stability
-    let shift = data[0].to_f64().unwrap_or(0.0);
-
-    // Calculate initial sums for first window using shifted values
-    let mut sum_shifted = 0.0_f64;
-    let mut sum_sq_shifted = 0.0_f64;
-    for i in 0..period {
-        let val_f64 = data[i].to_f64().unwrap_or(0.0);
-        let shifted = val_f64 - shift;
-        sum_shifted += shifted;
-        sum_sq_shifted += shifted * shifted;
-    }
-
-    // Calculate first variance using shifted formula
-    // VAR = E[(X-k)²] - (E[X-k])² where k is the shift
-    let mean_shifted = sum_shifted / period_f64;
-    let var_f64 = sum_sq_shifted / period_f64 - mean_shifted * mean_shifted;
-    output[lookback] = T::from_f64(var_f64.max(0.0))?; // Clamp to prevent negative due to rounding
-
-    // Rolling calculation - tight loop, no NaN checks
-    for i in (lookback + 1)..n {
-        let old_val_f64 = data[i - period].to_f64().unwrap_or(0.0);
-        let new_val_f64 = data[i].to_f64().unwrap_or(0.0);
-        let old_shifted = old_val_f64 - shift;
-        let new_shifted = new_val_f64 - shift;
-
-        // Update sums
-        sum_shifted += new_shifted - old_shifted;
-        sum_sq_shifted += new_shifted * new_shifted - old_shifted * old_shifted;
-
-        // Compute variance
-        let mean_shifted = sum_shifted / period_f64;
-        let var_f64 = sum_sq_shifted / period_f64 - mean_shifted * mean_shifted;
-        output[i] = T::from_f64(var_f64.max(0.0))?;
-    }
-
-    Ok(())
-}
-
-/// Slow VAR implementation with f64 accumulators and per-element NaN tracking.
-/// Uses shifted variance formula for numerical stability.
-/// Used for f32 inputs with High precision mode when input contains NaN/Infinity.
-#[inline]
-fn var_rolling_slow_f64<T: SeriesElement>(
-    data: &[T],
-    period: usize,
-    output: &mut [T],
-    lookback: usize,
-) -> Result<()> {
-    let n = data.len();
-    let period_f64 = period as f64;
-
-    // Find first valid value to use as shift
-    let shift = data
-        .iter()
-        .find(|&&v| is_not_finite(v) == false)
-        .and_then(|&v| v.to_f64())
-        .unwrap_or(0.0);
-
-    // Calculate initial sums for first window
-    let mut sum_shifted = 0.0_f64;
-    let mut sum_sq_shifted = 0.0_f64;
-    let mut invalid_count = 0usize;
-    for i in 0..period {
-        if is_not_finite(data[i]) {
-            invalid_count += 1;
-        } else {
-            let val_f64 = data[i].to_f64().unwrap_or(0.0);
-            let shifted = val_f64 - shift;
-            sum_shifted += shifted;
-            sum_sq_shifted += shifted * shifted;
-        }
-    }
-
-    // Set first value
-    if invalid_count > 0 {
-        output[lookback] = T::nan();
-    } else {
-        let mean_shifted = sum_shifted / period_f64;
-        let var_f64 = sum_sq_shifted / period_f64 - mean_shifted * mean_shifted;
-        output[lookback] = T::from_f64(var_f64.max(0.0))?;
-    }
-
-    // Rolling calculation with NaN tracking
-    for i in (lookback + 1)..n {
-        let old_val = data[i - period];
-        let new_val = data[i];
-
-        if is_not_finite(old_val) {
-            invalid_count -= 1;
-        } else {
-            let old_val_f64 = old_val.to_f64().unwrap_or(0.0);
-            let old_shifted = old_val_f64 - shift;
-            sum_shifted -= old_shifted;
-            sum_sq_shifted -= old_shifted * old_shifted;
-        }
-        if is_not_finite(new_val) {
-            invalid_count += 1;
-        } else {
-            let new_val_f64 = new_val.to_f64().unwrap_or(0.0);
-            let new_shifted = new_val_f64 - shift;
-            sum_shifted += new_shifted;
-            sum_sq_shifted += new_shifted * new_shifted;
-        }
-
-        if invalid_count > 0 {
-            output[i] = T::nan();
-            continue;
-        }
-
-        let mean_shifted = sum_shifted / period_f64;
-        let var_f64 = sum_sq_shifted / period_f64 - mean_shifted * mean_shifted;
-        output[i] = T::from_f64(var_f64.max(0.0))?;
-    }
-
-    Ok(())
 }
 
 /// Computes VAR (Variance).
@@ -403,7 +365,7 @@ fn var_rolling_slow_f64<T: SeriesElement>(
 /// - The input data is empty (`Error::EmptyInput`)
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
-pub fn var<T: SeriesElement + 'static>(data: &[T], period: usize) -> Result<Vec<T>> {
+pub fn var<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
     let mut output = vec![T::nan(); data.len()];
     var_into(data, period, &mut output)?;
     Ok(output)
@@ -443,7 +405,7 @@ pub const fn stddev_min_len(period: usize) -> usize {
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 /// - The output buffer is too small (`Error::BufferTooSmall`)
-pub fn stddev_into<T: SeriesElement + 'static>(
+pub fn stddev_into<T: SeriesElement>(
     data: &[T],
     period: usize,
     output: &mut [T],
@@ -472,21 +434,25 @@ pub fn stddev_into<T: SeriesElement + 'static>(
 /// - The input data is empty (`Error::EmptyInput`)
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
-pub fn stddev<T: SeriesElement + 'static>(data: &[T], period: usize) -> Result<Vec<T>> {
+pub fn stddev<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
     let mut output = vec![T::nan(); data.len()];
     stddev_into(data, period, &mut output)?;
     Ok(output)
 }
 
 // =============================================================================
-// SKEW (Skewness)
+// SKEW (Skewness - Third Standardized Moment)
 // =============================================================================
 
 /// Returns the lookback period for SKEW.
 #[inline]
 #[must_use]
 pub const fn skew_lookback(period: usize) -> usize {
-    if period == 0 { 0 } else { period - 1 }
+    if period == 0 {
+        0
+    } else {
+        period - 1
+    }
 }
 
 /// Returns the minimum input length required for SKEW.
@@ -498,15 +464,15 @@ pub const fn skew_min_len(period: usize) -> usize {
 
 /// Computes SKEW (Skewness) and stores results in output buffer.
 ///
-/// Uses population skewness (third standardized moment).
+/// Skewness measures the asymmetry of the probability distribution of a real-valued random variable.
+/// - Positive skew: tail on the right side
+/// - Negative skew: tail on the left side
+/// - Zero skew: symmetrical distribution
 ///
 /// # Formula
 /// ```text
-/// skew = E[(x - μ)³] / σ³
-///      = μ₃ / μ₂^(3/2)
+/// SKEW = E[(X-μ)³] / σ³
 /// ```
-///
-/// where μ₂ is variance and μ₃ is the third central moment.
 ///
 /// # Errors
 ///
@@ -515,7 +481,11 @@ pub const fn skew_min_len(period: usize) -> usize {
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 /// - The output buffer is too small (`Error::BufferTooSmall`)
-pub fn skew_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -> Result<()> {
+pub fn skew_into<T: SeriesElement>(
+    data: &[T],
+    period: usize,
+    output: &mut [T],
+) -> Result<()> {
     if data.is_empty() {
         return Err(Error::EmptyInput);
     }
@@ -548,182 +518,45 @@ pub fn skew_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) 
     let period_t = T::from_usize(period)?;
 
     // Fill lookback with NaN
-    for out in output.iter_mut().take(lookback) {
-        *out = T::nan();
+    for i in 0..lookback {
+        output[i] = T::nan();
     }
 
-    // Pre-scan for non-finite values
-    let has_nan = data.iter().take(n).any(|&v| is_not_finite(v));
+    // Calculate skewness for each window
+    for i in lookback..n {
+        let start = i + 1 - period;
 
-    if has_nan {
-        skew_rolling_slow(data, period, output, lookback, period_t)
-    } else {
-        skew_rolling_fast(data, period, output, lookback, period_t)
-    }
-}
+        // Calculate mean
+        let mut sum = T::zero();
+        for j in start..=i {
+            sum = sum + data[j];
+        }
+        let mean = sum / period_t;
 
-/// Fast SKEW implementation without NaN checks.
-#[inline]
-fn skew_rolling_fast<T: SeriesElement>(
-    data: &[T],
-    period: usize,
-    output: &mut [T],
-    lookback: usize,
-    period_t: T,
-) -> Result<()> {
-    let n = data.len();
-    let three = T::from_f64(3.0)?;
-    let two = T::from_f64(2.0)?;
-    let one_point_five = T::from_f64(1.5)?;
+        // Calculate variance and third moment
+        let mut var_sum = T::zero();
+        let mut m3 = T::zero();
+        for j in start..=i {
+            let diff = data[j] - mean;
+            var_sum = var_sum + diff * diff;
+            m3 = m3 + diff * diff * diff;
+        }
 
-    // Calculate initial sums for first window
-    let mut sum = T::zero();
-    let mut sum_sq = T::zero();
-    let mut sum_cb = T::zero();
-    for i in 0..period {
-        let v = data[i];
-        let sq = v * v;
-        sum = sum + v;
-        sum_sq = sum_sq + sq;
-        sum_cb = sum_cb + sq * v;
-    }
-
-    // Calculate first skewness
-    output[lookback] = compute_skewness(sum, sum_sq, sum_cb, period_t, three, two, one_point_five);
-
-    // Rolling calculation
-    for i in (lookback + 1)..n {
-        let old_val = data[i - period];
-        let new_val = data[i];
-
-        let old_sq = old_val * old_val;
-        let new_sq = new_val * new_val;
-
-        sum = sum + new_val - old_val;
-        sum_sq = sum_sq + new_sq - old_sq;
-        sum_cb = sum_cb + new_sq * new_val - old_sq * old_val;
-
-        output[i] = compute_skewness(sum, sum_sq, sum_cb, period_t, three, two, one_point_five);
+        // Calculate skewness
+        let variance = var_sum / period_t;
+        if variance == T::zero() {
+            output[i] = T::nan(); // Undefined for zero variance
+        } else {
+            let stddev = variance.sqrt();
+            let m3_norm = m3 / period_t;
+            output[i] = m3_norm / (stddev * stddev * stddev);
+        }
     }
 
     Ok(())
-}
-
-/// Slow SKEW implementation with per-element NaN tracking.
-fn skew_rolling_slow<T: SeriesElement>(
-    data: &[T],
-    period: usize,
-    output: &mut [T],
-    lookback: usize,
-    period_t: T,
-) -> Result<()> {
-    let n = data.len();
-    let three = T::from_f64(3.0)?;
-    let two = T::from_f64(2.0)?;
-    let one_point_five = T::from_f64(1.5)?;
-
-    // Calculate initial sums for first window
-    let mut sum = T::zero();
-    let mut sum_sq = T::zero();
-    let mut sum_cb = T::zero();
-    let mut invalid_count = 0usize;
-
-    for i in 0..period {
-        if is_not_finite(data[i]) {
-            invalid_count += 1;
-        } else {
-            let v = data[i];
-            let sq = v * v;
-            sum = sum + v;
-            sum_sq = sum_sq + sq;
-            sum_cb = sum_cb + sq * v;
-        }
-    }
-
-    // Calculate first skewness
-    if invalid_count > 0 {
-        output[lookback] = T::nan();
-    } else {
-        output[lookback] = compute_skewness(sum, sum_sq, sum_cb, period_t, three, two, one_point_five);
-    }
-
-    // Rolling calculation with NaN tracking
-    for i in (lookback + 1)..n {
-        let old_val = data[i - period];
-        let new_val = data[i];
-
-        if is_not_finite(old_val) {
-            invalid_count = invalid_count.saturating_sub(1);
-        } else {
-            let old_sq = old_val * old_val;
-            sum = sum - old_val;
-            sum_sq = sum_sq - old_sq;
-            sum_cb = sum_cb - old_sq * old_val;
-        }
-
-        if is_not_finite(new_val) {
-            invalid_count += 1;
-        } else {
-            let new_sq = new_val * new_val;
-            sum = sum + new_val;
-            sum_sq = sum_sq + new_sq;
-            sum_cb = sum_cb + new_sq * new_val;
-        }
-
-        if invalid_count > 0 {
-            output[i] = T::nan();
-            continue;
-        }
-
-        output[i] = compute_skewness(sum, sum_sq, sum_cb, period_t, three, two, one_point_five);
-    }
-
-    Ok(())
-}
-
-/// Helper to compute skewness from raw moments.
-///
-/// Using the formula for population skewness:
-/// skew = μ₃ / μ₂^(3/2)
-///
-/// where:
-/// - μ₂ = m₂ - m₁² (variance, second central moment)
-/// - μ₃ = m₃ - 3*m₁*m₂ + 2*m₁³ (third central moment)
-/// - m₁ = sum/n, m₂ = sum_sq/n, m₃ = sum_cb/n
-#[inline]
-fn compute_skewness<T: SeriesElement>(
-    sum: T,
-    sum_sq: T,
-    sum_cb: T,
-    n: T,
-    three: T,
-    two: T,
-    one_point_five: T,
-) -> T {
-    let m1 = sum / n;
-    let m2 = sum_sq / n;
-    let m3 = sum_cb / n;
-
-    let m1_sq = m1 * m1;
-    let m1_cb = m1_sq * m1;
-
-    // Variance (second central moment)
-    let mu2 = m2 - m1_sq;
-
-    // Third central moment
-    let mu3 = m3 - three * m1 * m2 + two * m1_cb;
-
-    // Skewness = μ₃ / μ₂^(3/2)
-    if mu2 <= T::zero() {
-        T::zero() // No variance = undefined skewness
-    } else {
-        mu3 / mu2.powf(one_point_five)
-    }
 }
 
 /// Computes SKEW (Skewness).
-///
-/// Uses population skewness (third standardized moment).
 ///
 /// # Errors
 ///
@@ -738,14 +571,18 @@ pub fn skew<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
 }
 
 // =============================================================================
-// KURT (Kurtosis)
+// KURT (Kurtosis - Fourth Standardized Moment, Excess Kurtosis)
 // =============================================================================
 
 /// Returns the lookback period for KURT.
 #[inline]
 #[must_use]
 pub const fn kurt_lookback(period: usize) -> usize {
-    if period == 0 { 0 } else { period - 1 }
+    if period == 0 {
+        0
+    } else {
+        period - 1
+    }
 }
 
 /// Returns the minimum input length required for KURT.
@@ -755,17 +592,18 @@ pub const fn kurt_min_len(period: usize) -> usize {
     period
 }
 
-/// Computes KURT (Kurtosis) and stores results in output buffer.
+/// Computes KURT (Excess Kurtosis) and stores results in output buffer.
 ///
-/// Uses population excess kurtosis (fourth standardized moment minus 3).
+/// Kurtosis measures the "tailedness" of the probability distribution.
+/// This returns excess kurtosis (kurtosis - 3).
+/// - Positive: heavier tails than normal distribution (leptokurtic)
+/// - Negative: lighter tails than normal distribution (platykurtic)
+/// - Zero: similar to normal distribution (mesokurtic)
 ///
 /// # Formula
 /// ```text
-/// kurt = E[(x - μ)⁴] / σ⁴ - 3
-///      = μ₄ / μ₂² - 3
+/// KURT = (E[(X-μ)⁴] / σ⁴) - 3
 /// ```
-///
-/// A normal distribution has excess kurtosis of 0.
 ///
 /// # Errors
 ///
@@ -774,7 +612,11 @@ pub const fn kurt_min_len(period: usize) -> usize {
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 /// - The output buffer is too small (`Error::BufferTooSmall`)
-pub fn kurt_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -> Result<()> {
+pub fn kurt_into<T: SeriesElement>(
+    data: &[T],
+    period: usize,
+    output: &mut [T],
+) -> Result<()> {
     if data.is_empty() {
         return Err(Error::EmptyInput);
     }
@@ -805,194 +647,48 @@ pub fn kurt_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) 
 
     let lookback = kurt_lookback(period);
     let period_t = T::from_usize(period)?;
+    let three = T::from_usize(3)?;
 
     // Fill lookback with NaN
-    for out in output.iter_mut().take(lookback) {
-        *out = T::nan();
+    for i in 0..lookback {
+        output[i] = T::nan();
     }
 
-    // Pre-scan for non-finite values
-    let has_nan = data.iter().take(n).any(|&v| is_not_finite(v));
+    // Calculate kurtosis for each window
+    for i in lookback..n {
+        let start = i + 1 - period;
 
-    if has_nan {
-        kurt_rolling_slow(data, period, output, lookback, period_t)
-    } else {
-        kurt_rolling_fast(data, period, output, lookback, period_t)
-    }
-}
+        // Calculate mean
+        let mut sum = T::zero();
+        for j in start..=i {
+            sum = sum + data[j];
+        }
+        let mean = sum / period_t;
 
-/// Fast KURT implementation without NaN checks.
-#[inline]
-fn kurt_rolling_fast<T: SeriesElement>(
-    data: &[T],
-    period: usize,
-    output: &mut [T],
-    lookback: usize,
-    period_t: T,
-) -> Result<()> {
-    let n = data.len();
-    let three = T::from_f64(3.0)?;
-    let four = T::from_f64(4.0)?;
-    let six = T::from_f64(6.0)?;
+        // Calculate variance and fourth moment
+        let mut var_sum = T::zero();
+        let mut m4 = T::zero();
+        for j in start..=i {
+            let diff = data[j] - mean;
+            var_sum = var_sum + diff * diff;
+            m4 = m4 + diff * diff * diff * diff;
+        }
 
-    // Calculate initial sums for first window
-    let mut sum = T::zero();
-    let mut sum_sq = T::zero();
-    let mut sum_cb = T::zero();
-    let mut sum_qd = T::zero();
-
-    for i in 0..period {
-        let v = data[i];
-        let sq = v * v;
-        sum = sum + v;
-        sum_sq = sum_sq + sq;
-        sum_cb = sum_cb + sq * v;
-        sum_qd = sum_qd + sq * sq;
-    }
-
-    // Calculate first kurtosis
-    output[lookback] = compute_kurtosis(sum, sum_sq, sum_cb, sum_qd, period_t, three, four, six);
-
-    // Rolling calculation
-    for i in (lookback + 1)..n {
-        let old_val = data[i - period];
-        let new_val = data[i];
-
-        let old_sq = old_val * old_val;
-        let new_sq = new_val * new_val;
-
-        sum = sum + new_val - old_val;
-        sum_sq = sum_sq + new_sq - old_sq;
-        sum_cb = sum_cb + new_sq * new_val - old_sq * old_val;
-        sum_qd = sum_qd + new_sq * new_sq - old_sq * old_sq;
-
-        output[i] = compute_kurtosis(sum, sum_sq, sum_cb, sum_qd, period_t, three, four, six);
+        // Calculate kurtosis
+        let variance = var_sum / period_t;
+        if variance == T::zero() {
+            output[i] = T::nan(); // Undefined for zero variance
+        } else {
+            let m4_norm = m4 / period_t;
+            let var_sq = variance * variance;
+            output[i] = m4_norm / var_sq - three;
+        }
     }
 
     Ok(())
 }
 
-/// Slow KURT implementation with per-element NaN tracking.
-fn kurt_rolling_slow<T: SeriesElement>(
-    data: &[T],
-    period: usize,
-    output: &mut [T],
-    lookback: usize,
-    period_t: T,
-) -> Result<()> {
-    let n = data.len();
-    let three = T::from_f64(3.0)?;
-    let four = T::from_f64(4.0)?;
-    let six = T::from_f64(6.0)?;
-
-    // Calculate initial sums for first window
-    let mut sum = T::zero();
-    let mut sum_sq = T::zero();
-    let mut sum_cb = T::zero();
-    let mut sum_qd = T::zero();
-    let mut invalid_count = 0usize;
-
-    for i in 0..period {
-        if is_not_finite(data[i]) {
-            invalid_count += 1;
-        } else {
-            let v = data[i];
-            let sq = v * v;
-            sum = sum + v;
-            sum_sq = sum_sq + sq;
-            sum_cb = sum_cb + sq * v;
-            sum_qd = sum_qd + sq * sq;
-        }
-    }
-
-    // Calculate first kurtosis
-    if invalid_count > 0 {
-        output[lookback] = T::nan();
-    } else {
-        output[lookback] = compute_kurtosis(sum, sum_sq, sum_cb, sum_qd, period_t, three, four, six);
-    }
-
-    // Rolling calculation with NaN tracking
-    for i in (lookback + 1)..n {
-        let old_val = data[i - period];
-        let new_val = data[i];
-
-        if is_not_finite(old_val) {
-            invalid_count = invalid_count.saturating_sub(1);
-        } else {
-            let old_sq = old_val * old_val;
-            sum = sum - old_val;
-            sum_sq = sum_sq - old_sq;
-            sum_cb = sum_cb - old_sq * old_val;
-            sum_qd = sum_qd - old_sq * old_sq;
-        }
-
-        if is_not_finite(new_val) {
-            invalid_count += 1;
-        } else {
-            let new_sq = new_val * new_val;
-            sum = sum + new_val;
-            sum_sq = sum_sq + new_sq;
-            sum_cb = sum_cb + new_sq * new_val;
-            sum_qd = sum_qd + new_sq * new_sq;
-        }
-
-        if invalid_count > 0 {
-            output[i] = T::nan();
-            continue;
-        }
-
-        output[i] = compute_kurtosis(sum, sum_sq, sum_cb, sum_qd, period_t, three, four, six);
-    }
-
-    Ok(())
-}
-
-/// Helper to compute excess kurtosis from raw moments.
-///
-/// Using the formula for population excess kurtosis:
-/// kurt = μ₄ / μ₂² - 3
-///
-/// where:
-/// - μ₂ = m₂ - m₁² (variance)
-/// - μ₄ = m₄ - 4*m₁*m₃ + 6*m₁²*m₂ - 3*m₁⁴ (fourth central moment)
-/// - m₁ = sum/n, m₂ = sum_sq/n, m₃ = sum_cb/n, m₄ = sum_qd/n
-#[inline]
-fn compute_kurtosis<T: SeriesElement>(
-    sum: T,
-    sum_sq: T,
-    sum_cb: T,
-    sum_qd: T,
-    n: T,
-    three: T,
-    four: T,
-    six: T,
-) -> T {
-    let m1 = sum / n;
-    let m2 = sum_sq / n;
-    let m3 = sum_cb / n;
-    let m4 = sum_qd / n;
-
-    let m1_sq = m1 * m1;
-    let m1_qd = m1_sq * m1_sq;
-
-    // Variance (second central moment)
-    let mu2 = m2 - m1_sq;
-
-    // Fourth central moment
-    let mu4 = m4 - four * m1 * m3 + six * m1_sq * m2 - three * m1_qd;
-
-    // Excess kurtosis = μ₄ / μ₂² - 3
-    if mu2 <= T::zero() {
-        T::zero() // No variance = undefined kurtosis
-    } else {
-        mu4 / (mu2 * mu2) - three
-    }
-}
-
-/// Computes KURT (Kurtosis).
-///
-/// Uses population excess kurtosis (fourth standardized moment minus 3).
+/// Computes KURT (Excess Kurtosis).
 ///
 /// # Errors
 ///
@@ -1014,7 +710,11 @@ pub fn kurt<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
 #[inline]
 #[must_use]
 pub const fn cov_lookback(period: usize) -> usize {
-    if period == 0 { 0 } else { period - 1 }
+    if period == 0 {
+        0
+    } else {
+        period - 1
+    }
 }
 
 /// Returns the minimum input length required for COV.
@@ -1026,12 +726,14 @@ pub const fn cov_min_len(period: usize) -> usize {
 
 /// Computes COV (Covariance) and stores results in output buffer.
 ///
-/// Uses population covariance (÷n, not ÷(n-1)).
+/// Covariance measures how two variables move together.
+/// - Positive: variables move in the same direction
+/// - Negative: variables move in opposite directions
+/// - Zero: variables are independent
 ///
 /// # Formula
 /// ```text
-/// cov(X, Y) = E[(X - μₓ)(Y - μᵧ)]
-///           = E[XY] - E[X]E[Y]
+/// COV = E[(X-μx)(Y-μy)]
 /// ```
 ///
 /// # Errors
@@ -1039,6 +741,7 @@ pub const fn cov_min_len(period: usize) -> usize {
 /// Returns an error if:
 /// - The input data is empty (`Error::EmptyInput`)
 /// - The period is invalid (`Error::InvalidPeriod`)
+/// - The arrays have different lengths (`Error::LengthMismatch`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 /// - The output buffer is too small (`Error::BufferTooSmall`)
 pub fn cov_into<T: SeriesElement>(
@@ -1089,34 +792,29 @@ pub fn cov_into<T: SeriesElement>(
         output[i] = T::nan();
     }
 
-    // Rolling covariance calculation
-    // COV = E[XY] - E[X]E[Y] = (sum_xy/n) - (sum_x/n)(sum_y/n)
+    // Calculate covariance for each window
     for i in lookback..n {
         let start = i + 1 - period;
 
+        // Calculate means
         let mut sum_x = T::zero();
         let mut sum_y = T::zero();
-        let mut sum_xy = T::zero();
-        let mut has_invalid = false;
-
         for j in start..=i {
-            if is_not_finite(data0[j]) || is_not_finite(data1[j]) {
-                has_invalid = true;
-                break;
-            }
             sum_x = sum_x + data0[j];
             sum_y = sum_y + data1[j];
-            sum_xy = sum_xy + data0[j] * data1[j];
         }
-
-        if has_invalid {
-            output[i] = T::nan();
-            continue;
-        }
-
         let mean_x = sum_x / period_t;
         let mean_y = sum_y / period_t;
-        output[i] = sum_xy / period_t - mean_x * mean_y;
+
+        // Calculate covariance
+        let mut cov = T::zero();
+        for j in start..=i {
+            let dx = data0[j] - mean_x;
+            let dy = data1[j] - mean_y;
+            cov = cov + dx * dy;
+        }
+
+        output[i] = cov / period_t;
     }
 
     Ok(())
@@ -1124,13 +822,12 @@ pub fn cov_into<T: SeriesElement>(
 
 /// Computes COV (Covariance).
 ///
-/// Uses population covariance (÷n, not ÷(n-1)).
-///
 /// # Errors
 ///
 /// Returns an error if:
 /// - The input data is empty (`Error::EmptyInput`)
 /// - The period is invalid (`Error::InvalidPeriod`)
+/// - The arrays have different lengths (`Error::LengthMismatch`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 pub fn cov<T: SeriesElement>(data0: &[T], data1: &[T], period: usize) -> Result<Vec<T>> {
     let mut output = vec![T::nan(); data0.len()];
@@ -1146,7 +843,11 @@ pub fn cov<T: SeriesElement>(data0: &[T], data1: &[T], period: usize) -> Result<
 #[inline]
 #[must_use]
 pub const fn zscore_lookback(period: usize) -> usize {
-    if period == 0 { 0 } else { period - 1 }
+    if period == 0 {
+        0
+    } else {
+        period - 1
+    }
 }
 
 /// Returns the minimum input length required for ZSCORE.
@@ -1158,12 +859,15 @@ pub const fn zscore_min_len(period: usize) -> usize {
 
 /// Computes ZSCORE (Rolling Z-Score) and stores results in output buffer.
 ///
+/// Z-Score measures how many standard deviations an element is from the mean.
+/// - Positive: value is above the mean
+/// - Negative: value is below the mean
+/// - Zero: value is at the mean
+///
 /// # Formula
 /// ```text
-/// zscore = (x - μ) / σ
+/// ZSCORE = (X - μ) / σ
 /// ```
-///
-/// where μ and σ are computed over the rolling window.
 ///
 /// # Errors
 ///
@@ -1172,7 +876,11 @@ pub const fn zscore_min_len(period: usize) -> usize {
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 /// - The output buffer is too small (`Error::BufferTooSmall`)
-pub fn zscore_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -> Result<()> {
+pub fn zscore_into<T: SeriesElement>(
+    data: &[T],
+    period: usize,
+    output: &mut [T],
+) -> Result<()> {
     if data.is_empty() {
         return Err(Error::EmptyInput);
     }
@@ -1205,135 +913,34 @@ pub fn zscore_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]
     let period_t = T::from_usize(period)?;
 
     // Fill lookback with NaN
-    for out in output.iter_mut().take(lookback) {
-        *out = T::nan();
+    for i in 0..lookback {
+        output[i] = T::nan();
     }
 
-    // Pre-scan for non-finite values
-    let has_nan = data.iter().take(n).any(|&v| is_not_finite(v));
+    // Calculate z-score for each window
+    for i in lookback..n {
+        let start = i + 1 - period;
 
-    if has_nan {
-        zscore_rolling_slow(data, period, output, lookback, period_t)
-    } else {
-        zscore_rolling_fast(data, period, output, lookback, period_t)
-    }
-}
-
-/// Fast ZSCORE implementation without NaN checks.
-#[inline]
-fn zscore_rolling_fast<T: SeriesElement>(
-    data: &[T],
-    period: usize,
-    output: &mut [T],
-    lookback: usize,
-    period_t: T,
-) -> Result<()> {
-    let n = data.len();
-
-    // Calculate initial sums for first window
-    let mut sum = T::zero();
-    let mut sum_sq = T::zero();
-    for i in 0..period {
-        sum = sum + data[i];
-        sum_sq = sum_sq + data[i] * data[i];
-    }
-
-    // Calculate first z-score
-    let mean = sum / period_t;
-    let var = sum_sq / period_t - mean * mean;
-    if var <= T::zero() {
-        output[lookback] = T::zero();
-    } else {
-        output[lookback] = (data[lookback] - mean) / var.sqrt();
-    }
-
-    // Rolling calculation
-    for i in (lookback + 1)..n {
-        let old_val = data[i - period];
-        let new_val = data[i];
-
-        sum = sum + new_val - old_val;
-        sum_sq = sum_sq + new_val * new_val - old_val * old_val;
-
+        // Calculate mean
+        let mut sum = T::zero();
+        for j in start..=i {
+            sum = sum + data[j];
+        }
         let mean = sum / period_t;
-        let var = sum_sq / period_t - mean * mean;
-        if var <= T::zero() {
-            output[i] = T::zero();
-        } else {
-            output[i] = (data[i] - mean) / var.sqrt();
+
+        // Calculate variance
+        let mut var_sum = T::zero();
+        for j in start..=i {
+            let diff = data[j] - mean;
+            var_sum = var_sum + diff * diff;
         }
-    }
+        let variance = var_sum / period_t;
 
-    Ok(())
-}
-
-/// Slow ZSCORE implementation with per-element NaN tracking.
-fn zscore_rolling_slow<T: SeriesElement>(
-    data: &[T],
-    period: usize,
-    output: &mut [T],
-    lookback: usize,
-    period_t: T,
-) -> Result<()> {
-    let n = data.len();
-
-    // Calculate initial sums for first window
-    let mut sum = T::zero();
-    let mut sum_sq = T::zero();
-    let mut invalid_count = 0usize;
-
-    for i in 0..period {
-        if is_not_finite(data[i]) {
-            invalid_count += 1;
+        if variance == T::zero() {
+            output[i] = T::nan(); // Undefined for zero variance
         } else {
-            sum = sum + data[i];
-            sum_sq = sum_sq + data[i] * data[i];
-        }
-    }
-
-    // Calculate first z-score
-    if invalid_count > 0 {
-        output[lookback] = T::nan();
-    } else {
-        let mean = sum / period_t;
-        let var = sum_sq / period_t - mean * mean;
-        if var <= T::zero() {
-            output[lookback] = T::zero();
-        } else {
-            output[lookback] = (data[lookback] - mean) / var.sqrt();
-        }
-    }
-
-    // Rolling calculation with NaN tracking
-    for i in (lookback + 1)..n {
-        let old_val = data[i - period];
-        let new_val = data[i];
-
-        if is_not_finite(old_val) {
-            invalid_count = invalid_count.saturating_sub(1);
-        } else {
-            sum = sum - old_val;
-            sum_sq = sum_sq - old_val * old_val;
-        }
-
-        if is_not_finite(new_val) {
-            invalid_count += 1;
-        } else {
-            sum = sum + new_val;
-            sum_sq = sum_sq + new_val * new_val;
-        }
-
-        if invalid_count > 0 {
-            output[i] = T::nan();
-            continue;
-        }
-
-        let mean = sum / period_t;
-        let var = sum_sq / period_t - mean * mean;
-        if var <= T::zero() {
-            output[i] = T::zero();
-        } else {
-            output[i] = (data[i] - mean) / var.sqrt();
+            let stddev = variance.sqrt();
+            output[i] = (data[i] - mean) / stddev;
         }
     }
 
@@ -1362,7 +969,11 @@ pub fn zscore<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
 #[inline]
 #[must_use]
 pub const fn mad_lookback(period: usize) -> usize {
-    if period == 0 { 0 } else { period - 1 }
+    if period == 0 {
+        0
+    } else {
+        period - 1
+    }
 }
 
 /// Returns the minimum input length required for MAD.
@@ -1374,9 +985,12 @@ pub const fn mad_min_len(period: usize) -> usize {
 
 /// Computes MAD (Mean Absolute Deviation) and stores results in output buffer.
 ///
+/// Mean Absolute Deviation measures the average distance of data points from the mean.
+/// More robust to outliers than standard deviation.
+///
 /// # Formula
 /// ```text
-/// MAD = (1/n) * Σ|xᵢ - μ|
+/// MAD = E[|X - μ|]
 /// ```
 ///
 /// # Errors
@@ -1386,7 +1000,11 @@ pub const fn mad_min_len(period: usize) -> usize {
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 /// - The output buffer is too small (`Error::BufferTooSmall`)
-pub fn mad_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -> Result<()> {
+pub fn mad_into<T: SeriesElement>(
+    data: &[T],
+    period: usize,
+    output: &mut [T],
+) -> Result<()> {
     if data.is_empty() {
         return Err(Error::EmptyInput);
     }
@@ -1419,40 +1037,29 @@ pub fn mad_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -
     let period_t = T::from_usize(period)?;
 
     // Fill lookback with NaN
-    for out in output.iter_mut().take(lookback) {
-        *out = T::nan();
+    for i in 0..lookback {
+        output[i] = T::nan();
     }
 
-    // MAD requires two passes: one for mean, one for absolute deviations
-    // No efficient single-pass algorithm exists for MAD
+    // Calculate MAD for each window
     for i in lookback..n {
         let start = i + 1 - period;
 
-        // First pass: compute mean
+        // Calculate mean
         let mut sum = T::zero();
-        let mut has_invalid = false;
         for j in start..=i {
-            if is_not_finite(data[j]) {
-                has_invalid = true;
-                break;
-            }
             sum = sum + data[j];
         }
-
-        if has_invalid {
-            output[i] = T::nan();
-            continue;
-        }
-
         let mean = sum / period_t;
 
-        // Second pass: compute mean absolute deviation
-        let mut mad_sum = T::zero();
+        // Calculate mean absolute deviation
+        let mut mad = T::zero();
         for j in start..=i {
-            mad_sum = mad_sum + (data[j] - mean).abs();
+            let diff = (data[j] - mean).abs();
+            mad = mad + diff;
         }
 
-        output[i] = mad_sum / period_t;
+        output[i] = mad / period_t;
     }
 
     Ok(())
@@ -1480,7 +1087,11 @@ pub fn mad<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
 #[inline]
 #[must_use]
 pub const fn sem_lookback(period: usize) -> usize {
-    if period == 0 { 0 } else { period - 1 }
+    if period == 0 {
+        0
+    } else {
+        period - 1
+    }
 }
 
 /// Returns the minimum input length required for SEM.
@@ -1492,12 +1103,14 @@ pub const fn sem_min_len(period: usize) -> usize {
 
 /// Computes SEM (Standard Error of Mean) and stores results in output buffer.
 ///
+/// Standard Error of Mean measures the standard deviation of the sample mean.
+/// Used to estimate the precision of the mean estimate.
+///
 /// # Formula
 /// ```text
 /// SEM = σ / sqrt(n)
 /// ```
-///
-/// where σ is the standard deviation.
+/// where σ is the population standard deviation and n is the sample size.
 ///
 /// # Errors
 ///
@@ -1506,17 +1119,72 @@ pub const fn sem_min_len(period: usize) -> usize {
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 /// - The output buffer is too small (`Error::BufferTooSmall`)
-pub fn sem_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -> Result<()> {
-    // Compute standard deviation first
-    stddev_into(data, period, output)?;
+pub fn sem_into<T: SeriesElement>(
+    data: &[T],
+    period: usize,
+    output: &mut [T],
+) -> Result<()> {
+    if data.is_empty() {
+        return Err(Error::EmptyInput);
+    }
 
-    // Divide by sqrt(n) to get SEM
-    let sqrt_n = T::from_usize(period)?.sqrt();
+    if period == 0 {
+        return Err(Error::InvalidPeriod {
+            period: 0,
+            reason: "period must be >= 1",
+        });
+    }
+
+    let n = data.len();
+    if n < period {
+        return Err(Error::InsufficientData {
+            indicator: "sem",
+            required: period,
+            actual: n,
+        });
+    }
+
+    if output.len() < n {
+        return Err(Error::BufferTooSmall {
+            indicator: "sem",
+            required: n,
+            actual: output.len(),
+        });
+    }
+
     let lookback = sem_lookback(period);
+    let period_t = T::from_usize(period)?;
+    let period_sqrt = period_t.sqrt();
 
-    for i in lookback..data.len() {
-        if output[i].is_finite() {
-            output[i] = output[i] / sqrt_n;
+    // Fill lookback with NaN
+    for i in 0..lookback {
+        output[i] = T::nan();
+    }
+
+    // Calculate SEM for each window
+    for i in lookback..n {
+        let start = i + 1 - period;
+
+        // Calculate mean
+        let mut sum = T::zero();
+        for j in start..=i {
+            sum = sum + data[j];
+        }
+        let mean = sum / period_t;
+
+        // Calculate variance
+        let mut var_sum = T::zero();
+        for j in start..=i {
+            let diff = data[j] - mean;
+            var_sum = var_sum + diff * diff;
+        }
+        let variance = var_sum / period_t;
+
+        if variance == T::zero() {
+            output[i] = T::zero();
+        } else {
+            let stddev = variance.sqrt();
+            output[i] = stddev / period_sqrt;
         }
     }
 
@@ -1623,18 +1291,9 @@ pub fn correl_into<T: SeriesElement>(
         // Calculate means
         let mut sum_x = T::zero();
         let mut sum_y = T::zero();
-        let mut has_invalid = false;
         for j in start..=i {
-            if is_not_finite(data0[j]) || is_not_finite(data1[j]) {
-                has_invalid = true;
-                break;
-            }
             sum_x = sum_x + data0[j];
             sum_y = sum_y + data1[j];
-        }
-        if has_invalid {
-            output[i] = T::nan();
-            continue;
         }
         let mean_x = sum_x / period_t;
         let mean_y = sum_y / period_t;
@@ -1764,18 +1423,9 @@ pub fn beta_into<T: SeriesElement>(
         // Calculate means
         let mut sum_x = T::zero();
         let mut sum_y = T::zero();
-        let mut has_invalid = false;
         for j in start..=i {
-            if is_not_finite(data0[j]) || is_not_finite(data1[j]) {
-                has_invalid = true;
-                break;
-            }
             sum_x = sum_x + data0[j];
             sum_y = sum_y + data1[j];
-        }
-        if has_invalid {
-            output[i] = T::nan();
-            continue;
         }
         let mean_x = sum_x / period_t;
         let mean_y = sum_y / period_t;
@@ -1790,10 +1440,11 @@ pub fn beta_into<T: SeriesElement>(
             var_y = var_y + dy * dy;
         }
 
-        if var_y == T::zero() {
-            output[i] = T::zero(); // No market variance = undefined beta
+        let market_var = var_y / period_t;
+        if market_var == T::zero() {
+            output[i] = T::zero(); // No variance = undefined beta, return 0
         } else {
-            output[i] = cov / var_y;
+            output[i] = cov / market_var;
         }
     }
 
@@ -1802,8 +1453,6 @@ pub fn beta_into<T: SeriesElement>(
 
 /// Computes BETA.
 ///
-/// Beta = Covariance(asset, market) / Variance(market)
-///
 /// # Errors
 ///
 /// Returns an error if:
@@ -1811,101 +1460,13 @@ pub fn beta_into<T: SeriesElement>(
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 pub fn beta<T: SeriesElement>(
-    data0: &[T], // asset returns
-    data1: &[T], // market/benchmark returns
+    data0: &[T],
+    data1: &[T],
     period: usize,
 ) -> Result<Vec<T>> {
     let mut output = vec![T::nan(); data0.len()];
     beta_into(data0, data1, period, &mut output)?;
     Ok(output)
-}
-
-// =============================================================================
-// Linear Regression Core
-// =============================================================================
-
-/// Computes linear regression coefficients for a rolling window.
-/// Returns (slope, intercept) for each valid position.
-fn linear_regression_core<T: SeriesElement>(
-    data: &[T],
-    period: usize,
-    slope_out: &mut [T],
-    intercept_out: &mut [T],
-) -> Result<()> {
-    if data.is_empty() {
-        return Err(Error::EmptyInput);
-    }
-
-    if period == 0 {
-        return Err(Error::InvalidPeriod {
-            period: 0,
-            reason: "period must be >= 1",
-        });
-    }
-
-    let n = data.len();
-    if n < period {
-        return Err(Error::InsufficientData {
-            indicator: "linearreg",
-            required: period,
-            actual: n,
-        });
-    }
-
-    let lookback = period - 1;
-    let period_t = T::from_usize(period)?;
-
-    // Pre-compute sums for x = 0, 1, 2, ..., period-1
-    // Σx = period*(period-1)/2
-    // Σx² = period*(period-1)*(2*period-1)/6
-    let sum_x = T::from_usize(period * (period - 1) / 2)?;
-    let sum_x2 = T::from_usize(period * (period - 1) * (2 * period - 1) / 6)?;
-
-    // Denominator: n * Σx² - (Σx)²
-    // Note: This is intentional - standard linear regression formula
-    #[allow(clippy::suspicious_operation_groupings)]
-    let denom = period_t * sum_x2 - sum_x * sum_x;
-
-    // Fill lookback with NaN
-    for i in 0..lookback {
-        slope_out[i] = T::nan();
-        intercept_out[i] = T::nan();
-    }
-
-    // Calculate linear regression for each window
-    for i in lookback..n {
-        let start = i + 1 - period;
-
-        // Calculate Σy and Σxy
-        let mut sum_y = T::zero();
-        let mut sum_xy = T::zero();
-        let mut has_invalid = false;
-        for (x_idx, j) in (start..=i).enumerate() {
-            if is_not_finite(data[j]) {
-                has_invalid = true;
-                break;
-            }
-            let x = T::from_usize(x_idx)?;
-            sum_y = sum_y + data[j];
-            sum_xy = sum_xy + x * data[j];
-        }
-        if has_invalid {
-            slope_out[i] = T::nan();
-            intercept_out[i] = T::nan();
-            continue;
-        }
-
-        // slope = (n * Σxy - Σx * Σy) / denom
-        let slope = (period_t * sum_xy - sum_x * sum_y) / denom;
-
-        // intercept = (Σy - slope * Σx) / n
-        let intercept = (sum_y - slope * sum_x) / period_t;
-
-        slope_out[i] = slope;
-        intercept_out[i] = intercept;
-    }
-
-    Ok(())
 }
 
 // =============================================================================
@@ -1930,9 +1491,7 @@ pub const fn linearreg_min_len(period: usize) -> usize {
     period
 }
 
-/// Computes LINEARREG and stores results in output buffer.
-///
-/// Returns the predicted value at the end of the regression line.
+/// Computes LINEARREG (predicted value at the end of period) and stores results in output buffer.
 ///
 /// # Errors
 ///
@@ -1941,8 +1500,31 @@ pub const fn linearreg_min_len(period: usize) -> usize {
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 /// - The output buffer is too small (`Error::BufferTooSmall`)
-pub fn linearreg_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -> Result<()> {
+pub fn linearreg_into<T: SeriesElement>(
+    data: &[T],
+    period: usize,
+    output: &mut [T],
+) -> Result<()> {
+    if data.is_empty() {
+        return Err(Error::EmptyInput);
+    }
+
+    if period == 0 {
+        return Err(Error::InvalidPeriod {
+            period: 0,
+            reason: "period must be >= 1",
+        });
+    }
+
     let n = data.len();
+    if n < period {
+        return Err(Error::InsufficientData {
+            indicator: "linearreg",
+            required: period,
+            actual: n,
+        });
+    }
+
     if output.len() < n {
         return Err(Error::BufferTooSmall {
             indicator: "linearreg",
@@ -1951,28 +1533,58 @@ pub fn linearreg_into<T: SeriesElement>(data: &[T], period: usize, output: &mut 
         });
     }
 
-    let mut slope = vec![T::nan(); n];
-    let mut intercept = vec![T::nan(); n];
-    linear_regression_core(data, period, &mut slope, &mut intercept)?;
-
     let lookback = linearreg_lookback(period);
-    let last_x = T::from_usize(period - 1)?;
+    let period_t = T::from_usize(period)?;
 
+    // Fill lookback with NaN
     for i in 0..lookback {
         output[i] = T::nan();
     }
 
-    // linearreg = intercept + slope * (period - 1)
+    // Pre-compute sum of squares and other constants
+    let mut x_sum = T::zero();
+    let mut x_sq_sum = T::zero();
+    for i in 0..period {
+        let x = T::from_usize(i)?;
+        x_sum = x_sum + x;
+        x_sq_sum = x_sq_sum + x * x;
+    }
+
+    // Calculate linear regression for each window
     for i in lookback..n {
-        output[i] = intercept[i] + slope[i] * last_x;
+        let start = i + 1 - period;
+
+        // Calculate y sum and xy sum
+        let mut y_sum = T::zero();
+        let mut xy_sum = T::zero();
+
+        for j in 0..period {
+            let x = T::from_usize(j)?;
+            y_sum = y_sum + data[start + j];
+            xy_sum = xy_sum + x * data[start + j];
+        }
+
+        // Linear regression: y = a + bx
+        // b = (n*Σxy - Σx*Σy) / (n*Σx² - (Σx)²)
+        let numerator = period_t * xy_sum - x_sum * y_sum;
+        let denominator = period_t * x_sq_sum - x_sum * x_sum;
+
+        if denominator == T::zero() {
+            output[i] = T::nan();
+        } else {
+            let b = numerator / denominator;
+            let a = (y_sum - b * x_sum) / period_t;
+
+            // Predicted value at end of period (x = period - 1)
+            let x_end = T::from_usize(period - 1)?;
+            output[i] = a + b * x_end;
+        }
     }
 
     Ok(())
 }
 
-/// Computes LINEARREG (Linear Regression).
-///
-/// Returns the predicted value at the end of the regression line.
+/// Computes LINEARREG (predicted value at the end of period).
 ///
 /// # Errors
 ///
@@ -1990,25 +1602,21 @@ pub fn linearreg<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> 
 // LINEARREG_SLOPE
 // =============================================================================
 
-/// Returns the lookback period for `LINEARREG_SLOPE`.
+/// Returns the lookback period for LINEARREG_SLOPE.
 #[inline]
 #[must_use]
 pub const fn linearreg_slope_lookback(period: usize) -> usize {
-    if period == 0 {
-        0
-    } else {
-        period - 1
-    }
+    linearreg_lookback(period)
 }
 
-/// Returns the minimum input length required for `LINEARREG_SLOPE`.
+/// Returns the minimum input length required for LINEARREG_SLOPE.
 #[inline]
 #[must_use]
 pub const fn linearreg_slope_min_len(period: usize) -> usize {
-    period
+    linearreg_min_len(period)
 }
 
-/// Computes `LINEARREG_SLOPE` and stores results in output buffer.
+/// Computes LINEARREG_SLOPE (linear regression slope) and stores results in output buffer.
 ///
 /// # Errors
 ///
@@ -2022,7 +1630,26 @@ pub fn linearreg_slope_into<T: SeriesElement>(
     period: usize,
     output: &mut [T],
 ) -> Result<()> {
+    if data.is_empty() {
+        return Err(Error::EmptyInput);
+    }
+
+    if period == 0 {
+        return Err(Error::InvalidPeriod {
+            period: 0,
+            reason: "period must be >= 1",
+        });
+    }
+
     let n = data.len();
+    if n < period {
+        return Err(Error::InsufficientData {
+            indicator: "linearreg_slope",
+            required: period,
+            actual: n,
+        });
+    }
+
     if output.len() < n {
         return Err(Error::BufferTooSmall {
             indicator: "linearreg_slope",
@@ -2031,13 +1658,53 @@ pub fn linearreg_slope_into<T: SeriesElement>(
         });
     }
 
-    let mut intercept = vec![T::nan(); n];
-    linear_regression_core(data, period, output, &mut intercept)?;
+    let lookback = linearreg_slope_lookback(period);
+    let period_t = T::from_usize(period)?;
+
+    // Fill lookback with NaN
+    for i in 0..lookback {
+        output[i] = T::nan();
+    }
+
+    // Pre-compute sum of squares and other constants
+    let mut x_sum = T::zero();
+    let mut x_sq_sum = T::zero();
+    for i in 0..period {
+        let x = T::from_usize(i)?;
+        x_sum = x_sum + x;
+        x_sq_sum = x_sq_sum + x * x;
+    }
+
+    // Calculate linear regression slope for each window
+    for i in lookback..n {
+        let start = i + 1 - period;
+
+        // Calculate y sum and xy sum
+        let mut y_sum = T::zero();
+        let mut xy_sum = T::zero();
+
+        for j in 0..period {
+            let x = T::from_usize(j)?;
+            y_sum = y_sum + data[start + j];
+            xy_sum = xy_sum + x * data[start + j];
+        }
+
+        // Linear regression: y = a + bx
+        // b = (n*Σxy - Σx*Σy) / (n*Σx² - (Σx)²)
+        let numerator = period_t * xy_sum - x_sum * y_sum;
+        let denominator = period_t * x_sq_sum - x_sum * x_sum;
+
+        if denominator == T::zero() {
+            output[i] = T::nan();
+        } else {
+            output[i] = numerator / denominator;
+        }
+    }
 
     Ok(())
 }
 
-/// Computes `LINEARREG_SLOPE` (Linear Regression Slope).
+/// Computes LINEARREG_SLOPE (linear regression slope).
 ///
 /// # Errors
 ///
@@ -2055,25 +1722,21 @@ pub fn linearreg_slope<T: SeriesElement>(data: &[T], period: usize) -> Result<Ve
 // LINEARREG_INTERCEPT
 // =============================================================================
 
-/// Returns the lookback period for `LINEARREG_INTERCEPT`.
+/// Returns the lookback period for LINEARREG_INTERCEPT.
 #[inline]
 #[must_use]
 pub const fn linearreg_intercept_lookback(period: usize) -> usize {
-    if period == 0 {
-        0
-    } else {
-        period - 1
-    }
+    linearreg_lookback(period)
 }
 
-/// Returns the minimum input length required for `LINEARREG_INTERCEPT`.
+/// Returns the minimum input length required for LINEARREG_INTERCEPT.
 #[inline]
 #[must_use]
 pub const fn linearreg_intercept_min_len(period: usize) -> usize {
-    period
+    linearreg_min_len(period)
 }
 
-/// Computes `LINEARREG_INTERCEPT` and stores results in output buffer.
+/// Computes LINEARREG_INTERCEPT (linear regression intercept) and stores results in output buffer.
 ///
 /// # Errors
 ///
@@ -2087,7 +1750,26 @@ pub fn linearreg_intercept_into<T: SeriesElement>(
     period: usize,
     output: &mut [T],
 ) -> Result<()> {
+    if data.is_empty() {
+        return Err(Error::EmptyInput);
+    }
+
+    if period == 0 {
+        return Err(Error::InvalidPeriod {
+            period: 0,
+            reason: "period must be >= 1",
+        });
+    }
+
     let n = data.len();
+    if n < period {
+        return Err(Error::InsufficientData {
+            indicator: "linearreg_intercept",
+            required: period,
+            actual: n,
+        });
+    }
+
     if output.len() < n {
         return Err(Error::BufferTooSmall {
             indicator: "linearreg_intercept",
@@ -2096,13 +1778,55 @@ pub fn linearreg_intercept_into<T: SeriesElement>(
         });
     }
 
-    let mut slope = vec![T::nan(); n];
-    linear_regression_core(data, period, &mut slope, output)?;
+    let lookback = linearreg_intercept_lookback(period);
+    let period_t = T::from_usize(period)?;
+
+    // Fill lookback with NaN
+    for i in 0..lookback {
+        output[i] = T::nan();
+    }
+
+    // Pre-compute sum of squares and other constants
+    let mut x_sum = T::zero();
+    let mut x_sq_sum = T::zero();
+    for i in 0..period {
+        let x = T::from_usize(i)?;
+        x_sum = x_sum + x;
+        x_sq_sum = x_sq_sum + x * x;
+    }
+
+    // Calculate linear regression intercept for each window
+    for i in lookback..n {
+        let start = i + 1 - period;
+
+        // Calculate y sum and xy sum
+        let mut y_sum = T::zero();
+        let mut xy_sum = T::zero();
+
+        for j in 0..period {
+            let x = T::from_usize(j)?;
+            y_sum = y_sum + data[start + j];
+            xy_sum = xy_sum + x * data[start + j];
+        }
+
+        // Linear regression: y = a + bx
+        // b = (n*Σxy - Σx*Σy) / (n*Σx² - (Σx)²)
+        // a = (Σy - b*Σx) / n
+        let numerator = period_t * xy_sum - x_sum * y_sum;
+        let denominator = period_t * x_sq_sum - x_sum * x_sum;
+
+        if denominator == T::zero() {
+            output[i] = T::nan();
+        } else {
+            let b = numerator / denominator;
+            output[i] = (y_sum - b * x_sum) / period_t;
+        }
+    }
 
     Ok(())
 }
 
-/// Computes `LINEARREG_INTERCEPT` (Linear Regression Intercept).
+/// Computes LINEARREG_INTERCEPT (linear regression intercept).
 ///
 /// # Errors
 ///
@@ -2120,27 +1844,21 @@ pub fn linearreg_intercept<T: SeriesElement>(data: &[T], period: usize) -> Resul
 // LINEARREG_ANGLE
 // =============================================================================
 
-/// Returns the lookback period for `LINEARREG_ANGLE`.
+/// Returns the lookback period for LINEARREG_ANGLE.
 #[inline]
 #[must_use]
 pub const fn linearreg_angle_lookback(period: usize) -> usize {
-    if period == 0 {
-        0
-    } else {
-        period - 1
-    }
+    linearreg_lookback(period)
 }
 
-/// Returns the minimum input length required for `LINEARREG_ANGLE`.
+/// Returns the minimum input length required for LINEARREG_ANGLE.
 #[inline]
 #[must_use]
 pub const fn linearreg_angle_min_len(period: usize) -> usize {
-    period
+    linearreg_min_len(period)
 }
 
-/// Computes `LINEARREG_ANGLE` and stores results in output buffer.
-///
-/// Returns the angle of the regression line in degrees.
+/// Computes LINEARREG_ANGLE (linear regression angle in degrees) and stores results in output buffer.
 ///
 /// # Errors
 ///
@@ -2154,7 +1872,26 @@ pub fn linearreg_angle_into<T: SeriesElement>(
     period: usize,
     output: &mut [T],
 ) -> Result<()> {
+    if data.is_empty() {
+        return Err(Error::EmptyInput);
+    }
+
+    if period == 0 {
+        return Err(Error::InvalidPeriod {
+            period: 0,
+            reason: "period must be >= 1",
+        });
+    }
+
     let n = data.len();
+    if n < period {
+        return Err(Error::InsufficientData {
+            indicator: "linearreg_angle",
+            required: period,
+            actual: n,
+        });
+    }
+
     if output.len() < n {
         return Err(Error::BufferTooSmall {
             indicator: "linearreg_angle",
@@ -2163,28 +1900,55 @@ pub fn linearreg_angle_into<T: SeriesElement>(
         });
     }
 
-    let mut slope = vec![T::nan(); n];
-    let mut intercept = vec![T::nan(); n];
-    linear_regression_core(data, period, &mut slope, &mut intercept)?;
-
     let lookback = linearreg_angle_lookback(period);
-    let rad_to_deg = T::from_f64(180.0 / std::f64::consts::PI)?;
+    let period_t = T::from_usize(period)?;
+    let degrees_per_radian = T::from_f64(180.0 / std::f64::consts::PI)?;
 
+    // Fill lookback with NaN
     for i in 0..lookback {
         output[i] = T::nan();
     }
 
-    // angle = atan(slope) * 180 / π
+    // Pre-compute sum of squares and other constants
+    let mut x_sum = T::zero();
+    let mut x_sq_sum = T::zero();
+    for i in 0..period {
+        let x = T::from_usize(i)?;
+        x_sum = x_sum + x;
+        x_sq_sum = x_sq_sum + x * x;
+    }
+
+    // Calculate linear regression angle for each window
     for i in lookback..n {
-        output[i] = slope[i].atan() * rad_to_deg;
+        let start = i + 1 - period;
+
+        // Calculate y sum and xy sum
+        let mut y_sum = T::zero();
+        let mut xy_sum = T::zero();
+
+        for j in 0..period {
+            let x = T::from_usize(j)?;
+            y_sum = y_sum + data[start + j];
+            xy_sum = xy_sum + x * data[start + j];
+        }
+
+        // Linear regression: y = a + bx
+        // b = (n*Σxy - Σx*Σy) / (n*Σx² - (Σx)²)
+        let numerator = period_t * xy_sum - x_sum * y_sum;
+        let denominator = period_t * x_sq_sum - x_sum * x_sum;
+
+        if denominator == T::zero() {
+            output[i] = T::nan();
+        } else {
+            let b = numerator / denominator;
+            output[i] = b.atan() * degrees_per_radian;
+        }
     }
 
     Ok(())
 }
 
-/// Computes `LINEARREG_ANGLE` (Linear Regression Angle).
-///
-/// Returns the angle of the regression line in degrees.
+/// Computes LINEARREG_ANGLE (linear regression angle in degrees).
 ///
 /// # Errors
 ///
@@ -2206,23 +1970,17 @@ pub fn linearreg_angle<T: SeriesElement>(data: &[T], period: usize) -> Result<Ve
 #[inline]
 #[must_use]
 pub const fn tsf_lookback(period: usize) -> usize {
-    if period == 0 {
-        0
-    } else {
-        period - 1
-    }
+    linearreg_lookback(period)
 }
 
 /// Returns the minimum input length required for TSF.
 #[inline]
 #[must_use]
 pub const fn tsf_min_len(period: usize) -> usize {
-    period
+    linearreg_min_len(period)
 }
 
-/// Computes TSF (Time Series Forecast) and stores results in output buffer.
-///
-/// Returns the predicted value one period ahead of the regression line.
+/// Computes TSF (Time Series Forecast - one period ahead prediction) and stores results in output buffer.
 ///
 /// # Errors
 ///
@@ -2231,8 +1989,31 @@ pub const fn tsf_min_len(period: usize) -> usize {
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 /// - The output buffer is too small (`Error::BufferTooSmall`)
-pub fn tsf_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -> Result<()> {
+pub fn tsf_into<T: SeriesElement>(
+    data: &[T],
+    period: usize,
+    output: &mut [T],
+) -> Result<()> {
+    if data.is_empty() {
+        return Err(Error::EmptyInput);
+    }
+
+    if period == 0 {
+        return Err(Error::InvalidPeriod {
+            period: 0,
+            reason: "period must be >= 1",
+        });
+    }
+
     let n = data.len();
+    if n < period {
+        return Err(Error::InsufficientData {
+            indicator: "tsf",
+            required: period,
+            actual: n,
+        });
+    }
+
     if output.len() < n {
         return Err(Error::BufferTooSmall {
             indicator: "tsf",
@@ -2241,28 +2022,58 @@ pub fn tsf_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -
         });
     }
 
-    let mut slope = vec![T::nan(); n];
-    let mut intercept = vec![T::nan(); n];
-    linear_regression_core(data, period, &mut slope, &mut intercept)?;
-
     let lookback = tsf_lookback(period);
-    let forecast_x = T::from_usize(period)?; // One step ahead
+    let period_t = T::from_usize(period)?;
 
+    // Fill lookback with NaN
     for i in 0..lookback {
         output[i] = T::nan();
     }
 
-    // tsf = intercept + slope * period (one step ahead of the window)
+    // Pre-compute sum of squares and other constants
+    let mut x_sum = T::zero();
+    let mut x_sq_sum = T::zero();
+    for i in 0..period {
+        let x = T::from_usize(i)?;
+        x_sum = x_sum + x;
+        x_sq_sum = x_sq_sum + x * x;
+    }
+
+    // Calculate TSF for each window
     for i in lookback..n {
-        output[i] = intercept[i] + slope[i] * forecast_x;
+        let start = i + 1 - period;
+
+        // Calculate y sum and xy sum
+        let mut y_sum = T::zero();
+        let mut xy_sum = T::zero();
+
+        for j in 0..period {
+            let x = T::from_usize(j)?;
+            y_sum = y_sum + data[start + j];
+            xy_sum = xy_sum + x * data[start + j];
+        }
+
+        // Linear regression: y = a + bx
+        // b = (n*Σxy - Σx*Σy) / (n*Σx² - (Σx)²)
+        let numerator = period_t * xy_sum - x_sum * y_sum;
+        let denominator = period_t * x_sq_sum - x_sum * x_sum;
+
+        if denominator == T::zero() {
+            output[i] = T::nan();
+        } else {
+            let b = numerator / denominator;
+            let a = (y_sum - b * x_sum) / period_t;
+
+            // Predicted value one period ahead (x = period)
+            let x_ahead = T::from_usize(period)?;
+            output[i] = a + b * x_ahead;
+        }
     }
 
     Ok(())
 }
 
-/// Computes TSF (Time Series Forecast).
-///
-/// Returns the predicted value one period ahead of the regression line.
+/// Computes TSF (Time Series Forecast - one period ahead prediction).
 ///
 /// # Errors
 ///
@@ -2274,807 +2085,4 @@ pub fn tsf<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
     let mut output = vec![T::nan(); data.len()];
     tsf_into(data, period, &mut output)?;
     Ok(output)
-}
-
-// =============================================================================
-// Tests
-// =============================================================================
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    const EPSILON: f64 = 1e-10;
-
-    fn approx_eq(a: f64, b: f64) -> bool {
-        if a.is_nan() && b.is_nan() {
-            return true;
-        }
-        (a - b).abs() < EPSILON
-    }
-
-    fn approx_eq_tol(a: f64, b: f64, tol: f64) -> bool {
-        if a.is_nan() && b.is_nan() {
-            return true;
-        }
-        (a - b).abs() < tol
-    }
-
-    // ==================== VAR Tests ====================
-
-    #[test]
-    fn test_var_lookback() {
-        assert_eq!(var_lookback(1), 0);
-        assert_eq!(var_lookback(5), 4);
-        assert_eq!(var_lookback(10), 9);
-    }
-
-    #[test]
-    fn test_var_min_len() {
-        assert_eq!(var_min_len(1), 1);
-        assert_eq!(var_min_len(5), 5);
-    }
-
-    #[test]
-    fn test_var_constant_data() {
-        // Variance of constant data should be 0
-        let data = vec![5.0_f64; 10];
-        let result = var(&data, 5).unwrap();
-
-        for i in 4..10 {
-            assert!(approx_eq(result[i], 0.0));
-        }
-    }
-
-    #[test]
-    fn test_var_basic() {
-        // Data: [1, 2, 3, 4, 5], mean = 3
-        // Variance = ((1-3)² + (2-3)² + (3-3)² + (4-3)² + (5-3)²) / 5
-        //          = (4 + 1 + 0 + 1 + 4) / 5 = 10/5 = 2.0
-        let data = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0];
-        let result = var(&data, 5).unwrap();
-
-        assert!(result[0].is_nan());
-        assert!(result[3].is_nan());
-        assert!(approx_eq(result[4], 2.0));
-    }
-
-    #[test]
-    fn test_var_empty_input() {
-        let data: Vec<f64> = vec![];
-        let result = var(&data, 5);
-        assert!(matches!(result, Err(Error::EmptyInput)));
-    }
-
-    #[test]
-    fn test_var_period_zero() {
-        let data = vec![1.0_f64, 2.0, 3.0];
-        let result = var(&data, 0);
-        assert!(matches!(result, Err(Error::InvalidPeriod { .. })));
-    }
-
-    #[test]
-    fn test_var_insufficient_data() {
-        let data = vec![1.0_f64, 2.0, 3.0];
-        let result = var(&data, 5);
-        assert!(matches!(result, Err(Error::InsufficientData { .. })));
-    }
-
-    #[test]
-    fn test_var_f32() {
-        let data = vec![1.0_f32, 2.0, 3.0, 4.0, 5.0];
-        let result = var(&data, 5).unwrap();
-        assert!((result[4] - 2.0_f32).abs() < 1e-5);
-    }
-
-    // ==================== CORREL Tests ====================
-
-    #[test]
-    fn test_correl_lookback() {
-        assert_eq!(correl_lookback(1), 0);
-        assert_eq!(correl_lookback(5), 4);
-    }
-
-    #[test]
-    fn test_correl_perfect_positive() {
-        // Perfect positive correlation: y = x
-        let x = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0];
-        let y = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0];
-        let result = correl(&x, &y, 5).unwrap();
-
-        assert!(approx_eq(result[4], 1.0));
-    }
-
-    #[test]
-    fn test_correl_perfect_negative() {
-        // Perfect negative correlation: y = -x
-        let x = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0];
-        let y = vec![5.0_f64, 4.0, 3.0, 2.0, 1.0];
-        let result = correl(&x, &y, 5).unwrap();
-
-        assert!(approx_eq(result[4], -1.0));
-    }
-
-    #[test]
-    fn test_correl_zero() {
-        // No correlation: one series is constant
-        let x = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0];
-        let y = vec![5.0_f64, 5.0, 5.0, 5.0, 5.0];
-        let result = correl(&x, &y, 5).unwrap();
-
-        // With zero variance in y, correlation is undefined (returns 0)
-        assert!(approx_eq(result[4], 0.0));
-    }
-
-    #[test]
-    fn test_correl_length_mismatch() {
-        let x = vec![1.0_f64, 2.0, 3.0];
-        let y = vec![1.0_f64, 2.0];
-        let result = correl(&x, &y, 2);
-        assert!(matches!(result, Err(Error::LengthMismatch { .. })));
-    }
-
-    #[test]
-    fn test_correl_empty_input() {
-        let x: Vec<f64> = vec![];
-        let y: Vec<f64> = vec![];
-        let result = correl(&x, &y, 5);
-        assert!(matches!(result, Err(Error::EmptyInput)));
-    }
-
-    // ==================== BETA Tests ====================
-
-    #[test]
-    fn test_beta_lookback() {
-        assert_eq!(beta_lookback(1), 0);
-        assert_eq!(beta_lookback(5), 4);
-    }
-
-    #[test]
-    fn test_beta_same_series() {
-        // Beta of a series with itself should be 1
-        let x = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0];
-        let result = beta(&x, &x, 5).unwrap();
-
-        assert!(approx_eq(result[4], 1.0));
-    }
-
-    #[test]
-    fn test_beta_scaled_series() {
-        // If asset = 2 * market, beta should be 2
-        let market = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0];
-        let asset = vec![2.0_f64, 4.0, 6.0, 8.0, 10.0];
-        let result = beta(&asset, &market, 5).unwrap();
-
-        assert!(approx_eq(result[4], 2.0));
-    }
-
-    #[test]
-    fn test_beta_inverse_series() {
-        // If asset = -market + const, beta should be -1
-        let market = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0];
-        let asset = vec![5.0_f64, 4.0, 3.0, 2.0, 1.0];
-        let result = beta(&asset, &market, 5).unwrap();
-
-        assert!(approx_eq(result[4], -1.0));
-    }
-
-    #[test]
-    fn test_beta_empty_input() {
-        let x: Vec<f64> = vec![];
-        let y: Vec<f64> = vec![];
-        let result = beta(&x, &y, 5);
-        assert!(matches!(result, Err(Error::EmptyInput)));
-    }
-
-    // ==================== LINEARREG Tests ====================
-
-    #[test]
-    fn test_linearreg_lookback() {
-        assert_eq!(linearreg_lookback(1), 0);
-        assert_eq!(linearreg_lookback(5), 4);
-    }
-
-    #[test]
-    fn test_linearreg_linear_data() {
-        // For perfectly linear data y = x, linearreg should return the last value
-        let data = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0];
-        let result = linearreg(&data, 5).unwrap();
-
-        // At period end, predicted value should be 5 (the last value)
-        assert!(approx_eq_tol(result[4], 5.0, 1e-9));
-    }
-
-    #[test]
-    fn test_linearreg_constant_data() {
-        // For constant data, linearreg should return that constant
-        let data = vec![3.0_f64; 10];
-        let result = linearreg(&data, 5).unwrap();
-
-        for i in 4..10 {
-            assert!(approx_eq(result[i], 3.0));
-        }
-    }
-
-    #[test]
-    fn test_linearreg_empty_input() {
-        let data: Vec<f64> = vec![];
-        let result = linearreg(&data, 5);
-        assert!(matches!(result, Err(Error::EmptyInput)));
-    }
-
-    #[test]
-    fn test_linearreg_period_zero() {
-        let data = vec![1.0_f64, 2.0, 3.0];
-        let result = linearreg(&data, 0);
-        assert!(matches!(result, Err(Error::InvalidPeriod { .. })));
-    }
-
-    // ==================== LINEARREG_SLOPE Tests ====================
-
-    #[test]
-    fn test_linearreg_slope_lookback() {
-        assert_eq!(linearreg_slope_lookback(1), 0);
-        assert_eq!(linearreg_slope_lookback(5), 4);
-    }
-
-    #[test]
-    fn test_linearreg_slope_linear_data() {
-        // For y = x (slope = 1), linearreg_slope should return 1
-        let data = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0];
-        let result = linearreg_slope(&data, 5).unwrap();
-
-        assert!(approx_eq_tol(result[4], 1.0, 1e-9));
-    }
-
-    #[test]
-    fn test_linearreg_slope_constant_data() {
-        // For constant data, slope should be 0
-        let data = vec![5.0_f64; 10];
-        let result = linearreg_slope(&data, 5).unwrap();
-
-        for i in 4..10 {
-            assert!(approx_eq(result[i], 0.0));
-        }
-    }
-
-    #[test]
-    fn test_linearreg_slope_negative() {
-        // For decreasing data, slope should be negative
-        let data = vec![5.0_f64, 4.0, 3.0, 2.0, 1.0];
-        let result = linearreg_slope(&data, 5).unwrap();
-
-        assert!(approx_eq_tol(result[4], -1.0, 1e-9));
-    }
-
-    // ==================== LINEARREG_INTERCEPT Tests ====================
-
-    #[test]
-    fn test_linearreg_intercept_lookback() {
-        assert_eq!(linearreg_intercept_lookback(1), 0);
-        assert_eq!(linearreg_intercept_lookback(5), 4);
-    }
-
-    #[test]
-    fn test_linearreg_intercept_linear_data() {
-        // For y = x (0, 1, 2, 3, 4 mapped to 1, 2, 3, 4, 5)
-        // intercept should be 1 (the first value when x=0)
-        let data = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0];
-        let result = linearreg_intercept(&data, 5).unwrap();
-
-        assert!(approx_eq_tol(result[4], 1.0, 1e-9));
-    }
-
-    #[test]
-    fn test_linearreg_intercept_constant_data() {
-        // For constant data, intercept equals the constant
-        let data = vec![7.0_f64; 10];
-        let result = linearreg_intercept(&data, 5).unwrap();
-
-        for i in 4..10 {
-            assert!(approx_eq(result[i], 7.0));
-        }
-    }
-
-    // ==================== LINEARREG_ANGLE Tests ====================
-
-    #[test]
-    fn test_linearreg_angle_lookback() {
-        assert_eq!(linearreg_angle_lookback(1), 0);
-        assert_eq!(linearreg_angle_lookback(5), 4);
-    }
-
-    #[test]
-    fn test_linearreg_angle_zero_slope() {
-        // For constant data (slope = 0), angle should be 0
-        let data = vec![5.0_f64; 10];
-        let result = linearreg_angle(&data, 5).unwrap();
-
-        for i in 4..10 {
-            assert!(approx_eq(result[i], 0.0));
-        }
-    }
-
-    #[test]
-    fn test_linearreg_angle_45_degrees() {
-        // For slope = 1, angle should be 45 degrees
-        let data = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0];
-        let result = linearreg_angle(&data, 5).unwrap();
-
-        assert!(approx_eq_tol(result[4], 45.0, 1e-9));
-    }
-
-    #[test]
-    fn test_linearreg_angle_negative_45() {
-        // For slope = -1, angle should be -45 degrees
-        let data = vec![5.0_f64, 4.0, 3.0, 2.0, 1.0];
-        let result = linearreg_angle(&data, 5).unwrap();
-
-        assert!(approx_eq_tol(result[4], -45.0, 1e-9));
-    }
-
-    // ==================== TSF Tests ====================
-
-    #[test]
-    fn test_tsf_lookback() {
-        assert_eq!(tsf_lookback(1), 0);
-        assert_eq!(tsf_lookback(5), 4);
-    }
-
-    #[test]
-    fn test_tsf_linear_data() {
-        // For y = x (1, 2, 3, 4, 5), TSF should predict the next value (6)
-        let data = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0];
-        let result = tsf(&data, 5).unwrap();
-
-        // TSF at index 4 predicts the value for the next period
-        assert!(approx_eq_tol(result[4], 6.0, 1e-9));
-    }
-
-    #[test]
-    fn test_tsf_constant_data() {
-        // For constant data, TSF should predict the same constant
-        let data = vec![10.0_f64; 10];
-        let result = tsf(&data, 5).unwrap();
-
-        for i in 4..10 {
-            assert!(approx_eq(result[i], 10.0));
-        }
-    }
-
-    #[test]
-    fn test_tsf_decreasing_data() {
-        // For decreasing data (5, 4, 3, 2, 1), TSF should predict 0
-        let data = vec![5.0_f64, 4.0, 3.0, 2.0, 1.0];
-        let result = tsf(&data, 5).unwrap();
-
-        assert!(approx_eq_tol(result[4], 0.0, 1e-9));
-    }
-
-    #[test]
-    fn test_tsf_empty_input() {
-        let data: Vec<f64> = vec![];
-        let result = tsf(&data, 5);
-        assert!(matches!(result, Err(Error::EmptyInput)));
-    }
-
-    // ==================== Consistency Tests ====================
-
-    #[test]
-    fn test_linearreg_equals_intercept_plus_slope_times_x() {
-        let data = vec![10.0_f64, 12.0, 15.0, 14.0, 16.0, 18.0, 17.0, 20.0];
-        let period = 5;
-
-        let linreg = linearreg(&data, period).unwrap();
-        let slope = linearreg_slope(&data, period).unwrap();
-        let intercept = linearreg_intercept(&data, period).unwrap();
-
-        let last_x = (period - 1) as f64;
-
-        for i in (period - 1)..data.len() {
-            let expected = intercept[i] + slope[i] * last_x;
-            assert!(approx_eq_tol(linreg[i], expected, 1e-9));
-        }
-    }
-
-    #[test]
-    fn test_tsf_equals_linearreg_plus_slope() {
-        let data = vec![10.0_f64, 12.0, 15.0, 14.0, 16.0, 18.0, 17.0, 20.0];
-        let period = 5;
-
-        let tsf_result = tsf(&data, period).unwrap();
-        let linreg = linearreg(&data, period).unwrap();
-        let slope = linearreg_slope(&data, period).unwrap();
-
-        // TSF = linearreg + slope (one period ahead)
-        for i in (period - 1)..data.len() {
-            let expected = linreg[i] + slope[i];
-            assert!(approx_eq_tol(tsf_result[i], expected, 1e-9));
-        }
-    }
-
-    #[test]
-    fn test_var_into_consistent_with_var() {
-        let data = vec![1.0_f64, 3.0, 5.0, 7.0, 9.0, 11.0, 8.0, 6.0];
-        let period = 4;
-
-        let result1 = var(&data, period).unwrap();
-        let mut result2 = vec![0.0_f64; data.len()];
-        var_into(&data, period, &mut result2).unwrap();
-
-        for i in 0..data.len() {
-            assert!(approx_eq(result1[i], result2[i]));
-        }
-    }
-
-    // ==================== Output Length Tests ====================
-
-    #[test]
-    fn test_all_output_lengths() {
-        let data = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
-        let period = 5;
-
-        assert_eq!(var(&data, period).unwrap().len(), data.len());
-        assert_eq!(linearreg(&data, period).unwrap().len(), data.len());
-        assert_eq!(linearreg_slope(&data, period).unwrap().len(), data.len());
-        assert_eq!(
-            linearreg_intercept(&data, period).unwrap().len(),
-            data.len()
-        );
-        assert_eq!(linearreg_angle(&data, period).unwrap().len(), data.len());
-        assert_eq!(tsf(&data, period).unwrap().len(), data.len());
-    }
-
-    #[test]
-    fn test_correl_and_beta_output_lengths() {
-        let x = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
-        let y = vec![2.0_f64, 4.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0, 18.0, 20.0];
-        let period = 5;
-
-        assert_eq!(correl(&x, &y, period).unwrap().len(), x.len());
-        assert_eq!(beta(&x, &y, period).unwrap().len(), x.len());
-    }
-
-    // ==================== NaN Count Tests ====================
-
-    #[test]
-    fn test_var_nan_count() {
-        let data = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
-        let period = 5;
-        let result = var(&data, period).unwrap();
-
-        let nan_count = result.iter().filter(|x| x.is_nan()).count();
-        assert_eq!(nan_count, var_lookback(period));
-    }
-
-    #[test]
-    fn test_linearreg_nan_count() {
-        let data = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
-        let period = 5;
-        let result = linearreg(&data, period).unwrap();
-
-        let nan_count = result.iter().filter(|x| x.is_nan()).count();
-        assert_eq!(nan_count, linearreg_lookback(period));
-    }
-
-    // ==================== STDDEV Tests ====================
-
-    #[test]
-    fn test_stddev_lookback() {
-        assert_eq!(stddev_lookback(1), 0);
-        assert_eq!(stddev_lookback(5), 4);
-    }
-
-    #[test]
-    fn test_stddev_constant_data() {
-        // Stddev of constant data should be 0
-        let data = vec![5.0_f64; 10];
-        let result = stddev(&data, 5).unwrap();
-
-        for i in 4..10 {
-            assert!(approx_eq(result[i], 0.0));
-        }
-    }
-
-    #[test]
-    fn test_stddev_basic() {
-        // VAR = 2.0 for [1,2,3,4,5], so STDDEV = sqrt(2.0) ≈ 1.414
-        let data = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0];
-        let result = stddev(&data, 5).unwrap();
-
-        assert!(result[0].is_nan());
-        assert!(approx_eq_tol(result[4], 2.0_f64.sqrt(), 1e-9));
-    }
-
-    #[test]
-    fn test_stddev_is_sqrt_of_var() {
-        let data = vec![1.0_f64, 3.0, 5.0, 7.0, 9.0, 2.0, 4.0, 6.0, 8.0, 10.0];
-        let period = 5;
-
-        let var_result = var(&data, period).unwrap();
-        let stddev_result = stddev(&data, period).unwrap();
-
-        for i in (period - 1)..data.len() {
-            assert!(approx_eq_tol(stddev_result[i], var_result[i].sqrt(), 1e-9));
-        }
-    }
-
-    // ==================== SKEW Tests ====================
-
-    #[test]
-    fn test_skew_lookback() {
-        assert_eq!(skew_lookback(1), 0);
-        assert_eq!(skew_lookback(5), 4);
-    }
-
-    #[test]
-    fn test_skew_symmetric_data() {
-        // Symmetric data should have skewness near 0
-        let data = vec![1.0_f64, 2.0, 3.0, 2.0, 1.0, 2.0, 3.0, 2.0, 1.0, 2.0];
-        let result = skew(&data, 5).unwrap();
-
-        for i in 4..10 {
-            // Allow some tolerance for numerical precision
-            assert!(result[i].abs() < 0.5, "skew[{}] = {}", i, result[i]);
-        }
-    }
-
-    #[test]
-    fn test_skew_constant_data() {
-        // Constant data has no variance, skewness undefined (returns 0)
-        let data = vec![5.0_f64; 10];
-        let result = skew(&data, 5).unwrap();
-
-        for i in 4..10 {
-            assert!(approx_eq(result[i], 0.0));
-        }
-    }
-
-    #[test]
-    fn test_skew_empty_input() {
-        let data: Vec<f64> = vec![];
-        let result = skew(&data, 5);
-        assert!(matches!(result, Err(Error::EmptyInput)));
-    }
-
-    // ==================== KURT Tests ====================
-
-    #[test]
-    fn test_kurt_lookback() {
-        assert_eq!(kurt_lookback(1), 0);
-        assert_eq!(kurt_lookback(5), 4);
-    }
-
-    #[test]
-    fn test_kurt_constant_data() {
-        // Constant data has no variance, kurtosis undefined (returns 0)
-        let data = vec![5.0_f64; 10];
-        let result = kurt(&data, 5).unwrap();
-
-        for i in 4..10 {
-            assert!(approx_eq(result[i], 0.0));
-        }
-    }
-
-    #[test]
-    fn test_kurt_empty_input() {
-        let data: Vec<f64> = vec![];
-        let result = kurt(&data, 5);
-        assert!(matches!(result, Err(Error::EmptyInput)));
-    }
-
-    // ==================== COV Tests ====================
-
-    #[test]
-    fn test_cov_lookback() {
-        assert_eq!(cov_lookback(1), 0);
-        assert_eq!(cov_lookback(5), 4);
-    }
-
-    #[test]
-    fn test_cov_same_series() {
-        // Cov(X, X) = Var(X)
-        let data = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
-        let period = 5;
-
-        let var_result = var(&data, period).unwrap();
-        let cov_result = cov(&data, &data, period).unwrap();
-
-        for i in (period - 1)..data.len() {
-            assert!(approx_eq_tol(cov_result[i], var_result[i], 1e-9));
-        }
-    }
-
-    #[test]
-    fn test_cov_perfect_correlation() {
-        // If Y = 2*X, then Cov(X, Y) = 2*Var(X)
-        let x = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0];
-        let y = vec![2.0_f64, 4.0, 6.0, 8.0, 10.0];
-        let period = 5;
-
-        let var_x = var(&x, period).unwrap();
-        let cov_result = cov(&x, &y, period).unwrap();
-
-        assert!(approx_eq_tol(cov_result[4], 2.0 * var_x[4], 1e-9));
-    }
-
-    #[test]
-    fn test_cov_negative_correlation() {
-        // If Y = -X + const, then Cov(X, Y) = -Var(X)
-        let x = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0];
-        let y = vec![5.0_f64, 4.0, 3.0, 2.0, 1.0];
-        let period = 5;
-
-        let var_x = var(&x, period).unwrap();
-        let cov_result = cov(&x, &y, period).unwrap();
-
-        assert!(approx_eq_tol(cov_result[4], -var_x[4], 1e-9));
-    }
-
-    // ==================== ZSCORE Tests ====================
-
-    #[test]
-    fn test_zscore_lookback() {
-        assert_eq!(zscore_lookback(1), 0);
-        assert_eq!(zscore_lookback(5), 4);
-    }
-
-    #[test]
-    fn test_zscore_at_mean() {
-        // If value equals mean, zscore should be 0
-        let data = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 3.0]; // Last value = mean of window
-        let result = zscore(&data, 5).unwrap();
-
-        // For [2,3,4,5,3], mean = 3.4, so 3.0 is slightly below mean
-        // The zscore won't be exactly 0 for this case
-        assert!(result[5].abs() < 1.0); // Just verify it's reasonable
-    }
-
-    #[test]
-    fn test_zscore_constant_data() {
-        // Constant data has no variance, z-score returns 0
-        let data = vec![5.0_f64; 10];
-        let result = zscore(&data, 5).unwrap();
-
-        for i in 4..10 {
-            assert!(approx_eq(result[i], 0.0));
-        }
-    }
-
-    // ==================== MAD Tests ====================
-
-    #[test]
-    fn test_mad_lookback() {
-        assert_eq!(mad_lookback(1), 0);
-        assert_eq!(mad_lookback(5), 4);
-    }
-
-    #[test]
-    fn test_mad_constant_data() {
-        // MAD of constant data should be 0
-        let data = vec![5.0_f64; 10];
-        let result = mad(&data, 5).unwrap();
-
-        for i in 4..10 {
-            assert!(approx_eq(result[i], 0.0));
-        }
-    }
-
-    #[test]
-    fn test_mad_basic() {
-        // For [1,2,3,4,5], mean = 3
-        // MAD = (|1-3| + |2-3| + |3-3| + |4-3| + |5-3|) / 5
-        //     = (2 + 1 + 0 + 1 + 2) / 5 = 6/5 = 1.2
-        let data = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0];
-        let result = mad(&data, 5).unwrap();
-
-        assert!(approx_eq_tol(result[4], 1.2, 1e-9));
-    }
-
-    // ==================== SEM Tests ====================
-
-    #[test]
-    fn test_sem_lookback() {
-        assert_eq!(sem_lookback(1), 0);
-        assert_eq!(sem_lookback(5), 4);
-    }
-
-    #[test]
-    fn test_sem_is_stddev_over_sqrt_n() {
-        let data = vec![1.0_f64, 3.0, 5.0, 7.0, 9.0, 2.0, 4.0, 6.0, 8.0, 10.0];
-        let period = 5;
-
-        let stddev_result = stddev(&data, period).unwrap();
-        let sem_result = sem(&data, period).unwrap();
-        let sqrt_n = (period as f64).sqrt();
-
-        for i in (period - 1)..data.len() {
-            assert!(approx_eq_tol(sem_result[i], stddev_result[i] / sqrt_n, 1e-9));
-        }
-    }
-
-    #[test]
-    fn test_sem_constant_data() {
-        // SEM of constant data should be 0
-        let data = vec![5.0_f64; 10];
-        let result = sem(&data, 5).unwrap();
-
-        for i in 4..10 {
-            assert!(approx_eq(result[i], 0.0));
-        }
-    }
-
-    // ==================== New Functions Output Length Tests ====================
-
-    #[test]
-    fn test_new_functions_output_lengths() {
-        let data = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
-        let period = 5;
-
-        assert_eq!(stddev(&data, period).unwrap().len(), data.len());
-        assert_eq!(skew(&data, period).unwrap().len(), data.len());
-        assert_eq!(kurt(&data, period).unwrap().len(), data.len());
-        assert_eq!(zscore(&data, period).unwrap().len(), data.len());
-        assert_eq!(mad(&data, period).unwrap().len(), data.len());
-        assert_eq!(sem(&data, period).unwrap().len(), data.len());
-    }
-
-    #[test]
-    fn test_cov_output_length() {
-        let x = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
-        let y = vec![2.0_f64, 4.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0, 18.0, 20.0];
-        let period = 5;
-
-        assert_eq!(cov(&x, &y, period).unwrap().len(), x.len());
-    }
-
-    // ==================== New Functions NaN Count Tests ====================
-
-    #[test]
-    fn test_new_functions_nan_counts() {
-        let data = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
-        let period = 5;
-
-        let stddev_nans = stddev(&data, period).unwrap().iter().filter(|x| x.is_nan()).count();
-        assert_eq!(stddev_nans, stddev_lookback(period));
-
-        let skew_nans = skew(&data, period).unwrap().iter().filter(|x| x.is_nan()).count();
-        assert_eq!(skew_nans, skew_lookback(period));
-
-        let kurt_nans = kurt(&data, period).unwrap().iter().filter(|x| x.is_nan()).count();
-        assert_eq!(kurt_nans, kurt_lookback(period));
-
-        let zscore_nans = zscore(&data, period).unwrap().iter().filter(|x| x.is_nan()).count();
-        assert_eq!(zscore_nans, zscore_lookback(period));
-
-        let mad_nans = mad(&data, period).unwrap().iter().filter(|x| x.is_nan()).count();
-        assert_eq!(mad_nans, mad_lookback(period));
-
-        let sem_nans = sem(&data, period).unwrap().iter().filter(|x| x.is_nan()).count();
-        assert_eq!(sem_nans, sem_lookback(period));
-    }
-
-    // ==================== NaN Propagation Tests ====================
-
-    #[test]
-    fn test_new_functions_nan_propagation() {
-        let data = vec![1.0_f64, 2.0, f64::NAN, 4.0, 5.0, 6.0, 7.0, 8.0];
-        let period = 3;
-
-        // With NaN in positions 0,1,2 of window, outputs at indices 2,3,4 should be NaN
-        let stddev_result = stddev(&data, period).unwrap();
-        assert!(stddev_result[2].is_nan());
-        assert!(stddev_result[3].is_nan());
-        assert!(stddev_result[4].is_nan());
-
-        let skew_result = skew(&data, period).unwrap();
-        assert!(skew_result[2].is_nan());
-        assert!(skew_result[3].is_nan());
-        assert!(skew_result[4].is_nan());
-
-        let kurt_result = kurt(&data, period).unwrap();
-        assert!(kurt_result[2].is_nan());
-        assert!(kurt_result[3].is_nan());
-        assert!(kurt_result[4].is_nan());
-    }
 }

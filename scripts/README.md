@@ -43,6 +43,33 @@ ROUNDS=5 COOLDOWN=60 ./scripts/run_benchmarks.sh
 - Aggregated results: `target/criterion/aggregated/`
 - Quality report printed to console
 
+### `compare_benchmarks.py`
+
+Compare benchmark results between two baseline runs (before/after changes).
+
+**Usage:**
+```bash
+# Compare old baseline (round) with new baseline (after)
+python3 scripts/compare_benchmarks.py \
+    --baseline-old round \
+    --baseline-new after \
+    --rounds 3
+```
+
+**Options:**
+- `--baseline-old` - Old baseline prefix (before changes)
+- `--baseline-new` - New baseline prefix (after changes)
+- `--rounds` - Number of rounds for each baseline (default: 3)
+- `--results-dir` - Criterion results directory (default: `target/criterion`)
+
+**Output:**
+- Comparison table showing old/new times and % change
+- Summary: improved/neutral/regressed counts
+- Status indicators:
+  - ✓ Improved: >2% faster
+  - ≈ Neutral: ±2% change
+  - ✗ Regressed: >2% slower
+
 ### `aggregate_benchmarks.py`
 
 Statistical aggregation of multi-round benchmark results.
@@ -77,16 +104,13 @@ python3 scripts/aggregate_benchmarks.py \
 
 ## Benchmark Groups
 
-Indicators are organized into 8 groups for hybrid execution:
+Indicators are organized into 3 groups for high-parallelism execution (up to 12 cores):
 
-1. **moving_averages**: SMA, EMA, WMA, DEMA, TEMA, TRIMA
-2. **momentum**: RSI, ROC, MOM, CMO, APO, TRIX
-3. **volatility**: ATR, TRANGE, BOLLINGER
-4. **trend**: ADX, DX, AROON
-5. **oscillators**: CCI, MFI, WILLIAMS_R, BOP, ULTOSC
-6. **stochastic**: STOCHASTIC, STOCHASTIC_FAST
-7. **volume_price**: AD, OBV, MIDPOINT, MIDPRICE
-8. **advanced**: VAR, TSF, LINEARREG, KAMA, T3, MACD
+1. **fast_indicators** (12): SMA, EMA, WMA, DEMA, TEMA, TRIMA, RSI, MOM, ROC, CMO, APO, TRIX
+2. **simple_volume** (12): ATR, TRANGE, BOLLINGER, BOP, AD, OBV, MIDPOINT, MIDPRICE, VAR, TSF, LINEARREG, T3
+3. **complex_indicators** (11): ADX, DX, AROON, CCI, MFI, WILLIAMS_R, STOCHASTIC, STOCHASTIC_FAST, MACD, KAMA, ULTOSC
+
+This configuration maximizes core utilization (12 of 16 cores) while maintaining thermal headroom.
 
 ## Quality Metrics
 
@@ -98,6 +122,77 @@ The aggregation script reports Coefficient of Variation (CV) for each benchmark:
 | 5-10% | Good | Acceptable variance |
 | 10-20% | Acceptable | Usable but not ideal |
 | > 20% | ⚠ Poor | Investigate thermal/contention issues |
+
+## Comparing Before/After Changes
+
+### Complete Workflow
+
+**1. Run baseline benchmarks (before changes):**
+```bash
+# Run with default prefix "round"
+./scripts/run_benchmarks.sh
+
+# This creates: round1_*, round2_*, round3_*
+```
+
+**2. Make your code changes:**
+```bash
+# Edit indicator logic, optimizations, etc.
+git add -A
+git commit -m "Update indicator logic"
+```
+
+**3. Run benchmarks with new baseline name:**
+```bash
+# Use a different prefix for after changes
+BASELINE_PREFIX="after" ./scripts/run_benchmarks.sh
+
+# This creates: after1_*, after2_*, after3_*
+```
+
+**4. Compare results:**
+```bash
+python3 scripts/compare_benchmarks.py \
+    --baseline-old round \
+    --baseline-new after \
+    --rounds 3
+```
+
+**Example Output:**
+```
+Benchmark                      Old          New       Change   %Change       Status
+-------------------------------------------------------------------------------------
+sma                        115.34 µs    113.20 µs    -2.14 µs    -1.86%  ✓ Improved
+ema                        140.30 µs    140.50 µs    +0.20 µs    +0.14%  ≈ Neutral
+adx                        452.86 µs    460.12 µs    +7.26 µs    +1.60%  ≈ Neutral
+mfi                          8.09 ms      7.95 ms   -140.00 µs    -1.73%  ≈ Neutral
+
+SUMMARY
+-------------------------------------------------------------------------------------
+Total benchmarks: 35
+  Improved (>2% faster):    5 (14.3%)
+  Neutral (±2%):           28 (80.0%)
+  Regressed (>2% slower):   2 (5.7%)
+```
+
+### Alternative: Individual Benchmark Comparison
+
+For quick checks without re-running full suite:
+
+```bash
+# Compare single indicator
+cargo bench --bench talib_comparison -- sma --baseline round1_moving_averages
+
+# Compare multiple indicators
+cargo bench --bench talib_comparison -- "^(sma|ema|wma)/" --baseline round1_moving_averages
+```
+
+Criterion shows inline comparison:
+```
+sma/fast-ta/100000  time:   [113.20 µs 113.34 µs 113.48 µs]
+                    change: [-2.12% -1.89% -1.65%] (p = 0.00 < 0.05)
+                    Performance has improved.
+```
 
 ## Troubleshooting
 

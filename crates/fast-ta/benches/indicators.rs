@@ -25,9 +25,9 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use std::time::Duration;
 use fast_ta::indicators::{
-    ad::ad, adx::adx, atr::atr, bollinger::bollinger, donchian::donchian, ema::ema, macd::macd, obv::obv,
-    price_transform::{avgprice, medprice, typprice, wclprice},
-    roc::roc, rsi::rsi, sma::sma, stochastic::stochastic, vwap::vwap, williams_r::williams_r,
+    ad::ad, adx::adx, atr::atr, bollinger::bollinger, donchian::donchian, ema::ema, macd::macd, mfi::mfi,
+    obv::obv, price_transform::{avgprice, medprice, typprice, wclprice},
+    roc::roc, rsi::rsi, sma::sma, statistics::var, stochastic::stochastic, vwap::vwap, williams_r::williams_r,
 };
 
 /// Generate synthetic OHLCV data for benchmarks.
@@ -345,6 +345,34 @@ fn bench_roc(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_mfi(c: &mut Criterion) {
+    let mut group = c.benchmark_group("mfi");
+    for &size in SIZES {
+        let (_, high, low, close, volume) = generate_ohlcv(size);
+        group.throughput(Throughput::Elements(size as u64));
+        group.bench_with_input(
+            BenchmarkId::from_parameter(size),
+            &(high, low, close, volume),
+            |b, (h, l, c, v)| {
+                b.iter(|| mfi(black_box(h), black_box(l), black_box(c), black_box(v), black_box(14)));
+            },
+        );
+    }
+    group.finish();
+}
+
+fn bench_var(c: &mut Criterion) {
+    let mut group = c.benchmark_group("var");
+    for &size in SIZES {
+        let data = generate_series(size);
+        group.throughput(Throughput::Elements(size as u64));
+        group.bench_with_input(BenchmarkId::from_parameter(size), &data, |b, data| {
+            b.iter(|| var(black_box(data), black_box(20)));
+        });
+    }
+    group.finish();
+}
+
 // Standard benchmarks with default configuration
 criterion_group!(
     benches,
@@ -365,6 +393,8 @@ criterion_group!(
     bench_wclprice,
     bench_ad,
     bench_roc,
+    bench_mfi,
+    bench_var,
 );
 
 // Slower benchmarks need extended measurement time

@@ -42,35 +42,56 @@ class BenchmarkAggregator:
             return {}
 
         for benchmark_dir in self.results_dir.iterdir():
-            if not benchmark_dir.is_dir():
+            if not benchmark_dir.is_dir() or benchmark_dir.name.startswith('.'):
                 continue
 
             benchmark_name = benchmark_dir.name
             times = []
 
-            # Look for baseline results from each round
+            # Criterion nests results: benchmark/implementation/size/baseline/base/estimates.json
+            # We need to search recursively for baseline directories
             for round_num in range(1, self.rounds + 1):
                 # Try different group names (we don't know which group this benchmark was in)
-                for group_name in ["moving_averages", "momentum", "volatility", "trend",
+                # Include both old group names (8 groups) and new group names (3 groups)
+                for group_name in ["fast_indicators", "simple_volume", "complex_indicators",
+                                   "moving_averages", "momentum", "volatility", "trend",
                                    "oscillators", "stochastic", "volume_price", "advanced"]:
                     baseline_name = f"{self.baseline_prefix}{round_num}_{group_name}"
-                    estimates_file = benchmark_dir / baseline_name / "base" / "estimates.json"
 
-                    if estimates_file.exists():
-                        try:
-                            with open(estimates_file) as f:
-                                data = json.load(f)
-                                # Extract median point estimate (in nanoseconds)
-                                median_ns = data["median"]["point_estimate"]
-                                times.append(median_ns)
-                                break  # Found this round's result
-                        except (json.JSONDecodeError, KeyError) as e:
-                            print(f"Warning: Failed to parse {estimates_file}: {e}", file=sys.stderr)
+                    # Search for baseline directories recursively (handles nested structure)
+                    baseline_dirs = list(benchmark_dir.glob(f"**/{baseline_name}"))
+
+                    if baseline_dirs:
+                        # Take the first match (usually fast-ta implementation)
+                        # Could aggregate both fast-ta and ta-lib if needed
+                        estimates_file = baseline_dirs[0] / "estimates.json"
+
+                        if estimates_file.exists():
+                            try:
+                                with open(estimates_file) as f:
+                                    data = json.load(f)
+                                    # Extract median point estimate (in nanoseconds)
+                                    median_ns = data["median"]["point_estimate"]
+                                    times.append(median_ns)
+                                    break  # Found this round's result
+                            except (json.JSONDecodeError, KeyError) as e:
+                                print(f"Warning: Failed to parse {estimates_file}: {e}", file=sys.stderr)
 
             if times:
                 benchmark_times[benchmark_name] = times
-            elif any(benchmark_dir.iterdir()):  # Has some results but we couldn't find them
-                print(f"Warning: No results found for benchmark: {benchmark_name}", file=sys.stderr)
+            else:
+                # Check if this benchmark has any baseline directories matching our pattern
+                # If not, it's from a different benchmark run and we should skip it silently
+                has_matching_baseline = False
+                for round_num in range(1, self.rounds + 1):
+                    pattern = f"**/{self.baseline_prefix}{round_num}_*"
+                    if list(benchmark_dir.glob(pattern)):
+                        has_matching_baseline = True
+                        break
+
+                # Only warn if it has matching baselines but incomplete rounds
+                if has_matching_baseline:
+                    print(f"Warning: Incomplete results for benchmark: {benchmark_name} ({len(times)}/{self.rounds} rounds)", file=sys.stderr)
 
         return benchmark_times
 
