@@ -323,6 +323,16 @@ fn compute_williams_r_core<T: SeriesElement + 'static>(
     period: usize,
     output: &mut [T],
 ) -> Result<()> {
+    // Use specialized f64 path for common case
+    use std::any::TypeId;
+    if TypeId::of::<T>() == TypeId::of::<f64>() {
+        let h = unsafe { std::slice::from_raw_parts(high.as_ptr() as *const f64, high.len()) };
+        let l = unsafe { std::slice::from_raw_parts(low.as_ptr() as *const f64, low.len()) };
+        let c = unsafe { std::slice::from_raw_parts(close.as_ptr() as *const f64, close.len()) };
+        let out = unsafe { std::slice::from_raw_parts_mut(output.as_mut_ptr() as *mut f64, output.len()) };
+        return williams_r_f64_optimized(h, l, c, period, out);
+    }
+
     let neg_hundred = T::from_i32(-100)?;
     let neg_fifty = T::from_i32(-50)?;
     let lookback = williams_r_lookback(period);
@@ -364,6 +374,221 @@ fn compute_williams_r_core<T: SeriesElement + 'static>(
     }
 
     Ok(())
+}
+
+/// Optimized f64 Williams %R using TA-Lib-style index tracking.
+/// This is much simpler than monotonic deque with lower overhead.
+///
+/// Note: This is the fallback for small datasets or when SIMD isn't beneficial.
+#[inline]
+fn williams_r_f64_index_tracking(
+    high: &[f64],
+    low: &[f64],
+    close: &[f64],
+    period: usize,
+    output: &mut [f64],
+) -> Result<()> {
+    let lookback = williams_r_lookback(period);
+    let n = close.len();
+
+    // Initial scan to find first window's highest/lowest
+    let mut highest_idx = 0usize;
+    let mut lowest_idx = 0usize;
+    let mut highest = high[0];
+    let mut lowest = low[0];
+
+    // Scan the first window [0..=lookback]
+    for i in 1..=lookback {
+        if high[i] > highest {
+            highest_idx = i;
+            highest = high[i];
+        }
+        if low[i] < lowest {
+            lowest_idx = i;
+            lowest = low[i];
+        }
+    }
+
+    // Calculate first Williams %R value
+    let range = highest - lowest;
+    output[lookback] = if range == 0.0 {
+        -50.0  // Return midpoint when high == low (our spec, differs from TA-Lib's 0)
+    } else {
+        -100.0 * (highest - close[lookback]) / range
+    };
+
+    // Main loop for remaining values - TA-Lib's lazy rescan algorithm
+    let mut trailing_idx = 1usize;
+    for today in (lookback + 1)..n {
+        // Check if lowest went out of window
+        let mut tmp = low[today];
+        if lowest_idx < trailing_idx {
+            // Rescan window for new lowest
+            lowest_idx = trailing_idx;
+            lowest = low[lowest_idx];
+            for i in (trailing_idx + 1)..=today {
+                tmp = low[i];
+                if tmp < lowest {
+                    lowest_idx = i;
+                    lowest = tmp;
+                }
+            }
+        } else if tmp <= lowest {
+            // New value is new lowest
+            lowest_idx = today;
+            lowest = tmp;
+        }
+
+        // Check if highest went out of window
+        tmp = high[today];
+        if highest_idx < trailing_idx {
+            // Rescan window for new highest
+            highest_idx = trailing_idx;
+            highest = high[highest_idx];
+            for i in (trailing_idx + 1)..=today {
+                tmp = high[i];
+                if tmp > highest {
+                    highest_idx = i;
+                    highest = tmp;
+                }
+            }
+        } else if tmp >= highest {
+            // New value is new highest
+            highest_idx = today;
+            highest = tmp;
+        }
+
+        // Compute Williams %R
+        let range = highest - lowest;
+        output[today] = if range == 0.0 {
+            -50.0  // Return midpoint when high == low (our spec, differs from TA-Lib's 0)
+        } else {
+            -100.0 * (highest - close[today]) / range
+        };
+
+        trailing_idx += 1;
+    }
+
+    Ok(())
+}
+
+/// Van Herk/Gil-Werman SIMD algorithm for Williams %R.
+///
+/// Uses prefix-suffix blocks for sliding max/min, which vectorizes extremely well.
+/// This is a two-pass algorithm but each pass is SIMD-friendly.
+#[inline]
+fn williams_r_f64_van_herk(
+    high: &[f64],
+    low: &[f64],
+    close: &[f64],
+    period: usize,
+    output: &mut [f64],
+) -> Result<()> {
+    let lookback = williams_r_lookback(period);
+    let n = close.len();
+
+    // Allocate working buffers for prefix/suffix extrema
+    let mut left_max_high = vec![f64::NEG_INFINITY; n];
+    let mut right_max_high = vec![f64::NEG_INFINITY; n];
+    let mut left_min_low = vec![f64::INFINITY; n];
+    let mut right_min_low = vec![f64::INFINITY; n];
+
+    // Also track validity with prefix/suffix AND
+    let mut left_valid = vec![true; n];
+    let mut right_valid = vec![true; n];
+
+    // Pass 1: Forward scan (prefix blocks)
+    let mut block_start = 0;
+    while block_start < n {
+        let block_end = (block_start + period).min(n);
+
+        // Reset for this block
+        left_max_high[block_start] = high[block_start];
+        left_min_low[block_start] = low[block_start];
+        left_valid[block_start] = high[block_start].is_finite() && low[block_start].is_finite();
+
+        // Extend prefix within block
+        for i in (block_start + 1)..block_end {
+            left_max_high[i] = left_max_high[i - 1].max(high[i]);
+            left_min_low[i] = left_min_low[i - 1].min(low[i]);
+            left_valid[i] = left_valid[i - 1] && high[i].is_finite() && low[i].is_finite();
+        }
+
+        block_start = block_end;
+    }
+
+    // Pass 2: Backward scan (suffix blocks)
+    let mut block_end = n;
+    while block_end > 0 {
+        let block_start = block_end.saturating_sub(period);
+
+        // Reset for this block (from end)
+        let last_idx = block_end - 1;
+        right_max_high[last_idx] = high[last_idx];
+        right_min_low[last_idx] = low[last_idx];
+        right_valid[last_idx] = high[last_idx].is_finite() && low[last_idx].is_finite();
+
+        // Extend suffix within block (going backward)
+        if last_idx > block_start {
+            for i in (block_start..last_idx).rev() {
+                right_max_high[i] = right_max_high[i + 1].max(high[i]);
+                right_min_low[i] = right_min_low[i + 1].min(low[i]);
+                right_valid[i] = right_valid[i + 1] && high[i].is_finite() && low[i].is_finite();
+            }
+        }
+
+        block_end = block_start;
+    }
+
+    // Pass 3: Combine and compute Williams %R
+    let offset = lookback;
+
+    // Combine loop (SIMD-friendly structure, currently scalar)
+    // TODO: Vectorize this loop with f64x4 for additional speedup
+    for j in 0..(n - offset) {
+        let start = j;
+        let end = j + offset;
+
+        // Combine prefix/suffix to get window extrema
+        let hh = right_max_high[start].max(left_max_high[end]);
+        let ll = right_min_low[start].min(left_min_low[end]);
+
+        // Combine validity
+        let window_ok = right_valid[start] && left_valid[end];
+        let close_ok = close[end].is_finite();
+        let ok = window_ok && close_ok;
+
+        // Compute %R with mask-select
+        let den = hh - ll;
+        if ok && den != 0.0 {
+            output[end] = -100.0 * (hh - close[end]) / den;
+        } else if ok && den == 0.0 {
+            output[end] = -50.0; // Midpoint when range is zero
+        } else {
+            output[end] = f64::NAN;
+        }
+    }
+
+    Ok(())
+}
+
+/// Optimized f64 Williams %R dispatcher - chooses best algorithm.
+#[inline]
+fn williams_r_f64_optimized(
+    high: &[f64],
+    low: &[f64],
+    close: &[f64],
+    period: usize,
+    output: &mut [f64],
+) -> Result<()> {
+    // Choose algorithm based on dataset size
+    // Van Herk is better for large datasets with its SIMD-friendly structure
+    if high.len() >= 1000 {
+        return williams_r_f64_van_herk(high, low, close, period, output);
+    }
+
+    // Index tracking for small datasets (lower overhead)
+    williams_r_f64_index_tracking(high, low, close, period, output)
 }
 
 #[cfg(test)]

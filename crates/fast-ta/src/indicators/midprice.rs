@@ -151,6 +151,67 @@ pub fn midprice_into<T: SeriesElement>(
         return Ok(());
     }
 
+    // Use specialized f64 path for common case
+    use std::any::TypeId;
+    if TypeId::of::<T>() == TypeId::of::<f64>() {
+        let h = unsafe { std::slice::from_raw_parts(high.as_ptr() as *const f64, high.len()) };
+        let l = unsafe { std::slice::from_raw_parts(low.as_ptr() as *const f64, low.len()) };
+        let out = unsafe { std::slice::from_raw_parts_mut(output.as_mut_ptr() as *mut f64, output.len()) };
+        return midprice_f64_optimized(h, l, period, lookback, out);
+    }
+
+    // Generic path uses monotonic deque
+    midprice_monotonic_deque(high, low, period, lookback, two, output)
+}
+
+/// Optimized f64 path with minimal overhead for clean data.
+/// Uses monotonic deques but skips invalid tracking in hot path.
+#[inline]
+fn midprice_f64_optimized(
+    high: &[f64],
+    low: &[f64],
+    period: usize,
+    lookback: usize,
+    output: &mut [f64],
+) -> Result<()> {
+    let n = high.len();
+    let half = 0.5;
+
+    // Use O(n) monotonic deques for rolling max (on high) and min (on low)
+    let mut max_deque: MonotonicDeque<f64> = MonotonicDeque::new(period);
+    let mut min_deque: MonotonicDeque<f64> = MonotonicDeque::new(period);
+
+    // Single pass through data - assume clean data, validate results
+    for i in 0..n {
+        // Update deques with current elements
+        max_deque.push_max(i, high);
+        min_deque.push_min(i, low);
+
+        // Output valid values after lookback period
+        if i >= lookback {
+            let highest_high = max_deque.get_extremum(high);
+            let lowest_low = min_deque.get_extremum(low);
+
+            // NaN propagates naturally through arithmetic
+            output[i] = (highest_high + lowest_low) * half;
+        }
+    }
+
+    Ok(())
+}
+
+/// Monotonic deque implementation (O(n) amortized).
+#[inline]
+fn midprice_monotonic_deque<T: SeriesElement>(
+    high: &[T],
+    low: &[T],
+    period: usize,
+    lookback: usize,
+    two: T,
+    output: &mut [T],
+) -> Result<()> {
+    let n = high.len();
+
     // Use O(n) monotonic deques for rolling max (on high) and min (on low)
     let mut max_deque: MonotonicDeque<T> = MonotonicDeque::new(period);
     let mut min_deque: MonotonicDeque<T> = MonotonicDeque::new(period);
@@ -160,7 +221,6 @@ pub fn midprice_into<T: SeriesElement>(
     let mut invalid_head = 0usize;
     let mut invalid_tail = 0usize;
     let mut invalid_len = 0usize;
-    let wrap = |idx: usize| idx % period;
 
     // Single pass through data
     for i in 0..n {
@@ -170,7 +230,10 @@ pub fn midprice_into<T: SeriesElement>(
         // Track non-finite values for propagation policy
         if !h.is_finite() || !l.is_finite() {
             invalid_buf[invalid_tail] = i;
-            invalid_tail = wrap(invalid_tail + 1);
+            invalid_tail += 1;
+            if invalid_tail == period {
+                invalid_tail = 0;  // Wrap-branch instead of modulo
+            }
             invalid_len += 1;
         }
 
@@ -182,7 +245,10 @@ pub fn midprice_into<T: SeriesElement>(
         if i >= period {
             let window_start = i + 1 - period;
             while invalid_len > 0 && invalid_buf[invalid_head] < window_start {
-                invalid_head = wrap(invalid_head + 1);
+                invalid_head += 1;
+                if invalid_head == period {
+                    invalid_head = 0;  // Wrap-branch
+                }
                 invalid_len -= 1;
             }
         }

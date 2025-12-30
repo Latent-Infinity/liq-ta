@@ -28,28 +28,31 @@
 //!
 //! # Algorithm Complexity
 //!
-//! This implementation uses a hybrid approach:
+//! This implementation uses a three-way hybrid dispatch:
 //! - For small periods (< 8): O(n×period) naive algorithm with lower constant overhead
-//! - For large periods (>= 8): O(n) inlined ring buffer algorithm
+//! - For medium periods (8-24) with small datasets: O(n) monotonic deque with ring buffer
+//! - For large periods (≥ 25) or large datasets (≥ 1000): O(n) van Herk prefix-suffix blocks
 //!
 //! ## Benchmarks (100k elements)
 //!
 //! | Period | fast-ta (µs) | TA-Lib (µs) | Result |
 //! |--------|-------------|-------------|--------|
-//! | 5      | 454         | 224         | TA-Lib 2.0x |
-//! | 21     | 705         | 533         | TA-Lib 1.3x |
-//! | 55     | 656         | 764         | **fast-ta 1.16x** |
-//! | 89     | 661         | 1237        | **fast-ta 1.87x** |
-//! | 233    | 730         | 509         | TA-Lib 1.4x |
+//! | 5      | 1097        | 226         | TA-Lib 4.9x |
+//! | 21     | 480         | 559         | **fast-ta 1.17x** |
+//! | 55     | 476         | 772         | **fast-ta 1.62x** |
+//! | 89     | 476         | 1238        | **fast-ta 2.60x** |
+//! | 233    | 451         | 525         | **fast-ta 1.16x** |
 //!
-//! **Key insight**: fast-ta beats TA-Lib at larger periods (55+) due to O(n) complexity.
+//! **Key insight**: fast-ta beats TA-Lib at all tested periods ≥21 using van Herk algorithm.
+//! Performance advantage increases with period size (2.60x at p89).
 //!
 //! ## Optimization Techniques
 //!
-//! 1. **Hybrid algorithm dispatch**: Use naive for small periods, O(n) for large
-//! 2. **Inlined ring buffer**: Avoids VecDeque overhead in the monotonic deque
+//! 1. **Van Herk algorithm**: Prefix-suffix block structure for rolling extrema with index tracking
+//! 2. **Hybrid algorithm dispatch**: Naive for p<8, van Herk for p≥25 or n≥1000, deque for medium
 //! 3. **Pre-computed lookup table**: Avoids division in the hot loop
 //! 4. **Unchecked array access**: Uses unsafe get_unchecked for known-safe indices
+//! 5. **Cache-friendly memory layout**: Contiguous arrays enable auto-vectorization
 
 use crate::error::{Error, Result};
 use crate::traits::SeriesElement;
@@ -159,10 +162,15 @@ pub fn aroon_into<T: SeriesElement>(
         });
     }
 
-    // Dispatch to appropriate algorithm based on period
+    // Dispatch to appropriate algorithm based on period and dataset size
     if period < ALGORITHM_CROSSOVER_PERIOD {
+        // Small periods: naive O(n×k) has lower constant overhead
         aroon_into_naive(high, low, period, aroon_up_output, aroon_down_output)
+    } else if period >= 25 || n >= 1000 {
+        // Large periods or large datasets: van Herk has better cache locality
+        aroon_into_van_herk(high, low, period, aroon_up_output, aroon_down_output)
     } else {
+        // Medium periods: monotonic deque
         aroon_into_deque(high, low, period, aroon_up_output, aroon_down_output)
     }
 }
@@ -414,6 +422,186 @@ fn aroon_into_ring<T: SeriesElement>(
                 // Deque is empty (all values were NaN in window)
                 aroon_up_output[i] = T::nan();
                 aroon_down_output[i] = T::nan();
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Van Herk/Gil-Werman O(n) implementation for rolling extrema.
+///
+/// This implementation uses prefix-suffix block structure for better cache locality
+/// and auto-vectorization. Unlike Williams %R which only needs extrema values,
+/// AROON requires the *indices* of extrema to calculate "periods since" values.
+///
+/// Key differences from monotonic deque:
+/// - Two-pass structure (prefix forward, suffix backward) is more SIMD-friendly
+/// - Better cache locality due to contiguous memory access
+/// - Compiler can auto-vectorize the prefix/suffix comparisons
+/// - Lower branch misprediction overhead
+///
+/// This version tracks both values AND indices for extrema.
+#[inline]
+fn aroon_into_van_herk<T: SeriesElement>(
+    high: &[T],
+    low: &[T],
+    period: usize,
+    aroon_up_output: &mut [T],
+    aroon_down_output: &mut [T],
+) -> Result<()> {
+    let n = high.len();
+    let lookback = aroon_lookback(period);
+    let hundred = T::from_f64(100.0)?;
+
+    // Pre-compute Aroon values for each possible "periods since" value
+    let mut aroon_lookup = Vec::with_capacity(period + 1);
+    let period_t = T::from_usize(period)?;
+    for ps in 0..=period {
+        let ps_t = T::from_usize(ps)?;
+        aroon_lookup.push(((period_t - ps_t) / period_t) * hundred);
+    }
+
+    // Allocate working buffers for prefix/suffix extrema (values)
+    let mut left_max_high = vec![T::neg_infinity(); n];
+    let mut right_max_high = vec![T::neg_infinity(); n];
+    let mut left_min_low = vec![T::infinity(); n];
+    let mut right_min_low = vec![T::infinity(); n];
+
+    // Allocate working buffers for prefix/suffix extrema (indices)
+    let mut left_max_high_idx = vec![0usize; n];
+    let mut right_max_high_idx = vec![0usize; n];
+    let mut left_min_low_idx = vec![0usize; n];
+    let mut right_min_low_idx = vec![0usize; n];
+
+    // Track validity with prefix/suffix AND
+    let mut left_valid = vec![true; n];
+    let mut right_valid = vec![true; n];
+
+    // Pass 1: Forward scan (prefix blocks)
+    let mut block_start = 0;
+    while block_start < n {
+        let block_end = (block_start + period + 1).min(n);
+
+        // Initialize block
+        left_max_high[block_start] = high[block_start];
+        left_max_high_idx[block_start] = block_start;
+        left_min_low[block_start] = low[block_start];
+        left_min_low_idx[block_start] = block_start;
+        left_valid[block_start] = high[block_start].is_finite() && low[block_start].is_finite();
+
+        // Scan forward within block
+        for i in (block_start + 1)..block_end {
+            let h = high[i];
+            let l = low[i];
+
+            // Update max high (prefer most recent on tie with >=)
+            if h >= left_max_high[i - 1] {
+                left_max_high[i] = h;
+                left_max_high_idx[i] = i;
+            } else {
+                left_max_high[i] = left_max_high[i - 1];
+                left_max_high_idx[i] = left_max_high_idx[i - 1];
+            }
+
+            // Update min low (prefer most recent on tie with <=)
+            if l <= left_min_low[i - 1] {
+                left_min_low[i] = l;
+                left_min_low_idx[i] = i;
+            } else {
+                left_min_low[i] = left_min_low[i - 1];
+                left_min_low_idx[i] = left_min_low_idx[i - 1];
+            }
+
+            // Update validity
+            left_valid[i] = left_valid[i - 1] && h.is_finite() && l.is_finite();
+        }
+
+        block_start = block_end;
+    }
+
+    // Pass 2: Backward scan (suffix blocks)
+    let mut block_end = n;
+    while block_end > 0 {
+        let block_start = block_end.saturating_sub(period + 1);
+        let last_idx = block_end - 1;
+
+        // Initialize block
+        right_max_high[last_idx] = high[last_idx];
+        right_max_high_idx[last_idx] = last_idx;
+        right_min_low[last_idx] = low[last_idx];
+        right_min_low_idx[last_idx] = last_idx;
+        right_valid[last_idx] = high[last_idx].is_finite() && low[last_idx].is_finite();
+
+        // Scan backward within block
+        if last_idx > block_start {
+            for i in (block_start..last_idx).rev() {
+                let h = high[i];
+                let l = low[i];
+
+                // Update max high (prefer most recent on tie with >)
+                if h > right_max_high[i + 1] {
+                    right_max_high[i] = h;
+                    right_max_high_idx[i] = i;
+                } else {
+                    right_max_high[i] = right_max_high[i + 1];
+                    right_max_high_idx[i] = right_max_high_idx[i + 1];
+                }
+
+                // Update min low (prefer most recent on tie with <)
+                if l < right_min_low[i + 1] {
+                    right_min_low[i] = l;
+                    right_min_low_idx[i] = i;
+                } else {
+                    right_min_low[i] = right_min_low[i + 1];
+                    right_min_low_idx[i] = right_min_low_idx[i + 1];
+                }
+
+                // Update validity
+                right_valid[i] = right_valid[i + 1] && h.is_finite() && l.is_finite();
+            }
+        }
+
+        block_end = block_start;
+    }
+
+    // Fill lookback period with NaN
+    aroon_up_output[..lookback].fill(T::nan());
+    aroon_down_output[..lookback].fill(T::nan());
+
+    // Pass 3: Combine prefix/suffix and compute AROON
+    for i in lookback..n {
+        let start = i - period;
+
+        // Combine validity from both directions
+        let window_ok = right_valid[start] && left_valid[i];
+
+        if !window_ok {
+            // NaN propagation: any invalid value in window produces NaN
+            aroon_up_output[i] = T::nan();
+            aroon_down_output[i] = T::nan();
+        } else {
+            // Combine prefix/suffix to find highest high index
+            let highest_idx = if right_max_high[start] >= left_max_high[i] {
+                right_max_high_idx[start]
+            } else {
+                left_max_high_idx[i]
+            };
+
+            // Combine prefix/suffix to find lowest low index
+            let lowest_idx = if right_min_low[start] <= left_min_low[i] {
+                right_min_low_idx[start]
+            } else {
+                left_min_low_idx[i]
+            };
+
+            let periods_since_high = i - highest_idx;
+            let periods_since_low = i - lowest_idx;
+
+            // SAFETY: periods_since is always in [0, period] by construction
+            unsafe {
+                aroon_up_output[i] = *aroon_lookup.get_unchecked(periods_since_high);
+                aroon_down_output[i] = *aroon_lookup.get_unchecked(periods_since_low);
             }
         }
     }

@@ -240,7 +240,26 @@ fn validate_inputs<T: SeriesElement>(close: &[T], volume: &[T]) -> Result<()> {
 }
 
 /// Core OBV computation that allocates a new vector.
-fn compute_obv_core<T: SeriesElement>(close: &[T], volume: &[T], output: &mut Vec<T>) {
+fn compute_obv_core<T: SeriesElement + 'static>(close: &[T], volume: &[T], output: &mut Vec<T>) {
+    // Use specialized f64 path for common case
+    use std::any::TypeId;
+    if TypeId::of::<T>() == TypeId::of::<f64>() {
+        let c = unsafe { std::slice::from_raw_parts(close.as_ptr() as *const f64, close.len()) };
+        let v = unsafe { std::slice::from_raw_parts(volume.as_ptr() as *const f64, volume.len()) };
+
+        // Pre-allocate vector with exact size needed
+        let n = close.len();
+        let mut temp = vec![0.0_f64; n];
+        obv_f64_optimized(c, v, &mut temp);
+
+        // Cast back to Vec<T>
+        let result = unsafe {
+            std::mem::transmute::<Vec<f64>, Vec<T>>(temp)
+        };
+        *output = result;
+        return;
+    }
+
     let n = close.len();
 
     if n == 0 {
@@ -284,7 +303,17 @@ fn compute_obv_core<T: SeriesElement>(close: &[T], volume: &[T], output: &mut Ve
 }
 
 /// Core OBV computation into pre-allocated buffer.
-fn compute_obv_core_into<T: SeriesElement>(close: &[T], volume: &[T], output: &mut [T]) {
+fn compute_obv_core_into<T: SeriesElement + 'static>(close: &[T], volume: &[T], output: &mut [T]) {
+    // Use specialized f64 path for common case
+    use std::any::TypeId;
+    if TypeId::of::<T>() == TypeId::of::<f64>() {
+        let c = unsafe { std::slice::from_raw_parts(close.as_ptr() as *const f64, close.len()) };
+        let v = unsafe { std::slice::from_raw_parts(volume.as_ptr() as *const f64, volume.len()) };
+        let out = unsafe { std::slice::from_raw_parts_mut(output.as_mut_ptr() as *mut f64, output.len()) };
+        obv_f64_optimized(c, v, out);
+        return;
+    }
+
     let n = close.len();
 
     if n == 0 {
@@ -322,6 +351,60 @@ fn compute_obv_core_into<T: SeriesElement>(close: &[T], volume: &[T], output: &m
         }
         output[i] = obv;
         prev_close = curr_close;
+    }
+}
+
+/// Optimized f64 OBV using TA-Lib's ultra-tight loop pattern.
+/// Matches TA-Lib's ta_OBV.c:215-225 structure for minimal overhead.
+///
+/// Uses dual-path approach: fast path for clean data, NaN-aware path if NaN detected.
+#[inline]
+fn obv_f64_optimized(close: &[f64], volume: &[f64], output: &mut [f64]) {
+    let n = close.len();
+    if n == 0 {
+        return;
+    }
+
+    // Initialize with first volume (TA-Lib pattern)
+    let mut prev_obv = volume[0];
+    let mut prev_real = close[0];
+    let is_first_nan = prev_obv.is_nan() || prev_real.is_nan();
+    output[0] = if is_first_nan { f64::NAN } else { prev_obv };
+
+    if is_first_nan {
+        // NaN mode: fill rest with NaN
+        for i in 1..n {
+            output[i] = f64::NAN;
+        }
+        return;
+    }
+
+    // Ultra-tight loop for clean data: minimal loads, minimal stores, simple conditional arithmetic
+    // Matches TA-Lib's pattern exactly for maximum performance
+    let mut i = 1;
+    while i < n {
+        let temp_real = close[i];
+        let vol = volume[i];
+
+        // Check for NaN - if found, switch to NaN-aware path
+        if temp_real.is_nan() || vol.is_nan() {
+            // Fill current and rest with NaN
+            for j in i..n {
+                output[j] = f64::NAN;
+            }
+            return;
+        }
+
+        if temp_real > prev_real {
+            prev_obv += vol;
+        } else if temp_real < prev_real {
+            prev_obv -= vol;
+        }
+        // If equal, prev_obv unchanged (no else needed)
+
+        output[i] = prev_obv;
+        prev_real = temp_real;
+        i += 1;
     }
 }
 

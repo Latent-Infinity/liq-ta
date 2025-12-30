@@ -153,17 +153,6 @@ pub fn t3_full_into<T: SeriesElement>(
         return Ok(());
     }
 
-    // Calculate coefficients
-    let v2 = vfactor * vfactor;
-    let v3 = v2 * vfactor;
-    let three = T::from_usize(3)?;
-    let six = T::from_usize(6)?;
-
-    let c1 = T::zero() - v3;
-    let c2 = three * v2 + three * v3;
-    let c3 = T::zero() - six * v2 - three * vfactor - three * v3;
-    let c4 = T::one() + three * vfactor + v3 + three * v2;
-
     // EMA smoothing factor
     let alpha = T::from_usize(2)? / T::from_usize(period + 1)?;
     let one_minus_alpha = T::one() - alpha;
@@ -222,13 +211,22 @@ pub fn t3_full_into<T: SeriesElement>(
         e5 = alpha * e4 + one_minus_alpha * e5;
     }
 
-    // At lookback, update all EMAs and compute first T3 value
+    // At lookback, update all EMAs
     e1 = alpha * data[lookback] + one_minus_alpha * e1;
     e2 = alpha * e1 + one_minus_alpha * e2;
     e3 = alpha * e2 + one_minus_alpha * e3;
     e4 = alpha * e3 + one_minus_alpha * e4;
     e5 = alpha * e4 + one_minus_alpha * e5;
     let mut e6 = e5;
+
+    // Calculate coefficients after initialization (TA-Lib style - keeps values in registers)
+    let temp_real = vfactor * vfactor;  // v^2
+    let c1 = T::zero() - (temp_real * vfactor);  // -v^3
+    let three = T::from_usize(3)?;
+    let six = T::from_usize(6)?;
+    let c2 = three * (temp_real - c1);  // 3(v^2 + v^3)
+    let c3 = T::zero() - six * temp_real - three * (vfactor - c1);  // -6v^2 - 3v - 3v^3
+    let c4 = T::one() + three * vfactor - c1 + three * temp_real;  // 1 + 3v + v^3 + 3v^2
 
     // First valid T3 value
     output[lookback] = c1 * e6 + c2 * e5 + c3 * e4 + c4 * e3;
