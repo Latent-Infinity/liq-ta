@@ -368,11 +368,11 @@ fn obv_f64_optimized(close: &[f64], volume: &[f64], output: &mut [f64]) {
     // Initialize with first volume (TA-Lib pattern)
     let mut prev_obv = volume[0];
     let mut prev_real = close[0];
-    let is_first_nan = prev_obv.is_nan() || prev_real.is_nan();
-    output[0] = if is_first_nan { f64::NAN } else { prev_obv };
+    let is_first_invalid = !prev_obv.is_finite() || !prev_real.is_finite();
+    output[0] = if is_first_invalid { f64::NAN } else { prev_obv };
 
-    if is_first_nan {
-        // NaN mode: fill rest with NaN
+    if is_first_invalid {
+        // Invalid mode: fill rest with NaN
         for i in 1..n {
             output[i] = f64::NAN;
         }
@@ -386,8 +386,8 @@ fn obv_f64_optimized(close: &[f64], volume: &[f64], output: &mut [f64]) {
         let temp_real = close[i];
         let vol = volume[i];
 
-        // Check for NaN - if found, switch to NaN-aware path
-        if temp_real.is_nan() || vol.is_nan() {
+        // Check for non-finite values (NaN or infinity) - if found, switch to NaN-aware path
+        if !temp_real.is_finite() || !vol.is_finite() {
             // Fill current and rest with NaN
             for j in i..n {
                 output[j] = f64::NAN;

@@ -7,19 +7,24 @@ use crate::traits::SeriesElement;
 use num_traits::NumCast;
 
 /// Helper to convert f64 to T (infallible for valid float values).
+/// This is used throughout candlestick patterns for numeric conversions.
 #[inline]
-fn f64_to_t<T: SeriesElement>(val: f64) -> T {
+pub fn f64_to_t<T: SeriesElement>(val: f64) -> T {
     <T as NumCast>::from(val).unwrap_or_else(T::nan)
 }
 
 /// Helper to convert usize to T (infallible for small values).
 #[inline]
-fn usize_to_t<T: SeriesElement>(val: usize) -> T {
+pub fn usize_to_t<T: SeriesElement>(val: usize) -> T {
     <T as NumCast>::from(val).unwrap_or_else(T::nan)
 }
 
 /// Default lookback period for trend detection and averaging.
 pub const TREND_LOOKBACK: usize = 10;
+
+/// Default lookback period for average calculations in pattern detection.
+/// This is typically used for calculating average body size, shadow length, etc.
+pub const AVG_LOOKBACK: usize = 10;
 
 /// TA-Lib style setting ranges for pattern detection.
 /// These control sensitivity thresholds for various pattern components.

@@ -2,6 +2,42 @@
 //!
 //! This indicator uses the Hilbert Transform to compute the in-phase (I) and
 //! quadrature (Q) components of the price data.
+//!
+//! # Algorithm
+//!
+//! The Hilbert Transform creates a complex analytic signal from real price data:
+//!
+//! ```text
+//! Analytic Signal = I(t) + j·Q(t)
+//! ```
+//!
+//! Where:
+//! - **I (In-phase)**: The original signal after detrending (3-bar delay)
+//! - **Q (Quadrature)**: The 90-degree phase-shifted signal
+//!
+//! These components form a phasor that rotates in the complex plane, with the
+//! rotation speed indicating the instantaneous frequency of the dominant cycle.
+//!
+//! # Interpretation
+//!
+//! - **Phasor magnitude** (`sqrt(I² + Q²)`): Indicates cycle amplitude
+//! - **Phasor angle** (`atan(Q/I)`): Indicates cycle phase
+//! - **Rotation direction**: Counter-clockwise = cycle progressing normally
+//! - **Rotation speed**: Fast = short cycle, Slow = long cycle or trend
+//!
+//! # Use Cases
+//!
+//! - Building custom cycle indicators
+//! - Analyzing cycle strength via phasor magnitude
+//! - Detecting phase relationships between different time series
+//!
+//! # Lookback
+//!
+//! The lookback period is 63 bars (warm-up period for the Hilbert Transform).
+//!
+//! # Performance
+//!
+//! Uses the shared [`ht_core::hilbert_transform`] computation with O(n) complexity.
 
 use super::ht_core::{hilbert_transform, ht_lookback, ht_min_len};
 use crate::error::{Error, Result};

@@ -1,0 +1,92 @@
+=== CLIPPY BASELINE FOR RUST CODEBASE STANDARDS AUDIT ===
+
+Created: 2025-12-31
+Purpose: Establish baseline clippy warning state before audit refactoring
+
+=== MANUAL VERIFICATION REQUIRED ===
+
+The `cargo clippy` command is blocked by a project-level callback hook.
+This file must be populated manually by running:
+
+  cargo clippy --workspace 2>&1 | tee docs/audit/clippy_baseline.txt
+
+Alternative commands for more detailed output:
+
+  # With all warnings treated as errors (strictest check):
+  cargo clippy --workspace -- -D warnings 2>&1 | tee docs/audit/clippy_baseline.txt
+
+  # With specific lint groups:
+  cargo clippy --workspace -- -W clippy::pedantic -W clippy::nursery 2>&1 | tee docs/audit/clippy_baseline.txt
+
+=== EXPECTED OUTPUT CATEGORIES ===
+
+When running clippy, capture and categorize:
+
+1. ERRORS (must fix):
+   - Compilation errors
+   - Clippy errors
+
+2. WARNINGS (should fix during audit):
+   - Clippy warnings about code quality
+   - Unnecessary clones
+   - Unnecessary allocations
+   - Missing documentation
+   - Complexity warnings
+
+3. ALLOWED LINTS (document justification):
+   - Any #[allow(clippy::...)] directives should be reviewed
+   - Each must have a documented reason
+
+=== CLIPPY CONFIGURATION ===
+
+Check for existing clippy configuration in:
+- Cargo.toml (workspace or crate level)
+- .cargo/config.toml
+- clippy.toml
+
+Known clippy allows in codebase (to be verified):
+- Check lib.rs for #![allow(...)] directives
+- Check individual modules for #[allow(...)] attributes
+
+=== AUDIT CHECKLIST FOR CLIPPY OUTPUT ===
+
+After running clippy, verify:
+
+[ ] No compilation errors
+[ ] Document all warnings by category
+[ ] Review each #[allow(...)] directive for justification
+[ ] Count total warnings for baseline comparison
+[ ] Identify warnings related to:
+    - Unnecessary clones (Section 1 of rust-code-standards.md)
+    - Collection pre-allocation (Section 2)
+    - Iterator chains (Section 3)
+    - String handling (Section 5)
+    - Error handling (Section 6)
+    - Static vs dynamic dispatch (Section 8)
+
+=== RESULTS (TO BE FILLED AFTER MANUAL RUN) ===
+
+Date Run: ________________
+Rust Version: ____________
+Clippy Version: __________
+
+Total Warnings: ____
+Total Errors: ____
+
+Warning Categories:
+- clippy::clone_on_copy: ____
+- clippy::unnecessary_clone: ____
+- clippy::redundant_clone: ____
+- clippy::needless_collect: ____
+- clippy::option_if_let_else: ____
+- clippy::too_many_arguments: ____
+- clippy::type_complexity: ____
+- Other: ____
+
+=== RAW OUTPUT ===
+
+(Paste full clippy output below after running the command manually)
+
+--------------------------------------------------------------------------------
+
+

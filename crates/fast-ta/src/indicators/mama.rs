@@ -187,99 +187,90 @@ pub fn mama_full_into<T: SeriesElement>(
     // Main calculation loop
     for i in 6..n {
         // Compute smoothed price (4-bar WMA)
-        if i >= 3 {
-            smooth[i] =
-                (c1 * data[i] + c2 * data[i - 1] + c3 * data[i - 2] + c4 * data[i - 3]) / c_sum;
-        } else {
-            smooth[i] = data[i];
-        }
+        // Note: i >= 6 here, so we always have at least 4 bars of history
+        smooth[i] =
+            (c1 * data[i] + c2 * data[i - 1] + c3 * data[i - 2] + c4 * data[i - 3]) / c_sum;
 
         // Compute Hilbert Transform components
-        if i >= 6 {
-            let adj_prev_period = T::from_f64(0.075)? * period[i - 1] + T::from_f64(0.54)?;
+        // Note: Loop starts at i=6, so we always have sufficient history for Hilbert Transform
+        let adj_prev_period = T::from_f64(0.075)? * period[i - 1] + T::from_f64(0.54)?;
 
-            // Detrender
-            detrender[i] =
-                (a * smooth[i] + b * smooth[i - 2] - b * smooth[i - 4] - a * smooth[i - 6])
-                    * adj_prev_period;
-
-            // Compute InPhase and Quadrature components
-            q1[i] = (a * detrender[i] + b * detrender[i - 2]
-                - b * detrender[i - 4]
-                - a * detrender[i - 6])
+        // Detrender
+        detrender[i] =
+            (a * smooth[i] + b * smooth[i - 2] - b * smooth[i - 4] - a * smooth[i - 6])
                 * adj_prev_period;
-            i1[i] = detrender[i - 3];
 
-            // Advance the phase of I1 and Q1 by 90 degrees
-            ji[i] = (a * i1[i] + b * i1[i - 2] - b * i1[i - 4] - a * i1[i - 6]) * adj_prev_period;
-            jq[i] = (a * q1[i] + b * q1[i - 2] - b * q1[i - 4] - a * q1[i - 6]) * adj_prev_period;
+        // Compute InPhase and Quadrature components
+        q1[i] = (a * detrender[i] + b * detrender[i - 2]
+            - b * detrender[i - 4]
+            - a * detrender[i - 6])
+            * adj_prev_period;
+        i1[i] = detrender[i - 3];
 
-            // Phasor addition for 3-bar averaging
-            i2[i] = i1[i] - jq[i];
-            q2[i] = q1[i] + ji[i];
+        // Advance the phase of I1 and Q1 by 90 degrees
+        ji[i] = (a * i1[i] + b * i1[i - 2] - b * i1[i - 4] - a * i1[i - 6]) * adj_prev_period;
+        jq[i] = (a * q1[i] + b * q1[i - 2] - b * q1[i - 4] - a * q1[i - 6]) * adj_prev_period;
 
-            // Smooth the I and Q components
-            let smooth_coef = T::from_f64(0.2)?;
-            i2[i] = smooth_coef * i2[i] + (T::one() - smooth_coef) * i2[i - 1];
-            q2[i] = smooth_coef * q2[i] + (T::one() - smooth_coef) * q2[i - 1];
+        // Phasor addition for 3-bar averaging
+        i2[i] = i1[i] - jq[i];
+        q2[i] = q1[i] + ji[i];
 
-            // Homodyne Discriminator
-            re[i] = i2[i] * i2[i - 1] + q2[i] * q2[i - 1];
-            im[i] = i2[i] * q2[i - 1] - q2[i] * i2[i - 1];
+        // Smooth the I and Q components
+        let smooth_coef = T::from_f64(0.2)?;
+        i2[i] = smooth_coef * i2[i] + (T::one() - smooth_coef) * i2[i - 1];
+        q2[i] = smooth_coef * q2[i] + (T::one() - smooth_coef) * q2[i - 1];
 
-            re[i] = smooth_coef * re[i] + (T::one() - smooth_coef) * re[i - 1];
-            im[i] = smooth_coef * im[i] + (T::one() - smooth_coef) * im[i - 1];
+        // Homodyne Discriminator
+        re[i] = i2[i] * i2[i - 1] + q2[i] * q2[i - 1];
+        im[i] = i2[i] * q2[i - 1] - q2[i] * i2[i - 1];
 
-            // Compute period
-            if im[i] != T::zero() && re[i] != T::zero() {
-                period[i] = two_pi / (im[i] / re[i]).atan();
-            }
+        re[i] = smooth_coef * re[i] + (T::one() - smooth_coef) * re[i - 1];
+        im[i] = smooth_coef * im[i] + (T::one() - smooth_coef) * im[i - 1];
 
-            // Limit period to reasonable range
-            let min_period = T::from_f64(6.0)?;
-            let max_period = T::from_f64(50.0)?;
-            if period[i] > max_period {
-                period[i] = max_period;
-            }
-            if period[i] < min_period {
-                period[i] = min_period;
-            }
-
-            // Smooth the period
-            let period_smooth = T::from_f64(0.33)?;
-            smooth_period[i] =
-                period_smooth * period[i] + (T::one() - period_smooth) * smooth_period[i - 1];
-
-            // Compute phase
-            if i1[i] != T::zero() {
-                phase[i] = (q1[i] / i1[i]).atan();
-            }
-
-            // Compute delta phase
-            let mut delta_phase = phase[i - 1] - phase[i];
-            if delta_phase < T::from_f64(1.0)? {
-                delta_phase = T::from_f64(1.0)?;
-            }
-
-            // Compute alpha
-            let mut alpha = fast_limit / delta_phase;
-            if alpha < slow_limit {
-                alpha = slow_limit;
-            }
-            if alpha > fast_limit {
-                alpha = fast_limit;
-            }
-
-            // Update MAMA and FAMA
-            mama = alpha * data[i] + (T::one() - alpha) * mama;
-            let fama_alpha = T::from_f64(0.5)? * alpha;
-            fama = fama_alpha * mama + (T::one() - fama_alpha) * fama;
-        } else {
-            period[i] = six;
-            smooth_period[i] = six;
-            mama = data[i];
-            fama = data[i];
+        // Compute period
+        if im[i] != T::zero() && re[i] != T::zero() {
+            period[i] = two_pi / (im[i] / re[i]).atan();
         }
+
+        // Limit period to reasonable range
+        let min_period = T::from_f64(6.0)?;
+        let max_period = T::from_f64(50.0)?;
+        if period[i] > max_period {
+            period[i] = max_period;
+        }
+        if period[i] < min_period {
+            period[i] = min_period;
+        }
+
+        // Smooth the period
+        let period_smooth = T::from_f64(0.33)?;
+        smooth_period[i] =
+            period_smooth * period[i] + (T::one() - period_smooth) * smooth_period[i - 1];
+
+        // Compute phase
+        if i1[i] != T::zero() {
+            phase[i] = (q1[i] / i1[i]).atan();
+        }
+
+        // Compute delta phase
+        let mut delta_phase = phase[i - 1] - phase[i];
+        if delta_phase < T::from_f64(1.0)? {
+            delta_phase = T::from_f64(1.0)?;
+        }
+
+        // Compute alpha
+        let mut alpha = fast_limit / delta_phase;
+        if alpha < slow_limit {
+            alpha = slow_limit;
+        }
+        if alpha > fast_limit {
+            alpha = fast_limit;
+        }
+
+        // Update MAMA and FAMA
+        mama = alpha * data[i] + (T::one() - alpha) * mama;
+        let fama_alpha = T::from_f64(0.5)? * alpha;
+        fama = fama_alpha * mama + (T::one() - fama_alpha) * fama;
 
         // Store output after lookback
         if i >= lookback {

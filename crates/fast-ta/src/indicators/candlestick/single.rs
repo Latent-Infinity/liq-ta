@@ -4,22 +4,12 @@
 //! though some (like Hammer) require trend context for proper interpretation.
 
 use super::core::{
-    average_body, body_midpoint, candle_range, is_bearish, is_bullish, is_doji, is_downtrend,
-    is_uptrend, lower_shadow, real_body, upper_shadow, PATTERN_BEARISH, PATTERN_BULLISH,
-    PATTERN_NONE, TREND_LOOKBACK,
+    average_body, body_midpoint, candle_range, f64_to_t, is_bearish, is_bullish, is_doji,
+    is_downtrend, is_uptrend, lower_shadow, real_body, upper_shadow, AVG_LOOKBACK, PATTERN_BEARISH,
+    PATTERN_BULLISH, PATTERN_NONE, TREND_LOOKBACK,
 };
 use crate::error::{Error, Result};
 use crate::traits::SeriesElement;
-use num_traits::NumCast;
-
-/// Helper to convert f64 to T (infallible for valid float values).
-#[inline]
-fn f64_to_t<T: SeriesElement>(val: f64) -> T {
-    <T as NumCast>::from(val).unwrap_or_else(T::nan)
-}
-
-/// Default lookback for calculating averages.
-const AVG_LOOKBACK: usize = 10;
 
 /// Lookback for `CDL_DOJI` pattern (just current candle).
 #[must_use]

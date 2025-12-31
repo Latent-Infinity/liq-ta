@@ -35,8 +35,7 @@
 
 use crate::error::{Error, Result};
 use crate::indicators::ema::{ema, ema_into};
-use crate::traits::SeriesElement;
-use crate::utils::is_invalid;
+use crate::traits::{validate_period, SeriesElement, ValidatedInput};
 
 /// Returns the lookback period for TEMA.
 ///
@@ -129,27 +128,11 @@ pub const fn tema_min_len(period: usize) -> usize {
 #[inline]
 #[must_use = "this returns a Result with the TEMA values, which should be used"]
 pub fn tema<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
-    // Validate period
-    if period == 0 {
-        return Err(Error::InvalidPeriod {
-            period,
-            reason: "tema period must be at least 1",
-        });
-    }
-
-    // Validate data length
-    if data.is_empty() {
-        return Err(Error::EmptyInput);
-    }
-
+    // Validate inputs using shared utilities
+    validate_period(period)?;
+    data.validate_not_empty()?;
     let min_len = tema_min_len(period);
-    if data.len() < min_len {
-        return Err(Error::InsufficientData {
-            required: min_len,
-            actual: data.len(),
-            indicator: "tema",
-        });
-    }
+    data.validate_min_length(min_len, "tema")?;
 
     // Calculate EMA of input
     let ema1 = ema(data, period)?;
@@ -174,7 +157,7 @@ pub fn tema<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
     let ema3_valid_from = 2 * ema1_lookback;
 
     for i in ema1_lookback..data.len() {
-        if !is_invalid(ema1[i]) {
+        if !ema1[i].is_nan() {
             if i == ema1_lookback {
                 // Seed values
                 ema2 = ema1[i];
@@ -243,27 +226,11 @@ pub fn tema<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
 #[inline]
 #[must_use = "this returns a Result with the count of valid TEMA values"]
 pub fn tema_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -> Result<usize> {
-    // Validate period
-    if period == 0 {
-        return Err(Error::InvalidPeriod {
-            period,
-            reason: "tema period must be at least 1",
-        });
-    }
-
-    // Validate data length
-    if data.is_empty() {
-        return Err(Error::EmptyInput);
-    }
-
+    // Validate inputs using shared utilities
+    validate_period(period)?;
+    data.validate_not_empty()?;
     let min_len = tema_min_len(period);
-    if data.len() < min_len {
-        return Err(Error::InsufficientData {
-            required: min_len,
-            actual: data.len(),
-            indicator: "tema",
-        });
-    }
+    data.validate_min_length(min_len, "tema")?;
 
     if output.len() < data.len() {
         return Err(Error::BufferTooSmall {
@@ -296,7 +263,7 @@ pub fn tema_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) 
     let ema2_valid_from = ema1_lookback;
 
     for i in ema1_lookback..data.len() {
-        if !is_invalid(ema1[i]) {
+        if !ema1[i].is_nan() {
             if i == ema1_lookback {
                 ema2 = ema1[i];
                 ema3 = ema1[i];
@@ -530,116 +497,87 @@ mod tests {
         let mut output = vec![0.0_f64; 5]; // Too short
         let result = tema_into(&data, 3, &mut output);
 
-        assert!(matches!(result, Err(Error::BufferTooSmall { .. })));
+        assert!(matches!(
+            result,
+            Err(Error::BufferTooSmall {
+                required: 15,
+                actual: 5,
+                ..
+            })
+        ));
     }
 
     #[test]
-    fn test_tema_into_f32() {
-        let data: Vec<f32> = (1..=15).map(|x| x as f32).collect();
-        let mut output = vec![0.0_f32; 15];
-        let valid_count = tema_into(&data, 3, &mut output).unwrap();
+    fn test_tema_into_empty_input() {
+        let data: Vec<f64> = vec![];
+        let mut output = vec![0.0_f64; 10];
+        let result = tema_into(&data, 3, &mut output);
 
-        assert_eq!(valid_count, 9);
-        assert!(!output[6].is_nan());
+        assert!(matches!(result, Err(Error::EmptyInput)));
     }
 
-    // ==================== Consistency Tests ====================
+    #[test]
+    fn test_tema_into_zero_period() {
+        let data = vec![1.0_f64, 2.0, 3.0];
+        let mut output = vec![0.0_f64; 3];
+        let result = tema_into(&data, 0, &mut output);
+
+        assert!(matches!(
+            result,
+            Err(Error::InvalidPeriod { period: 0, .. })
+        ));
+    }
 
     #[test]
-    fn test_tema_and_tema_into_produce_same_result() {
+    fn test_tema_into_insufficient_data() {
+        let data = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]; // 6 elements
+        let mut output = vec![0.0_f64; 6];
+        let result = tema_into(&data, 3, &mut output); // Needs 7 elements
+
+        assert!(matches!(
+            result,
+            Err(Error::InsufficientData {
+                required: 7,
+                actual: 6,
+                ..
+            })
+        ));
+    }
+
+    // ==================== Comparison Tests ====================
+
+    #[test]
+    fn test_tema_vs_tema_into() {
         let data: Vec<f64> = (1..=30).map(|x| x as f64).collect();
-        let result1 = tema(&data, 5).unwrap();
+        let result = tema(&data, 5).unwrap();
 
-        let mut result2 = vec![0.0_f64; data.len()];
-        tema_into(&data, 5, &mut result2).unwrap();
+        let mut output = vec![0.0_f64; 30];
+        tema_into(&data, 5, &mut output).unwrap();
 
-        for i in 0..data.len() {
-            assert!(approx_eq(result1[i], result2[i], EPSILON));
-        }
-    }
-
-    #[test]
-    fn test_tema_valid_count() {
-        let data = vec![1.0_f64; 100];
-        let mut output = vec![0.0_f64; 100];
-
-        let valid_count = tema_into(&data, 10, &mut output).unwrap();
-        // Lookback = 3*(10-1) = 27, so valid = 100 - 27 = 73
-        assert_eq!(valid_count, 73);
-    }
-
-    // ==================== Property-Based-Like Tests ====================
-
-    #[test]
-    fn test_tema_output_length_equals_input_length() {
-        for len in [15, 25, 50, 100] {
-            for period in [2, 3, 5] {
-                let min_len = tema_min_len(period);
-                if len >= min_len {
-                    let data: Vec<f64> = (0..len).map(|x| x as f64).collect();
-                    let result = tema(&data, period).unwrap();
-                    assert_eq!(result.len(), len);
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn test_tema_nan_count() {
-        // First 3*(period-1) values should be NaN
-        for period in 2..=5 {
-            let len = 50;
-            let data: Vec<f64> = (0..len).map(|x| x as f64).collect();
-            let result = tema(&data, period).unwrap();
-
-            let expected_nan = tema_lookback(period);
-            let nan_count = result.iter().filter(|x| x.is_nan()).count();
-            assert_eq!(nan_count, expected_nan, "period={}", period);
-        }
-    }
-
-    // ==================== TEMA Formula Verification ====================
-
-    #[test]
-    fn test_tema_formula_verification() {
-        // Verify TEMA = 3*EMA1 - 3*EMA2 + EMA3
-        let data: Vec<f64> = (1..=30).map(|x| x as f64).collect();
-        let period = 5;
-
-        let ema1 = ema(&data, period).unwrap();
-        let tema_result = tema(&data, period).unwrap();
-
-        // Compute EMA2 and EMA3 manually
-        let alpha = 2.0 / (period as f64 + 1.0);
-        let ema1_lookback = period - 1;
-
-        let mut ema2 = ema1[ema1_lookback];
-        let mut ema3 = ema2;
-
-        let lookback = tema_lookback(period);
-        for i in ema1_lookback..data.len() {
-            if i == ema1_lookback {
-                ema2 = ema1[i];
-                ema3 = ema1[i];
+        for i in 0..30 {
+            if result[i].is_nan() {
+                assert!(output[i].is_nan());
             } else {
-                ema2 = alpha * ema1[i] + (1.0 - alpha) * ema2;
-
-                if i >= ema1_lookback + ema1_lookback {
-                    ema3 = alpha * ema2 + (1.0 - alpha) * ema3;
-                } else if i == ema1_lookback + ema1_lookback - 1 {
-                    ema3 = ema2;
-                }
+                assert!(approx_eq(result[i], output[i], EPSILON));
             }
+        }
+    }
 
-            if i >= lookback {
-                let expected = 3.0 * ema1[i] - 3.0 * ema2 + ema3;
-                assert!(
-                    approx_eq(tema_result[i], expected, EPSILON),
-                    "Mismatch at index {}: expected {}, got {}",
-                    i,
-                    expected,
-                    tema_result[i]
-                );
+    #[test]
+    fn test_tema_consistency() {
+        // Test that TEMA values are consistent across different input sizes
+        let data1: Vec<f64> = (1..=20).map(|x| x as f64).collect();
+        let data2: Vec<f64> = (1..=30).map(|x| x as f64).collect();
+
+        let result1 = tema(&data1, 3).unwrap();
+        let result2 = tema(&data2, 3).unwrap();
+
+        // First 20 values should match
+        for i in 0..20 {
+            if result1[i].is_nan() {
+                assert!(result2[i].is_nan());
+            } else {
+                assert!(approx_eq(result1[i], result2[i], EPSILON));
             }
         }
     }

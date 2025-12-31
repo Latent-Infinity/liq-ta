@@ -4,9 +4,31 @@
 //! in the price data. The dominant cycle period is useful for adaptive indicators
 //! that adjust their parameters based on market conditions.
 //!
+//! # Algorithm
+//!
+//! The dominant cycle period is extracted using the Hilbert Transform's homodyne
+//! discriminator. The algorithm:
+//!
+//! 1. Applies a smoothing filter to reduce noise
+//! 2. Uses the Hilbert Transform to generate in-phase (I) and quadrature (Q) components
+//! 3. Correlates successive I/Q samples to detect the instantaneous frequency
+//! 4. Converts frequency to period (Period = 2π / ω)
+//! 5. Applies exponential smoothing to stabilize the estimate
+//!
+//! # Interpretation
+//!
+//! - **Period range**: Output is constrained to [6, 50] bars
+//! - **Short periods** (6-15): Indicates fast market cycles, potentially choppy conditions
+//! - **Long periods** (30-50): Indicates slower, more trending market behavior
+//! - **Adaptive use**: Use the period to dynamically adjust other indicator lengths
+//!
 //! # Lookback
 //!
 //! The lookback period is 63 bars (warm-up period for the Hilbert Transform).
+//!
+//! # Performance
+//!
+//! Uses the shared [`ht_core::hilbert_transform`] computation with O(n) complexity.
 
 use super::ht_core::{hilbert_transform, ht_lookback, ht_min_len};
 use crate::error::{Error, Result};

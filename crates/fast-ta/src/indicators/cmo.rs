@@ -218,7 +218,7 @@ pub fn cmo_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 pub fn cmo<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
-    let mut output = vec![T::zero(); data.len()];
+    let mut output = vec![T::nan(); data.len()];
     cmo_into(data, period, &mut output)?;
     Ok(output)
 }

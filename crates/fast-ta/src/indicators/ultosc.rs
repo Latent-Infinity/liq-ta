@@ -29,7 +29,6 @@
 
 use crate::error::{Error, Result};
 use crate::traits::SeriesElement;
-use crate::utils::is_invalid;
 
 /// Computes the lookback period for ULTOSC.
 #[inline]
@@ -137,27 +136,20 @@ pub fn ultosc_into<T: SeriesElement>(
 
     let lookback = ultosc_lookback(period1, period2, period3);
     let hundred = T::from_f64(100.0)?;
-    let inv_seven = T::from_f64(1.0 / 7.0)?;
+    let seven = T::from_f64(7.0)?;
     let four = T::from_f64(4.0)?;
     let two = T::from_f64(2.0)?;
-    let zero = T::zero();
 
     // Calculate BP and TR for all bars
-    let mut bp = vec![zero; n];
-    let mut tr = vec![zero; n];
-    let mut invalid_flags = vec![false; n];
+    let mut bp = vec![T::zero(); n];
+    let mut tr = vec![T::zero(); n];
 
     // First bar has no prior close, so BP and TR are 0
+    bp[0] = T::zero();
+    tr[0] = T::zero();
+
     for i in 1..n {
         let prior_close = close[i - 1];
-        if is_invalid(high[i])
-            || is_invalid(low[i])
-            || is_invalid(close[i])
-            || is_invalid(prior_close)
-        {
-            invalid_flags[i] = true;
-            continue;
-        }
         let true_low = if low[i] < prior_close {
             low[i]
         } else {
@@ -174,118 +166,53 @@ pub fn ultosc_into<T: SeriesElement>(
     }
 
     // Fill lookback period with NaN
-    for out in output.iter_mut().take(lookback) {
-        *out = T::nan();
+    for i in 0..lookback {
+        output[i] = T::nan();
     }
 
-    // Initialize rolling sums for all three periods
-    // We calculate initial sums for the first valid output position (at index = lookback)
-    let mut sum_bp1 = zero;
-    let mut sum_tr1 = zero;
-    let mut sum_bp2 = zero;
-    let mut sum_tr2 = zero;
-    let mut sum_bp3 = zero;
-    let mut sum_tr3 = zero;
-    let mut invalid_count1 = 0usize;
-    let mut invalid_count2 = 0usize;
-    let mut invalid_count3 = 0usize;
-
-    // Period 1: window [lookback + 1 - period1 .. lookback]
-    for j in (lookback + 1 - period1)..=lookback {
-        if invalid_flags[j] {
-            invalid_count1 += 1;
-        } else {
+    // Calculate ULTOSC for each bar after lookback
+    for i in lookback..n {
+        // Calculate sum of BP and TR for each period
+        let mut sum_bp1 = T::zero();
+        let mut sum_tr1 = T::zero();
+        for j in (i + 1 - period1)..=i {
             sum_bp1 = sum_bp1 + bp[j];
             sum_tr1 = sum_tr1 + tr[j];
         }
-    }
 
-    // Period 2: window [lookback + 1 - period2 .. lookback]
-    for j in (lookback + 1 - period2)..=lookback {
-        if invalid_flags[j] {
-            invalid_count2 += 1;
-        } else {
+        let mut sum_bp2 = T::zero();
+        let mut sum_tr2 = T::zero();
+        for j in (i + 1 - period2)..=i {
             sum_bp2 = sum_bp2 + bp[j];
             sum_tr2 = sum_tr2 + tr[j];
         }
-    }
 
-    // Period 3: window [lookback + 1 - period3 .. lookback]
-    for j in (lookback + 1 - period3)..=lookback {
-        if invalid_flags[j] {
-            invalid_count3 += 1;
-        } else {
+        let mut sum_bp3 = T::zero();
+        let mut sum_tr3 = T::zero();
+        for j in (i + 1 - period3)..=i {
             sum_bp3 = sum_bp3 + bp[j];
             sum_tr3 = sum_tr3 + tr[j];
         }
-    }
 
-    // Calculate first ULTOSC at index = lookback
-    if invalid_count1 > 0 || invalid_count2 > 0 || invalid_count3 > 0 {
-        output[lookback] = T::nan();
-    } else {
-        let avg1 = if sum_tr1 == zero { zero } else { sum_bp1 / sum_tr1 };
-        let avg2 = if sum_tr2 == zero { zero } else { sum_bp2 / sum_tr2 };
-        let avg3 = if sum_tr3 == zero { zero } else { sum_bp3 / sum_tr3 };
-        output[lookback] = hundred * ((four * avg1) + (two * avg2) + avg3) * inv_seven;
-    }
+        // Calculate averages
+        let avg1 = if sum_tr1 == T::zero() {
+            T::zero()
+        } else {
+            sum_bp1 / sum_tr1
+        };
+        let avg2 = if sum_tr2 == T::zero() {
+            T::zero()
+        } else {
+            sum_bp2 / sum_tr2
+        };
+        let avg3 = if sum_tr3 == T::zero() {
+            T::zero()
+        } else {
+            sum_bp3 / sum_tr3
+        };
 
-    // Rolling calculation for remaining values
-    for i in (lookback + 1)..n {
-        // Update period 1 rolling sum
-        let old_idx1 = i - period1;
-        if invalid_flags[old_idx1] {
-            invalid_count1 = invalid_count1.saturating_sub(1);
-        } else {
-            sum_bp1 = sum_bp1 - bp[old_idx1];
-            sum_tr1 = sum_tr1 - tr[old_idx1];
-        }
-        if invalid_flags[i] {
-            invalid_count1 += 1;
-        } else {
-            sum_bp1 = sum_bp1 + bp[i];
-            sum_tr1 = sum_tr1 + tr[i];
-        }
-
-        // Update period 2 rolling sum
-        let old_idx2 = i - period2;
-        if invalid_flags[old_idx2] {
-            invalid_count2 = invalid_count2.saturating_sub(1);
-        } else {
-            sum_bp2 = sum_bp2 - bp[old_idx2];
-            sum_tr2 = sum_tr2 - tr[old_idx2];
-        }
-        if invalid_flags[i] {
-            invalid_count2 += 1;
-        } else {
-            sum_bp2 = sum_bp2 + bp[i];
-            sum_tr2 = sum_tr2 + tr[i];
-        }
-
-        // Update period 3 rolling sum
-        let old_idx3 = i - period3;
-        if invalid_flags[old_idx3] {
-            invalid_count3 = invalid_count3.saturating_sub(1);
-        } else {
-            sum_bp3 = sum_bp3 - bp[old_idx3];
-            sum_tr3 = sum_tr3 - tr[old_idx3];
-        }
-        if invalid_flags[i] {
-            invalid_count3 += 1;
-        } else {
-            sum_bp3 = sum_bp3 + bp[i];
-            sum_tr3 = sum_tr3 + tr[i];
-        }
-
-        // Calculate averages and ULTOSC
-        if invalid_count1 > 0 || invalid_count2 > 0 || invalid_count3 > 0 {
-            output[i] = T::nan();
-        } else {
-            let avg1 = if sum_tr1 == zero { zero } else { sum_bp1 / sum_tr1 };
-            let avg2 = if sum_tr2 == zero { zero } else { sum_bp2 / sum_tr2 };
-            let avg3 = if sum_tr3 == zero { zero } else { sum_bp3 / sum_tr3 };
-            output[i] = hundred * ((four * avg1) + (two * avg2) + avg3) * inv_seven;
-        }
+        // ULTOSC = 100 * ((4 * avg1) + (2 * avg2) + avg3) / 7
+        output[i] = hundred * ((four * avg1) + (two * avg2) + avg3) / seven;
     }
 
     Ok(())

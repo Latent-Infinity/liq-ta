@@ -2,6 +2,39 @@
 //!
 //! This indicator uses the Hilbert Transform to determine whether the market
 //! is in a trending or cycling mode. Returns 1 for trend, 0 for cycle.
+//!
+//! # Algorithm
+//!
+//! The trend mode is determined by analyzing the rate of phase change:
+//!
+//! - **Cycling mode (0)**: Phase is changing rapidly (> 15°/bar), indicating
+//!   regular market oscillation where cycle-based indicators work well
+//! - **Trending mode (1)**: Phase is changing slowly (< 15°/bar), indicating
+//!   the market is in a directional trend
+//!
+//! The threshold of 15° per bar corresponds to approximately a 24-bar cycle
+//! (360° / 15° = 24 bars).
+//!
+//! # Interpretation
+//!
+//! - **Mode = 0 (Cycle)**: Use oscillators like `HT_SINE` for trading signals
+//! - **Mode = 1 (Trend)**: Use trend-following indicators like `HT_TRENDLINE`
+//! - **Mode changes**: Transitions can indicate potential trend reversals or
+//!   the end of consolidation periods
+//!
+//! # Use Cases
+//!
+//! - Filter signals from cycle-based indicators in trending markets
+//! - Switch between trend-following and mean-reversion strategies
+//! - Identify market regime changes
+//!
+//! # Lookback
+//!
+//! The lookback period is 63 bars (warm-up period for the Hilbert Transform).
+//!
+//! # Performance
+//!
+//! Uses the shared [`ht_core::hilbert_transform`] computation with O(n) complexity.
 
 use super::ht_core::{hilbert_transform, ht_lookback, ht_min_len};
 use crate::error::{Error, Result};

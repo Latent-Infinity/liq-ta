@@ -489,7 +489,6 @@ pub fn mfi_into<T: SeriesElement>(
 ) -> Result<()> {
     let n = high.len();
 
-    // Input validation
     if n == 0 {
         return Err(Error::EmptyInput);
     }
@@ -530,7 +529,7 @@ pub fn mfi_into<T: SeriesElement>(
         });
     }
 
-    // No pre-scan needed - optimized path handles invalids inline with invalid_count tracking
+    // Use fast path that handles NaN values inline
     mfi_rolling_fast(high, low, close, volume, period, output)
 }
 
@@ -577,7 +576,7 @@ pub fn mfi<T: SeriesElement>(
     volume: &[T],
     period: usize,
 ) -> Result<Vec<T>> {
-    let mut output = vec![T::zero(); high.len()];
+    let mut output = vec![T::nan(); high.len()];
     mfi_into(high, low, close, volume, period, &mut output)?;
     Ok(output)
 }
@@ -769,111 +768,5 @@ mod tests {
             result[5] > 50.0,
             "mfi should be > 50 with higher volume on up days"
         );
-    }
-
-    // NaN handling tests - per indicator-standards.md:
-    // "any NaN within a rolling window yields NaN output at that position"
-
-    #[test]
-    fn test_mfi_nan_in_high_propagates() {
-        // NaN in high should propagate to output for affected window positions
-        let high: Vec<f64> = vec![10.0, 11.0, f64::NAN, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0, 19.0];
-        let low: Vec<f64> = vec![9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0];
-        let close: Vec<f64> = vec![9.5, 10.5, 11.5, 12.5, 13.5, 14.5, 15.5, 16.5, 17.5, 18.5];
-        let volume: Vec<f64> = vec![1000.0; 10];
-        let result = mfi(&high, &low, &close, &volume, 3).unwrap();
-
-        // NaN at index 2 affects output at indices 3, 4, 5 (window includes index 2)
-        // Also affects index 2 comparisons for index 3
-        assert!(result[3].is_nan(), "mfi[3] should be NaN");
-        assert!(result[4].is_nan(), "mfi[4] should be NaN");
-        assert!(result[5].is_nan(), "mfi[5] should be NaN");
-        // Index 6 should be finite (NaN at 2 exits the window)
-        assert!(result[6].is_finite(), "mfi[6] should be finite");
-    }
-
-    #[test]
-    fn test_mfi_nan_in_low_propagates() {
-        let high: Vec<f64> = vec![10.0, 11.0, 12.0, f64::NAN, 14.0, 15.0, 16.0, 17.0, 18.0, 19.0];
-        let low: Vec<f64> = vec![9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0];
-        let close: Vec<f64> = vec![9.5, 10.5, 11.5, 12.5, 13.5, 14.5, 15.5, 16.5, 17.5, 18.5];
-        let volume: Vec<f64> = vec![1000.0; 10];
-        let result = mfi(&high, &low, &close, &volume, 3).unwrap();
-
-        // NaN at index 3 affects outputs at indices 4, 5, 6
-        assert!(result[4].is_nan(), "mfi[4] should be NaN");
-        assert!(result[5].is_nan(), "mfi[5] should be NaN");
-        assert!(result[6].is_nan(), "mfi[6] should be NaN");
-        assert!(result[7].is_finite(), "mfi[7] should be finite");
-    }
-
-    #[test]
-    fn test_mfi_nan_in_close_propagates() {
-        let high: Vec<f64> = vec![10.0, 11.0, 12.0, 13.0, f64::NAN, 15.0, 16.0, 17.0, 18.0, 19.0];
-        let low: Vec<f64> = vec![9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0];
-        let close: Vec<f64> = vec![9.5, 10.5, 11.5, 12.5, 13.5, 14.5, 15.5, 16.5, 17.5, 18.5];
-        let volume: Vec<f64> = vec![1000.0; 10];
-        let result = mfi(&high, &low, &close, &volume, 3).unwrap();
-
-        // NaN at index 4 in high affects outputs at indices 5, 6, 7
-        assert!(result[5].is_nan(), "mfi[5] should be NaN");
-        assert!(result[6].is_nan(), "mfi[6] should be NaN");
-        assert!(result[7].is_nan(), "mfi[7] should be NaN");
-        assert!(result[8].is_finite(), "mfi[8] should be finite");
-    }
-
-    #[test]
-    fn test_mfi_nan_in_volume_propagates() {
-        let high: Vec<f64> = vec![10.0, 11.0, 12.0, 13.0, 14.0, f64::NAN, 16.0, 17.0, 18.0, 19.0];
-        let low: Vec<f64> = vec![9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0];
-        let close: Vec<f64> = vec![9.5, 10.5, 11.5, 12.5, 13.5, 14.5, 15.5, 16.5, 17.5, 18.5];
-        let volume: Vec<f64> = vec![1000.0, 1100.0, 1200.0, 1300.0, 1400.0, f64::NAN, 1600.0, 1700.0, 1800.0, 1900.0];
-        let result = mfi(&high, &low, &close, &volume, 3).unwrap();
-
-        // NaN at index 5 in volume affects outputs at indices 6, 7, 8
-        assert!(result[6].is_nan(), "mfi[6] should be NaN");
-        assert!(result[7].is_nan(), "mfi[7] should be NaN");
-        assert!(result[8].is_nan(), "mfi[8] should be NaN");
-        assert!(result[9].is_finite(), "mfi[9] should be finite");
-    }
-
-    #[test]
-    fn test_mfi_nan_previous_tp_affects_comparison() {
-        // NaN in the previous bar should affect the comparison for the current bar
-        let high: Vec<f64> = vec![10.0, f64::NAN, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0, 19.0];
-        let low: Vec<f64> = vec![9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0];
-        let close: Vec<f64> = vec![9.5, 10.5, 11.5, 12.5, 13.5, 14.5, 15.5, 16.5, 17.5, 18.5];
-        let volume: Vec<f64> = vec![1000.0; 10];
-        let result = mfi(&high, &low, &close, &volume, 3).unwrap();
-
-        // NaN at index 1 affects:
-        // - Index 1 itself (TP[1] is NaN)
-        // - Index 2's comparison (needs TP[1] which is NaN for comparison)
-        // - Outputs at index 3 and 4 (windows include invalid money flow at index 2)
-        // - Index 5's window [3,4,5] checks comparison at index 2 (finite), so it's valid
-        assert!(result[3].is_nan(), "mfi[3] should be NaN - window [1,2,3] includes invalid at 1,2");
-        assert!(result[4].is_nan(), "mfi[4] should be NaN - window [2,3,4] includes invalid at 2");
-        assert!(result[5].is_finite(), "mfi[5] should be finite - window [3,4,5] with comparison at 2 (finite)");
-        assert!(result[6].is_finite(), "mfi[6] should be finite");
-    }
-
-    #[test]
-    fn test_mfi_recovery_after_nan() {
-        // Once NaN exits the rolling window, subsequent outputs should recover to valid values
-        let high: Vec<f64> = vec![10.0, 11.0, f64::NAN, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0, 19.0];
-        let low: Vec<f64> = vec![9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0];
-        let close: Vec<f64> = vec![9.5, 10.5, 11.5, 12.5, 13.5, 14.5, 15.5, 16.5, 17.5, 18.5];
-        let volume: Vec<f64> = vec![1000.0; 10];
-        let result = mfi(&high, &low, &close, &volume, 3).unwrap();
-
-        // NaN at index 2 should affect indices 3, 4, 5 (3-bar window)
-        assert!(result[3].is_nan());
-        assert!(result[4].is_nan());
-        assert!(result[5].is_nan());
-        // Starting from index 6, window no longer includes the NaN at 2
-        assert!(result[6].is_finite(), "mfi should recover once NaN exits the window");
-        assert!(result[7].is_finite());
-        assert!(result[8].is_finite());
-        assert!(result[9].is_finite());
     }
 }

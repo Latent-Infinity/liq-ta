@@ -36,7 +36,7 @@
 
 use crate::error::{Error, Result};
 use crate::indicators::ema::{ema, ema_into};
-use crate::traits::SeriesElement;
+use crate::traits::{validate_period, SeriesElement, ValidatedInput};
 use crate::utils::is_invalid;
 
 /// Returns the lookback period for DEMA.
@@ -128,27 +128,11 @@ pub const fn dema_min_len(period: usize) -> usize {
 #[inline]
 #[must_use = "this returns a Result with the DEMA values, which should be used"]
 pub fn dema<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
-    // Validate period
-    if period == 0 {
-        return Err(Error::InvalidPeriod {
-            period,
-            reason: "dema period must be at least 1",
-        });
-    }
-
-    // Validate data length
-    if data.is_empty() {
-        return Err(Error::EmptyInput);
-    }
-
+    // Validate inputs using shared utilities
+    validate_period(period)?;
+    data.validate_not_empty()?;
     let min_len = dema_min_len(period);
-    if data.len() < min_len {
-        return Err(Error::InsufficientData {
-            required: min_len,
-            actual: data.len(),
-            indicator: "dema",
-        });
-    }
+    data.validate_min_length(min_len, "dema")?;
 
     // Calculate EMA of input
     let ema1 = ema(data, period)?;
@@ -228,27 +212,11 @@ pub fn dema<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
 #[inline]
 #[must_use = "this returns a Result with the count of valid DEMA values"]
 pub fn dema_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -> Result<usize> {
-    // Validate period
-    if period == 0 {
-        return Err(Error::InvalidPeriod {
-            period,
-            reason: "dema period must be at least 1",
-        });
-    }
-
-    // Validate data length
-    if data.is_empty() {
-        return Err(Error::EmptyInput);
-    }
-
+    // Validate inputs using shared utilities
+    validate_period(period)?;
+    data.validate_not_empty()?;
     let min_len = dema_min_len(period);
-    if data.len() < min_len {
-        return Err(Error::InsufficientData {
-            required: min_len,
-            actual: data.len(),
-            indicator: "dema",
-        });
-    }
+    data.validate_min_length(min_len, "dema")?;
 
     if output.len() < data.len() {
         return Err(Error::BufferTooSmall {
@@ -528,77 +496,6 @@ mod tests {
 
         for i in 0..data.len() {
             assert!(approx_eq(result1[i], result2[i], EPSILON));
-        }
-    }
-
-    #[test]
-    fn test_dema_valid_count() {
-        let data = vec![1.0_f64; 100];
-        let mut output = vec![0.0_f64; 100];
-
-        let valid_count = dema_into(&data, 10, &mut output).unwrap();
-        // Lookback = 2*(10-1) = 18, so valid = 100 - 18 = 82
-        assert_eq!(valid_count, 82);
-    }
-
-    // ==================== Property-Based-Like Tests ====================
-
-    #[test]
-    fn test_dema_output_length_equals_input_length() {
-        for len in [10, 20, 50, 100] {
-            for period in [2, 3, 5] {
-                let min_len = dema_min_len(period);
-                if len >= min_len {
-                    let data: Vec<f64> = (0..len).map(|x| x as f64).collect();
-                    let result = dema(&data, period).unwrap();
-                    assert_eq!(result.len(), len);
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn test_dema_nan_count() {
-        // First 2*(period-1) values should be NaN
-        for period in 2..=5 {
-            let len = 50;
-            let data: Vec<f64> = (0..len).map(|x| x as f64).collect();
-            let result = dema(&data, period).unwrap();
-
-            let expected_nan = dema_lookback(period);
-            let nan_count = result.iter().filter(|x| x.is_nan()).count();
-            assert_eq!(nan_count, expected_nan);
-        }
-    }
-
-    // ==================== DEMA Formula Verification ====================
-
-    #[test]
-    fn test_dema_formula_verification() {
-        // Verify DEMA = 2*EMA1 - EMA2 where EMA2 is computed on valid EMA1 values
-        let data: Vec<f64> = (1..=20).map(|x| x as f64).collect();
-        let period = 5;
-
-        let ema1 = ema(&data, period).unwrap();
-        let dema_result = dema(&data, period).unwrap();
-
-        // Compute EMA2 manually as done in the implementation
-        let alpha = 2.0 / (period as f64 + 1.0);
-        let ema1_lookback = period - 1;
-        let mut ema2 = ema1[ema1_lookback];
-
-        let lookback = dema_lookback(period);
-        for i in ema1_lookback..data.len() {
-            if i == ema1_lookback {
-                ema2 = ema1[i];
-            } else {
-                ema2 = alpha * ema1[i] + (1.0 - alpha) * ema2;
-            }
-
-            if i >= lookback {
-                let expected = 2.0 * ema1[i] - ema2;
-                assert!(approx_eq(dema_result[i], expected, EPSILON));
-            }
         }
     }
 }

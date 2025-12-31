@@ -29,18 +29,7 @@ use crate::error::{Error, Result};
 use crate::precision::{current_precision_mode, PrecisionMode};
 use crate::traits::SeriesElement;
 
-// =============================================================================
-// Helper: Finite value check and precision mode
-// =============================================================================
-
-/// Inline helper to check if a value is finite (not NaN or Infinity).
-/// Per project NaN propagation policy, both NaN and Infinity produce NaN output.
-#[inline(always)]
-fn is_not_finite<T: SeriesElement>(val: T) -> bool {
-    !val.is_finite()
-}
-
-/// Returns true if we should use f64 precision for the given type.
+/// Returns true if we should use f64 precision for f32 inputs.
 #[inline]
 fn use_f64_precision<T: 'static>() -> bool {
     use std::any::TypeId;
@@ -315,7 +304,7 @@ fn var_has_nan<T: SeriesElement>(data: &[T]) -> bool {
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 /// - The output buffer is too small (`Error::BufferTooSmall`)
-pub fn var_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -> Result<()> {
+pub fn var_into<T: SeriesElement + 'static>(data: &[T], period: usize, output: &mut [T]) -> Result<()> {
     if data.is_empty() {
         return Err(Error::EmptyInput);
     }
@@ -344,6 +333,11 @@ pub fn var_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -
         });
     }
 
+    // Use f64 precision path for f32 inputs in High precision mode
+    if use_f64_precision::<T>() {
+        return var_f64_precision(data, period, output);
+    }
+
     // Pre-scan optimization: check for NaN in input data
     // Route to fast path (no NaN tracking) or slow path (with NaN tracking)
     if var_has_nan(data) {
@@ -353,6 +347,201 @@ pub fn var_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -
         // Fast path: no NaN tracking overhead
         var_welford_fast(data, period, output)
     }
+}
+
+/// Computes VAR using f64 accumulators for f32 inputs in High precision mode.
+///
+/// Converts f32 input to f64, performs all calculations in f64, then converts
+/// output back to f32. This provides maximum numerical stability for f32 data.
+#[inline]
+fn var_f64_precision<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -> Result<()> {
+    let n = data.len();
+    let lookback = var_lookback(period);
+    let period_f64 = period as f64;
+
+    // Fill lookback with NaN
+    for i in 0..lookback {
+        output[i] = T::nan();
+    }
+
+    // Handle period=1 edge case: variance is always 0
+    if period == 1 {
+        for i in 0..n {
+            let val = data[i].to_f64().unwrap_or(f64::NAN);
+            output[i] = if val.is_nan() {
+                T::nan()
+            } else {
+                T::zero()
+            };
+        }
+        return Ok(());
+    }
+
+    // Check for NaN to determine path (only NaN, not infinity - to match native behavior)
+    let has_nan = data.iter().any(|x| x.is_nan());
+
+    if has_nan {
+        // Slow path with NaN tracking using f64 accumulators
+        var_f64_precision_slow(data, period, period_f64, lookback, output)
+    } else {
+        // Fast path using f64 accumulators
+        var_f64_precision_fast(data, period, period_f64, lookback, output)
+    }
+}
+
+/// Fast f64 precision path (no NaN in data)
+#[inline]
+fn var_f64_precision_fast<T: SeriesElement>(
+    data: &[T],
+    period: usize,
+    period_f64: f64,
+    lookback: usize,
+    output: &mut [T],
+) -> Result<()> {
+    let n = data.len();
+
+    // Use Welford's online algorithm for initial window with f64
+    let mut mean: f64 = 0.0;
+    let mut m2: f64 = 0.0;
+
+    for i in 0..period {
+        let val = data[i].to_f64().unwrap_or(0.0);
+        let count = (i + 1) as f64;
+        let delta = val - mean;
+        mean += delta / count;
+        let delta2 = val - mean;
+        m2 += delta * delta2;
+    }
+    output[lookback] = T::from_f64(m2 / period_f64)?;
+
+    // For rolling updates, use shifted sums approach with f64
+    let shift = data[0].to_f64().unwrap_or(0.0);
+
+    // Initialize shifted sums from initial window
+    let mut sum: f64 = 0.0;
+    let mut sum_sq: f64 = 0.0;
+
+    for i in 0..period {
+        let shifted = data[i].to_f64().unwrap_or(0.0) - shift;
+        sum += shifted;
+        sum_sq += shifted * shifted;
+    }
+
+    // Rolling updates: O(1) per element
+    for i in period..n {
+        let old_shifted = data[i - period].to_f64().unwrap_or(0.0) - shift;
+        let new_shifted = data[i].to_f64().unwrap_or(0.0) - shift;
+
+        // Update sums: remove old, add new
+        sum = sum - old_shifted + new_shifted;
+        sum_sq = sum_sq - old_shifted * old_shifted + new_shifted * new_shifted;
+
+        // Compute variance: Var = E[X²] - E[X]²
+        let mean_shifted = sum / period_f64;
+        let variance = sum_sq / period_f64 - mean_shifted * mean_shifted;
+        output[i] = T::from_f64(variance)?;
+    }
+
+    Ok(())
+}
+
+/// Slow f64 precision path (with NaN tracking)
+/// Uses is_nan() to match native f32 path behavior - infinity propagates through arithmetic
+#[inline]
+fn var_f64_precision_slow<T: SeriesElement>(
+    data: &[T],
+    period: usize,
+    period_f64: f64,
+    lookback: usize,
+    output: &mut [T],
+) -> Result<()> {
+    let n = data.len();
+
+    // Track NaN count in rolling window (only NaN, not infinity - to match native)
+    let mut nan_count = 0usize;
+
+    // Use Welford's online algorithm for initial window with f64
+    let mut mean: f64 = 0.0;
+    let mut m2: f64 = 0.0;
+    let mut valid_count = 0usize;
+
+    for i in 0..period {
+        let val = data[i].to_f64().unwrap_or(f64::NAN);
+        if val.is_nan() {
+            nan_count += 1;
+        } else {
+            valid_count += 1;
+            let count = valid_count as f64;
+            let delta = val - mean;
+            mean += delta / count;
+            let delta2 = val - mean;
+            m2 += delta * delta2;
+        }
+    }
+
+    // First output value
+    if nan_count > 0 {
+        output[lookback] = T::nan();
+    } else {
+        output[lookback] = T::from_f64(m2 / period_f64)?;
+    }
+
+    // For rolling updates, use shifted sums approach with f64
+    // Use first non-NaN value as shift, or 0 if none
+    let shift = data.iter()
+        .filter_map(|x| x.to_f64())
+        .find(|x| !x.is_nan())
+        .unwrap_or(0.0);
+
+    // Initialize shifted sums from initial window (excluding NaN)
+    let mut sum: f64 = 0.0;
+    let mut sum_sq: f64 = 0.0;
+
+    for i in 0..period {
+        let val = data[i].to_f64().unwrap_or(f64::NAN);
+        if !val.is_nan() {
+            let shifted = val - shift;
+            sum += shifted;
+            sum_sq += shifted * shifted;
+        }
+    }
+
+    // Rolling updates with NaN tracking
+    for i in period..n {
+        let old_val = data[i - period].to_f64().unwrap_or(f64::NAN);
+        let new_val = data[i].to_f64().unwrap_or(f64::NAN);
+
+        // Update NaN count (only NaN, infinity is allowed in sums)
+        if old_val.is_nan() {
+            nan_count -= 1;
+        }
+        if new_val.is_nan() {
+            nan_count += 1;
+        }
+
+        // Update sums (only for non-NaN values, infinity is included)
+        if !old_val.is_nan() {
+            let old_shifted = old_val - shift;
+            sum -= old_shifted;
+            sum_sq -= old_shifted * old_shifted;
+        }
+        if !new_val.is_nan() {
+            let new_shifted = new_val - shift;
+            sum += new_shifted;
+            sum_sq += new_shifted * new_shifted;
+        }
+
+        // Output NaN if any NaN in window
+        if nan_count > 0 {
+            output[i] = T::nan();
+        } else {
+            let mean_shifted = sum / period_f64;
+            let variance = sum_sq / period_f64 - mean_shifted * mean_shifted;
+            output[i] = T::from_f64(variance)?;
+        }
+    }
+
+    Ok(())
 }
 
 /// Computes VAR (Variance).
@@ -365,7 +554,7 @@ pub fn var_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -
 /// - The input data is empty (`Error::EmptyInput`)
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
-pub fn var<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
+pub fn var<T: SeriesElement + 'static>(data: &[T], period: usize) -> Result<Vec<T>> {
     let mut output = vec![T::nan(); data.len()];
     var_into(data, period, &mut output)?;
     Ok(output)
@@ -405,7 +594,7 @@ pub const fn stddev_min_len(period: usize) -> usize {
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 /// - The output buffer is too small (`Error::BufferTooSmall`)
-pub fn stddev_into<T: SeriesElement>(
+pub fn stddev_into<T: SeriesElement + 'static>(
     data: &[T],
     period: usize,
     output: &mut [T],
@@ -434,7 +623,7 @@ pub fn stddev_into<T: SeriesElement>(
 /// - The input data is empty (`Error::EmptyInput`)
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
-pub fn stddev<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
+pub fn stddev<T: SeriesElement + 'static>(data: &[T], period: usize) -> Result<Vec<T>> {
     let mut output = vec![T::nan(); data.len()];
     stddev_into(data, period, &mut output)?;
     Ok(output)

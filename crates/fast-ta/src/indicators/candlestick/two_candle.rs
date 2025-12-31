@@ -5,22 +5,13 @@
 
 use super::core::{
     approx_equal, average_body, average_range, body_bottom, body_midpoint, body_top, candle_range,
-    gap_down, gap_up, is_bearish, is_bullish, is_doji, is_downtrend, is_uptrend, lower_shadow,
-    real_body, real_body_gap_down, real_body_gap_up, upper_shadow, PATTERN_BEARISH,
-    PATTERN_BEARISH_STRONG, PATTERN_BULLISH, PATTERN_BULLISH_STRONG, PATTERN_NONE, TREND_LOOKBACK,
+    f64_to_t, gap_down, gap_up, is_bearish, is_bullish, is_doji, is_downtrend, is_uptrend,
+    lower_shadow, real_body, real_body_gap_down, real_body_gap_up, upper_shadow, AVG_LOOKBACK,
+    PATTERN_BEARISH, PATTERN_BEARISH_STRONG, PATTERN_BULLISH, PATTERN_BULLISH_STRONG, PATTERN_NONE,
+    TREND_LOOKBACK,
 };
 use crate::error::{Error, Result};
 use crate::traits::SeriesElement;
-use num_traits::NumCast;
-
-/// Helper to convert f64 to T (infallible for valid float values).
-#[inline]
-fn f64_to_t<T: SeriesElement>(val: f64) -> T {
-    <T as NumCast>::from(val).unwrap_or_else(T::nan)
-}
-
-/// Default lookback for calculating averages.
-const AVG_LOOKBACK: usize = 10;
 
 /// Lookback for `CDL_ENGULFING` pattern.
 #[must_use]

@@ -352,7 +352,7 @@ pub fn rolling_max<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>
 
     let mut deque: MonotonicDeque<T> = MonotonicDeque::new(period);
 
-    for (i, _) in data.iter().enumerate() {
+    for i in 0..n {
         deque.push_max(i, data);
 
         if i >= period - 1 {
@@ -425,7 +425,7 @@ pub fn rolling_max_into<T: SeriesElement>(
 
     let mut deque: MonotonicDeque<T> = MonotonicDeque::new(period);
 
-    for (i, _) in data.iter().enumerate() {
+    for i in 0..n {
         deque.push_max(i, data);
 
         if i >= period - 1 {
@@ -507,7 +507,7 @@ pub fn rolling_min<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>
 
     let mut deque: MonotonicDeque<T> = MonotonicDeque::new(period);
 
-    for (i, _) in data.iter().enumerate() {
+    for i in 0..n {
         deque.push_min(i, data);
 
         if i >= period - 1 {
@@ -580,7 +580,7 @@ pub fn rolling_min_into<T: SeriesElement>(
 
     let mut deque: MonotonicDeque<T> = MonotonicDeque::new(period);
 
-    for (i, _) in data.iter().enumerate() {
+    for i in 0..n {
         deque.push_min(i, data);
 
         if i >= period - 1 {
@@ -591,10 +591,10 @@ pub fn rolling_min_into<T: SeriesElement>(
     Ok(n - period + 1)
 }
 
-/// Computes both rolling maximum and minimum in a single pass.
+/// Computes both rolling maximum and minimum using monotonic deques.
 ///
-/// This function is more efficient than calling `rolling_max` and `rolling_min`
-/// separately when both values are needed, as it only iterates over the data once.
+/// This is more efficient than calling `rolling_max` and `rolling_min` separately,
+/// as it processes the data only once.
 ///
 /// # Arguments
 ///
@@ -616,28 +616,25 @@ pub fn rolling_min_into<T: SeriesElement>(
 /// # Performance
 ///
 /// - Time complexity: O(n) where n is the length of the input data
-/// - Space complexity: O(n) for outputs + O(2k) for the deques
+/// - Space complexity: O(n) for output + O(k) for both deques
 ///
 /// # Example
 ///
 /// ```
 /// use fast_ta::kernels::rolling_extrema::rolling_extrema;
 ///
-/// let data = vec![3.0_f64, 1.0, 4.0, 1.0, 5.0, 9.0, 2.0, 6.0];
+/// let data = vec![1.0_f64, 3.0, 2.0, 5.0, 4.0];
 /// let result = rolling_extrema(&data, 3).unwrap();
 ///
 /// // First 2 values are NaN
 /// assert!(result.max[0].is_nan());
 /// assert!(result.min[0].is_nan());
 ///
-/// // At index 2: window [3, 1, 4]
-/// assert!((result.max[2] - 4.0).abs() < 1e-10); // max = 4
-/// assert!((result.min[2] - 1.0).abs() < 1e-10); // min = 1
+/// // max of [1,3,2] = 3, min = 1
+/// assert!((result.max[2] - 3.0).abs() < 1e-10);
+/// assert!((result.min[2] - 1.0).abs() < 1e-10);
 /// ```
-pub fn rolling_extrema<T: SeriesElement>(
-    data: &[T],
-    period: usize,
-) -> Result<RollingExtremaOutput<T>> {
+pub fn rolling_extrema<T: SeriesElement>(data: &[T], period: usize) -> Result<RollingExtremaOutput<T>> {
     // Validate inputs
     if period == 0 {
         return Err(Error::InvalidPeriod {
@@ -659,35 +656,35 @@ pub fn rolling_extrema<T: SeriesElement>(
     }
 
     let n = data.len();
-    let mut max_result = vec![T::nan(); n];
-    let mut min_result = vec![T::nan(); n];
+    let mut max = vec![T::nan(); n];
+    let mut min = vec![T::nan(); n];
 
     let mut max_deque: MonotonicDeque<T> = MonotonicDeque::new(period);
     let mut min_deque: MonotonicDeque<T> = MonotonicDeque::new(period);
 
-    for (i, _) in data.iter().enumerate() {
+    for i in 0..n {
         max_deque.push_max(i, data);
         min_deque.push_min(i, data);
 
         if i >= period - 1 {
-            max_result[i] = max_deque.get_extremum(data);
-            min_result[i] = min_deque.get_extremum(data);
+            max[i] = max_deque.get_extremum(data);
+            min[i] = min_deque.get_extremum(data);
         }
     }
 
-    Ok(RollingExtremaOutput {
-        max: max_result,
-        min: min_result,
-    })
+    Ok(RollingExtremaOutput { max, min })
 }
 
 /// Computes both rolling maximum and minimum into pre-allocated output buffers.
+///
+/// This is more efficient than calling `rolling_max_into` and `rolling_min_into` separately.
 ///
 /// # Arguments
 ///
 /// * `data` - The input data series
 /// * `period` - The window size for rolling calculations
-/// * `output` - Pre-allocated output structure
+/// * `max_output` - Pre-allocated output buffer for max (must be at least as long as input)
+/// * `min_output` - Pre-allocated output buffer for min (must be at least as long as input)
 ///
 /// # Returns
 ///
@@ -700,11 +697,12 @@ pub fn rolling_extrema<T: SeriesElement>(
 /// - The input data is empty (`Error::EmptyInput`)
 /// - The period is zero (`Error::InvalidPeriod`)
 /// - The input data is shorter than the period (`Error::InsufficientData`)
-/// - Any output buffer is shorter than the input data
+/// - Either output buffer is shorter than the input data
 pub fn rolling_extrema_into<T: SeriesElement>(
     data: &[T],
     period: usize,
-    output: &mut RollingExtremaOutput<T>,
+    max_output: &mut [T],
+    min_output: &mut [T],
 ) -> Result<usize> {
     // Validate inputs
     if period == 0 {
@@ -726,1347 +724,44 @@ pub fn rolling_extrema_into<T: SeriesElement>(
         });
     }
 
-    if output.max.len() < data.len() {
+    if max_output.len() < data.len() {
         return Err(Error::BufferTooSmall {
             required: data.len(),
-            actual: output.max.len(),
-            indicator: "rolling_extrema",
+            actual: max_output.len(),
+            indicator: "rolling_extrema_max",
         });
     }
 
-    if output.min.len() < data.len() {
+    if min_output.len() < data.len() {
         return Err(Error::BufferTooSmall {
             required: data.len(),
-            actual: output.min.len(),
-            indicator: "rolling_extrema",
+            actual: min_output.len(),
+            indicator: "rolling_extrema_min",
         });
     }
 
     let n = data.len();
 
     // Initialize with NaN
-    for (max_value, min_value) in output
-        .max
-        .iter_mut()
-        .zip(output.min.iter_mut())
-        .take(period - 1)
-    {
-        *max_value = T::nan();
-        *min_value = T::nan();
+    for value in max_output.iter_mut().take(period - 1) {
+        *value = T::nan();
+    }
+    for value in min_output.iter_mut().take(period - 1) {
+        *value = T::nan();
     }
 
     let mut max_deque: MonotonicDeque<T> = MonotonicDeque::new(period);
     let mut min_deque: MonotonicDeque<T> = MonotonicDeque::new(period);
 
-    for (i, _) in data.iter().enumerate() {
+    for i in 0..n {
         max_deque.push_max(i, data);
         min_deque.push_min(i, data);
 
         if i >= period - 1 {
-            output.max[i] = max_deque.get_extremum(data);
-            output.min[i] = min_deque.get_extremum(data);
+            max_output[i] = max_deque.get_extremum(data);
+            min_output[i] = min_deque.get_extremum(data);
         }
     }
 
     Ok(n - period + 1)
-}
-
-/// Computes rolling maximum using the naive O(n×k) scan approach.
-///
-/// This function is provided for comparison and testing purposes.
-/// It is NOT recommended for production use - use `rolling_max` instead.
-///
-/// # Arguments
-///
-/// * `data` - The input data series
-/// * `period` - The window size for rolling calculations
-///
-/// # Returns
-///
-/// A `Result` containing a vector of rolling maximum values.
-///
-/// # Errors
-///
-/// Returns an error if:
-/// - The input data is empty (`Error::EmptyInput`)
-/// - The period is zero (`Error::InvalidPeriod`)
-/// - The input data is shorter than the period (`Error::InsufficientData`)
-pub fn rolling_max_naive<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
-    if period == 0 {
-        return Err(Error::InvalidPeriod {
-            period,
-            reason: "period must be at least 1",
-        });
-    }
-
-    if data.is_empty() {
-        return Err(Error::EmptyInput);
-    }
-
-    if data.len() < period {
-        return Err(Error::InsufficientData {
-            required: period,
-            actual: data.len(),
-            indicator: "rolling_max_naive",
-        });
-    }
-
-    let n = data.len();
-    let mut result = vec![T::nan(); n];
-
-    for (i, out) in result.iter_mut().enumerate().skip(period - 1) {
-        let window_start = i + 1 - period;
-        let mut max_val = data[window_start];
-
-        for &value in data.iter().take(i + 1).skip(window_start + 1) {
-            if value > max_val || is_invalid(max_val) {
-                max_val = value;
-            }
-        }
-
-        *out = max_val;
-    }
-
-    Ok(result)
-}
-
-/// Computes rolling minimum using the naive O(n×k) scan approach.
-///
-/// This function is provided for comparison and testing purposes.
-/// It is NOT recommended for production use - use `rolling_min` instead.
-///
-/// # Arguments
-///
-/// * `data` - The input data series
-/// * `period` - The window size for rolling calculations
-///
-/// # Returns
-///
-/// A `Result` containing a vector of rolling minimum values.
-///
-/// # Errors
-///
-/// Returns an error if:
-/// - The input data is empty (`Error::EmptyInput`)
-/// - The period is zero (`Error::InvalidPeriod`)
-/// - The input data is shorter than the period (`Error::InsufficientData`)
-pub fn rolling_min_naive<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
-    if period == 0 {
-        return Err(Error::InvalidPeriod {
-            period,
-            reason: "period must be at least 1",
-        });
-    }
-
-    if data.is_empty() {
-        return Err(Error::EmptyInput);
-    }
-
-    if data.len() < period {
-        return Err(Error::InsufficientData {
-            required: period,
-            actual: data.len(),
-            indicator: "rolling_min_naive",
-        });
-    }
-
-    let n = data.len();
-    let mut result = vec![T::nan(); n];
-
-    for (i, out) in result.iter_mut().enumerate().skip(period - 1) {
-        let window_start = i + 1 - period;
-        let mut min_val = data[window_start];
-
-        for &value in data.iter().take(i + 1).skip(window_start + 1) {
-            if value < min_val || is_invalid(min_val) {
-                min_val = value;
-            }
-        }
-
-        *out = min_val;
-    }
-
-    Ok(result)
-}
-
-// ==================== NaN-Propagating Variants ====================
-//
-// These functions propagate NaN through the window: if any value in the
-// current window is NaN, the output is NaN. This is required for indicators
-// like Stochastic that need strict NaN propagation semantics.
-
-/// Computes rolling maximum with NaN propagation using a monotonic deque.
-///
-/// Unlike `rolling_max` which skips NaN values, this function propagates NaN:
-/// if any value in the current window is NaN, the output is NaN.
-///
-/// This is required for indicators like Stochastic that need strict NaN
-/// propagation semantics per PRD §4.8.
-///
-/// # Arguments
-///
-/// * `data` - The input data series
-/// * `period` - The window size for rolling calculations
-///
-/// # Returns
-///
-/// A `Result` containing a vector of rolling maximum values with NaN propagation.
-///
-/// # Errors
-///
-/// Returns an error if:
-/// - The input data is empty (`Error::EmptyInput`)
-/// - The period is zero (`Error::InvalidPeriod`)
-/// - The input data is shorter than the period (`Error::InsufficientData`)
-pub fn rolling_max_nan_propagating<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
-    if period == 0 {
-        return Err(Error::InvalidPeriod {
-            period,
-            reason: "period must be at least 1",
-        });
-    }
-
-    if data.is_empty() {
-        return Err(Error::EmptyInput);
-    }
-
-    if data.len() < period {
-        return Err(Error::InsufficientData {
-            required: period,
-            actual: data.len(),
-            indicator: "rolling_max_nan_propagating",
-        });
-    }
-
-    let n = data.len();
-    let mut result = vec![T::nan(); n];
-
-    // Track NaN positions in a circular buffer style using a count
-    let mut nan_count = 0usize;
-    let mut deque: MonotonicDeque<T> = MonotonicDeque::new(period);
-
-    for i in 0..n {
-        // Track NaN entering window
-        if is_invalid(data[i]) {
-            nan_count += 1;
-        }
-
-        // Track NaN leaving window (after first full window)
-        if i >= period && is_invalid(data[i - period]) {
-            nan_count -= 1;
-        }
-
-        // Always update deque (it handles NaN internally by skipping)
-        deque.push_max(i, data);
-
-        if i >= period - 1 {
-            if nan_count > 0 {
-                result[i] = T::nan();
-            } else {
-                result[i] = deque.get_extremum(data);
-            }
-        }
-    }
-
-    Ok(result)
-}
-
-/// Computes rolling minimum with NaN propagation using a monotonic deque.
-///
-/// Unlike `rolling_min` which skips NaN values, this function propagates NaN:
-/// if any value in the current window is NaN, the output is NaN.
-///
-/// # Arguments
-///
-/// * `data` - The input data series
-/// * `period` - The window size for rolling calculations
-///
-/// # Returns
-///
-/// A `Result` containing a vector of rolling minimum values with NaN propagation.
-///
-/// # Errors
-///
-/// Returns an error if:
-/// - The input data is empty (`Error::EmptyInput`)
-/// - The period is zero (`Error::InvalidPeriod`)
-/// - The input data is shorter than the period (`Error::InsufficientData`)
-pub fn rolling_min_nan_propagating<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
-    if period == 0 {
-        return Err(Error::InvalidPeriod {
-            period,
-            reason: "period must be at least 1",
-        });
-    }
-
-    if data.is_empty() {
-        return Err(Error::EmptyInput);
-    }
-
-    if data.len() < period {
-        return Err(Error::InsufficientData {
-            required: period,
-            actual: data.len(),
-            indicator: "rolling_min_nan_propagating",
-        });
-    }
-
-    let n = data.len();
-    let mut result = vec![T::nan(); n];
-
-    let mut nan_count = 0usize;
-    let mut deque: MonotonicDeque<T> = MonotonicDeque::new(period);
-
-    for i in 0..n {
-        if is_invalid(data[i]) {
-            nan_count += 1;
-        }
-
-        if i >= period && is_invalid(data[i - period]) {
-            nan_count -= 1;
-        }
-
-        deque.push_min(i, data);
-
-        if i >= period - 1 {
-            if nan_count > 0 {
-                result[i] = T::nan();
-            } else {
-                result[i] = deque.get_extremum(data);
-            }
-        }
-    }
-
-    Ok(result)
-}
-
-/// Computes rolling max of `high` and rolling min of `low` with NaN propagation.
-///
-/// This fused version is optimized for Stochastic Oscillator which needs:
-/// - Highest high from the `high` array
-/// - Lowest low from the `low` array
-/// - NaN propagation if either array has NaN in the window
-///
-/// # Arguments
-///
-/// * `high` - The high price data series
-/// * `low` - The low price data series
-/// * `period` - The window size for rolling calculations
-///
-/// # Returns
-///
-/// A `Result` containing a `RollingExtremaOutput` where:
-/// - `max` contains the rolling maximum of `high`
-/// - `min` contains the rolling minimum of `low`
-///
-/// # Errors
-///
-/// Returns an error if:
-/// - Either input is empty (`Error::EmptyInput`)
-/// - The period is zero (`Error::InvalidPeriod`)
-/// - Input lengths don't match
-/// - Input data is shorter than the period (`Error::InsufficientData`)
-pub fn rolling_extrema_fused_nan_propagating<T: SeriesElement>(
-    high: &[T],
-    low: &[T],
-    period: usize,
-) -> Result<RollingExtremaOutput<T>> {
-    if period == 0 {
-        return Err(Error::InvalidPeriod {
-            period,
-            reason: "period must be at least 1",
-        });
-    }
-
-    if high.is_empty() || low.is_empty() {
-        return Err(Error::EmptyInput);
-    }
-
-    if high.len() != low.len() {
-        return Err(Error::LengthMismatch {
-            description: format!("high has {} elements, low has {}", high.len(), low.len()),
-        });
-    }
-
-    if high.len() < period {
-        return Err(Error::InsufficientData {
-            required: period,
-            actual: high.len(),
-            indicator: "rolling_extrema_fused_nan_propagating",
-        });
-    }
-
-    let n = high.len();
-    let mut max_result = vec![T::nan(); n];
-    let mut min_result = vec![T::nan(); n];
-
-    // Track NaN count from both arrays combined
-    let mut nan_count = 0usize;
-    let mut max_deque: MonotonicDeque<T> = MonotonicDeque::new(period);
-    let mut min_deque: MonotonicDeque<T> = MonotonicDeque::new(period);
-
-    for i in 0..n {
-        // Track NaN entering window (from either high or low)
-        if is_invalid(high[i]) {
-            nan_count += 1;
-        }
-        if is_invalid(low[i]) {
-            nan_count += 1;
-        }
-
-        // Track NaN leaving window
-        if i >= period {
-            if is_invalid(high[i - period]) {
-                nan_count -= 1;
-            }
-            if is_invalid(low[i - period]) {
-                nan_count -= 1;
-            }
-        }
-
-        // Update deques
-        max_deque.push_max(i, high);
-        min_deque.push_min(i, low);
-
-        if i >= period - 1 {
-            if nan_count > 0 {
-                max_result[i] = T::nan();
-                min_result[i] = T::nan();
-            } else {
-                max_result[i] = max_deque.get_extremum(high);
-                min_result[i] = min_deque.get_extremum(low);
-            }
-        }
-    }
-
-    Ok(RollingExtremaOutput {
-        max: max_result,
-        min: min_result,
-    })
-}
-
-/// Computes rolling max of `high` and rolling min of `low` into pre-allocated buffers.
-///
-/// This is the `_into` variant for buffer reuse.
-///
-/// # Arguments
-///
-/// * `high` - The high price data series
-/// * `low` - The low price data series
-/// * `period` - The window size for rolling calculations
-/// * `output` - Pre-allocated output structure
-///
-/// # Returns
-///
-/// A `Result` containing the number of valid values computed.
-pub fn rolling_extrema_fused_nan_propagating_into<T: SeriesElement>(
-    high: &[T],
-    low: &[T],
-    period: usize,
-    output: &mut RollingExtremaOutput<T>,
-) -> Result<usize> {
-    if period == 0 {
-        return Err(Error::InvalidPeriod {
-            period,
-            reason: "period must be at least 1",
-        });
-    }
-
-    if high.is_empty() || low.is_empty() {
-        return Err(Error::EmptyInput);
-    }
-
-    if high.len() != low.len() {
-        return Err(Error::LengthMismatch {
-            description: format!("high has {} elements, low has {}", high.len(), low.len()),
-        });
-    }
-
-    let n = high.len();
-
-    if output.max.len() < n || output.min.len() < n {
-        return Err(Error::BufferTooSmall {
-            required: n,
-            actual: output.max.len().min(output.min.len()),
-            indicator: "rolling_extrema_fused_nan_propagating",
-        });
-    }
-
-    if n < period {
-        return Err(Error::InsufficientData {
-            required: period,
-            actual: n,
-            indicator: "rolling_extrema_fused_nan_propagating",
-        });
-    }
-
-    // Initialize with NaN
-    for i in 0..(period - 1) {
-        output.max[i] = T::nan();
-        output.min[i] = T::nan();
-    }
-
-    let mut nan_count = 0usize;
-    let mut max_deque: MonotonicDeque<T> = MonotonicDeque::new(period);
-    let mut min_deque: MonotonicDeque<T> = MonotonicDeque::new(period);
-
-    for i in 0..n {
-        if is_invalid(high[i]) {
-            nan_count += 1;
-        }
-        if is_invalid(low[i]) {
-            nan_count += 1;
-        }
-
-        if i >= period {
-            if is_invalid(high[i - period]) {
-                nan_count -= 1;
-            }
-            if is_invalid(low[i - period]) {
-                nan_count -= 1;
-            }
-        }
-
-        max_deque.push_max(i, high);
-        min_deque.push_min(i, low);
-
-        if i >= period - 1 {
-            if nan_count > 0 {
-                output.max[i] = T::nan();
-                output.min[i] = T::nan();
-            } else {
-                output.max[i] = max_deque.get_extremum(high);
-                output.min[i] = min_deque.get_extremum(low);
-            }
-        }
-    }
-
-    Ok(n - period + 1)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use num_traits::Float;
-
-    // Helper function to compare floating point values
-    fn approx_eq<T: Float>(a: T, b: T, epsilon: T) -> bool {
-        if a.is_nan() && b.is_nan() {
-            return true;
-        }
-        if a.is_nan() || b.is_nan() {
-            return false;
-        }
-        (a - b).abs() < epsilon
-    }
-
-    const EPSILON: f64 = 1e-10;
-    const EPSILON_F32: f32 = 1e-5;
-
-    // ==================== MonotonicDeque Tests ====================
-
-    #[test]
-    fn test_monotonic_deque_new() {
-        let deque: MonotonicDeque<f64> = MonotonicDeque::new(5);
-        assert_eq!(deque.period(), 5);
-        assert!(deque.is_empty());
-        assert_eq!(deque.len(), 0);
-    }
-
-    #[test]
-    fn test_monotonic_deque_push_max() {
-        let data = vec![3.0_f64, 1.0, 4.0, 1.0, 5.0];
-        let mut deque: MonotonicDeque<f64> = MonotonicDeque::new(3);
-
-        deque.push_max(0, &data); // [3]
-        assert_eq!(deque.front_index(), Some(0));
-
-        deque.push_max(1, &data); // [3, 1] -> 3 is still max
-        assert_eq!(deque.front_index(), Some(0));
-
-        deque.push_max(2, &data); // [4] -> 4 is new max
-        assert_eq!(deque.front_index(), Some(2));
-
-        deque.push_max(3, &data); // [4, 1] -> 4 is still max
-        assert_eq!(deque.front_index(), Some(2));
-
-        deque.push_max(4, &data); // [5] -> 5 is new max, 4 expired
-        assert_eq!(deque.front_index(), Some(4));
-    }
-
-    #[test]
-    fn test_monotonic_deque_push_min() {
-        let data = vec![3.0_f64, 5.0, 2.0, 4.0, 1.0];
-        let mut deque: MonotonicDeque<f64> = MonotonicDeque::new(3);
-
-        deque.push_min(0, &data); // [3]
-        assert_eq!(deque.front_index(), Some(0));
-
-        deque.push_min(1, &data); // [3, 5] -> 3 is still min
-        assert_eq!(deque.front_index(), Some(0));
-
-        deque.push_min(2, &data); // [2] -> 2 is new min
-        assert_eq!(deque.front_index(), Some(2));
-
-        deque.push_min(3, &data); // [2, 4] -> 2 is still min
-        assert_eq!(deque.front_index(), Some(2));
-
-        deque.push_min(4, &data); // [1] -> 1 is new min, 2 expired
-        assert_eq!(deque.front_index(), Some(4));
-    }
-
-    #[test]
-    fn test_monotonic_deque_clear() {
-        let data = vec![1.0_f64, 2.0, 3.0];
-        let mut deque: MonotonicDeque<f64> = MonotonicDeque::new(3);
-
-        deque.push_max(0, &data);
-        deque.push_max(1, &data);
-        assert!(!deque.is_empty());
-
-        deque.clear();
-        assert!(deque.is_empty());
-        assert_eq!(deque.len(), 0);
-    }
-
-    #[test]
-    fn test_monotonic_deque_nan_handling() {
-        let data = vec![1.0_f64, f64::NAN, 3.0];
-        let mut deque: MonotonicDeque<f64> = MonotonicDeque::new(3);
-
-        deque.push_max(0, &data);
-        deque.push_max(1, &data); // NaN should be skipped
-        deque.push_max(2, &data);
-
-        // 3 should be the max (NaN was skipped)
-        assert_eq!(deque.front_index(), Some(2));
-        assert!(approx_eq(deque.get_extremum(&data), 3.0, EPSILON));
-    }
-
-    // ==================== rolling_max Tests ====================
-
-    #[test]
-    fn test_rolling_max_basic() {
-        let data = vec![1.0_f64, 3.0, 2.0, 5.0, 4.0];
-        let result = rolling_max(&data, 3).unwrap();
-
-        assert_eq!(result.len(), 5);
-
-        // First 2 values are NaN
-        assert!(result[0].is_nan());
-        assert!(result[1].is_nan());
-
-        // max of [1,3,2] = 3
-        assert!(approx_eq(result[2], 3.0, EPSILON));
-
-        // max of [3,2,5] = 5
-        assert!(approx_eq(result[3], 5.0, EPSILON));
-
-        // max of [2,5,4] = 5
-        assert!(approx_eq(result[4], 5.0, EPSILON));
-    }
-
-    #[test]
-    fn test_rolling_max_period_one() {
-        let data = vec![1.0_f64, 3.0, 2.0, 5.0, 4.0];
-        let result = rolling_max(&data, 1).unwrap();
-
-        // With period 1, max equals input
-        for i in 0..5 {
-            assert!(approx_eq(result[i], data[i], EPSILON));
-        }
-    }
-
-    #[test]
-    fn test_rolling_max_period_equals_length() {
-        let data = vec![1.0_f64, 3.0, 2.0, 5.0, 4.0];
-        let result = rolling_max(&data, 5).unwrap();
-
-        // Only last value is valid
-        for value in result.iter().take(4) {
-            assert!(value.is_nan());
-        }
-        assert!(approx_eq(result[4], 5.0, EPSILON)); // max of all
-    }
-
-    #[test]
-    fn test_rolling_max_constant_values() {
-        let data = vec![5.0_f64; 10];
-        let result = rolling_max(&data, 3).unwrap();
-
-        for value in result.iter().skip(2) {
-            assert!(approx_eq(*value, 5.0, EPSILON));
-        }
-    }
-
-    #[test]
-    fn test_rolling_max_f32() {
-        let data = vec![1.0_f32, 3.0, 2.0, 5.0, 4.0];
-        let result = rolling_max(&data, 3).unwrap();
-
-        assert!(approx_eq(result[2], 3.0_f32, EPSILON_F32));
-        assert!(approx_eq(result[3], 5.0_f32, EPSILON_F32));
-    }
-
-    #[test]
-    fn test_rolling_max_matches_naive() {
-        let data: Vec<f64> = (0..100)
-            .map(|i| (f64::from(i) * 7.0).sin().mul_add(10.0, 50.0))
-            .collect();
-
-        for period in [2, 5, 10, 20, 50] {
-            let optimized = rolling_max(&data, period).unwrap();
-            let naive = rolling_max_naive(&data, period).unwrap();
-
-            for i in 0..data.len() {
-                assert!(
-                    approx_eq(optimized[i], naive[i], EPSILON),
-                    "Mismatch at index {i} for period {period}: optimized={}, naive={}",
-                    optimized[i],
-                    naive[i]
-                );
-            }
-        }
-    }
-
-    // ==================== rolling_min Tests ====================
-
-    #[test]
-    fn test_rolling_min_basic() {
-        let data = vec![5.0_f64, 3.0, 4.0, 1.0, 2.0];
-        let result = rolling_min(&data, 3).unwrap();
-
-        assert_eq!(result.len(), 5);
-
-        // First 2 values are NaN
-        assert!(result[0].is_nan());
-        assert!(result[1].is_nan());
-
-        // min of [5,3,4] = 3
-        assert!(approx_eq(result[2], 3.0, EPSILON));
-
-        // min of [3,4,1] = 1
-        assert!(approx_eq(result[3], 1.0, EPSILON));
-
-        // min of [4,1,2] = 1
-        assert!(approx_eq(result[4], 1.0, EPSILON));
-    }
-
-    #[test]
-    fn test_rolling_min_period_one() {
-        let data = vec![5.0_f64, 3.0, 4.0, 1.0, 2.0];
-        let result = rolling_min(&data, 1).unwrap();
-
-        // With period 1, min equals input
-        for i in 0..5 {
-            assert!(approx_eq(result[i], data[i], EPSILON));
-        }
-    }
-
-    #[test]
-    fn test_rolling_min_period_equals_length() {
-        let data = vec![5.0_f64, 3.0, 4.0, 1.0, 2.0];
-        let result = rolling_min(&data, 5).unwrap();
-
-        // Only last value is valid
-        for value in result.iter().take(4) {
-            assert!(value.is_nan());
-        }
-        assert!(approx_eq(result[4], 1.0, EPSILON)); // min of all
-    }
-
-    #[test]
-    fn test_rolling_min_constant_values() {
-        let data = vec![5.0_f64; 10];
-        let result = rolling_min(&data, 3).unwrap();
-
-        for value in result.iter().skip(2) {
-            assert!(approx_eq(*value, 5.0, EPSILON));
-        }
-    }
-
-    #[test]
-    fn test_rolling_min_f32() {
-        let data = vec![5.0_f32, 3.0, 4.0, 1.0, 2.0];
-        let result = rolling_min(&data, 3).unwrap();
-
-        assert!(approx_eq(result[2], 3.0_f32, EPSILON_F32));
-        assert!(approx_eq(result[3], 1.0_f32, EPSILON_F32));
-    }
-
-    #[test]
-    fn test_rolling_min_matches_naive() {
-        let data: Vec<f64> = (0..100)
-            .map(|i| (f64::from(i) * 7.0).sin().mul_add(10.0, 50.0))
-            .collect();
-
-        for period in [2, 5, 10, 20, 50] {
-            let optimized = rolling_min(&data, period).unwrap();
-            let naive = rolling_min_naive(&data, period).unwrap();
-
-            for i in 0..data.len() {
-                assert!(
-                    approx_eq(optimized[i], naive[i], EPSILON),
-                    "Mismatch at index {i} for period {period}: optimized={}, naive={}",
-                    optimized[i],
-                    naive[i]
-                );
-            }
-        }
-    }
-
-    // ==================== rolling_extrema Tests ====================
-
-    #[test]
-    fn test_rolling_extrema_basic() {
-        let data = vec![3.0_f64, 1.0, 4.0, 1.0, 5.0, 9.0, 2.0, 6.0];
-        let result = rolling_extrema(&data, 3).unwrap();
-
-        assert_eq!(result.max.len(), 8);
-        assert_eq!(result.min.len(), 8);
-
-        // First 2 values are NaN
-        assert!(result.max[0].is_nan());
-        assert!(result.max[1].is_nan());
-        assert!(result.min[0].is_nan());
-        assert!(result.min[1].is_nan());
-
-        // [3, 1, 4]: max=4, min=1
-        assert!(approx_eq(result.max[2], 4.0, EPSILON));
-        assert!(approx_eq(result.min[2], 1.0, EPSILON));
-
-        // [1, 4, 1]: max=4, min=1
-        assert!(approx_eq(result.max[3], 4.0, EPSILON));
-        assert!(approx_eq(result.min[3], 1.0, EPSILON));
-
-        // [1, 5, 9]: max=9, min=1
-        assert!(approx_eq(result.max[5], 9.0, EPSILON));
-        assert!(approx_eq(result.min[5], 1.0, EPSILON));
-    }
-
-    #[test]
-    fn test_rolling_extrema_matches_separate() {
-        let data: Vec<f64> = (0..50)
-            .map(|i| (f64::from(i) * 0.1).sin().mul_add(10.0, 50.0))
-            .collect();
-
-        for period in [2, 5, 10, 20] {
-            let fused = rolling_extrema(&data, period).unwrap();
-            let max_separate = rolling_max(&data, period).unwrap();
-            let min_separate = rolling_min(&data, period).unwrap();
-
-            for i in 0..data.len() {
-                assert!(
-                    approx_eq(fused.max[i], max_separate[i], EPSILON),
-                    "Max mismatch at index {i} for period {period}"
-                );
-                assert!(
-                    approx_eq(fused.min[i], min_separate[i], EPSILON),
-                    "Min mismatch at index {i} for period {period}"
-                );
-            }
-        }
-    }
-
-    // ==================== Error Handling Tests ====================
-
-    #[test]
-    fn test_rolling_max_empty_input() {
-        let data: Vec<f64> = vec![];
-        let result = rolling_max(&data, 3);
-        assert!(matches!(result, Err(Error::EmptyInput)));
-    }
-
-    #[test]
-    fn test_rolling_max_zero_period() {
-        let data = vec![1.0_f64, 2.0, 3.0];
-        let result = rolling_max(&data, 0);
-        assert!(matches!(
-            result,
-            Err(Error::InvalidPeriod { period: 0, .. })
-        ));
-    }
-
-    #[test]
-    fn test_rolling_max_period_exceeds_length() {
-        let data = vec![1.0_f64, 2.0, 3.0];
-        let result = rolling_max(&data, 5);
-        assert!(matches!(
-            result,
-            Err(Error::InsufficientData {
-                required: 5,
-                actual: 3,
-                ..
-            })
-        ));
-    }
-
-    #[test]
-    fn test_rolling_min_empty_input() {
-        let data: Vec<f64> = vec![];
-        let result = rolling_min(&data, 3);
-        assert!(matches!(result, Err(Error::EmptyInput)));
-    }
-
-    #[test]
-    fn test_rolling_min_zero_period() {
-        let data = vec![1.0_f64, 2.0, 3.0];
-        let result = rolling_min(&data, 0);
-        assert!(matches!(
-            result,
-            Err(Error::InvalidPeriod { period: 0, .. })
-        ));
-    }
-
-    #[test]
-    fn test_rolling_extrema_empty_input() {
-        let data: Vec<f64> = vec![];
-        let result = rolling_extrema(&data, 3);
-        assert!(matches!(result, Err(Error::EmptyInput)));
-    }
-
-    // ==================== Into Variant Tests ====================
-
-    #[test]
-    fn test_rolling_max_into_basic() {
-        let data = vec![1.0_f64, 3.0, 2.0, 5.0, 4.0];
-        let mut output = vec![0.0_f64; 5];
-
-        let valid_count = rolling_max_into(&data, 3, &mut output).unwrap();
-
-        assert_eq!(valid_count, 3);
-        assert!(output[0].is_nan());
-        assert!(output[1].is_nan());
-        assert!(approx_eq(output[2], 3.0, EPSILON));
-        assert!(approx_eq(output[3], 5.0, EPSILON));
-    }
-
-    #[test]
-    fn test_rolling_min_into_basic() {
-        let data = vec![5.0_f64, 3.0, 4.0, 1.0, 2.0];
-        let mut output = vec![0.0_f64; 5];
-
-        let valid_count = rolling_min_into(&data, 3, &mut output).unwrap();
-
-        assert_eq!(valid_count, 3);
-        assert!(output[0].is_nan());
-        assert!(output[1].is_nan());
-        assert!(approx_eq(output[2], 3.0, EPSILON));
-        assert!(approx_eq(output[3], 1.0, EPSILON));
-    }
-
-    #[test]
-    fn test_rolling_extrema_into_basic() {
-        let data = vec![3.0_f64, 1.0, 4.0, 1.0, 5.0];
-        let mut output = RollingExtremaOutput {
-            max: vec![0.0_f64; 5],
-            min: vec![0.0_f64; 5],
-        };
-
-        let valid_count = rolling_extrema_into(&data, 3, &mut output).unwrap();
-
-        assert_eq!(valid_count, 3);
-        assert!(approx_eq(output.max[2], 4.0, EPSILON));
-        assert!(approx_eq(output.min[2], 1.0, EPSILON));
-    }
-
-    #[test]
-    fn test_rolling_max_into_insufficient_output() {
-        let data = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0];
-        let mut output = vec![0.0_f64; 3]; // Too short
-
-        let result = rolling_max_into(&data, 3, &mut output);
-        assert!(matches!(result, Err(Error::BufferTooSmall { .. })));
-    }
-
-    #[test]
-    fn test_rolling_extrema_into_insufficient_output() {
-        let data = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0];
-        let mut output = RollingExtremaOutput {
-            max: vec![0.0_f64; 3], // Too short
-            min: vec![0.0_f64; 5],
-        };
-
-        let result = rolling_extrema_into(&data, 3, &mut output);
-        assert!(matches!(result, Err(Error::BufferTooSmall { .. })));
-    }
-
-    // ==================== NaN Handling Tests ====================
-
-    #[test]
-    fn test_rolling_max_with_nan() {
-        let data = vec![1.0_f64, f64::NAN, 3.0, 4.0, 5.0];
-        let result = rolling_max(&data, 3).unwrap();
-
-        // Windows containing NaN:
-        // [1, NaN, 3]: max should be 3 (NaN skipped)
-        assert!(approx_eq(result[2], 3.0, EPSILON));
-
-        // [NaN, 3, 4]: max should be 4
-        assert!(approx_eq(result[3], 4.0, EPSILON));
-
-        // [3, 4, 5]: max should be 5
-        assert!(approx_eq(result[4], 5.0, EPSILON));
-    }
-
-    #[test]
-    fn test_rolling_min_with_nan() {
-        let data = vec![5.0_f64, f64::NAN, 3.0, 2.0, 1.0];
-        let result = rolling_min(&data, 3).unwrap();
-
-        // [5, NaN, 3]: min should be 3 (NaN skipped)
-        assert!(approx_eq(result[2], 3.0, EPSILON));
-
-        // [NaN, 3, 2]: min should be 2
-        assert!(approx_eq(result[3], 2.0, EPSILON));
-
-        // [3, 2, 1]: min should be 1
-        assert!(approx_eq(result[4], 1.0, EPSILON));
-    }
-
-    #[test]
-    fn test_rolling_max_all_nan() {
-        let data = vec![f64::NAN, f64::NAN, f64::NAN, f64::NAN, f64::NAN];
-        let result = rolling_max(&data, 3).unwrap();
-
-        // All values are NaN, so all results should be NaN
-        for &val in &result {
-            assert!(val.is_nan());
-        }
-    }
-
-    // ==================== Property Tests ====================
-
-    #[test]
-    fn test_rolling_max_always_gte_input() {
-        let data: Vec<f64> = (0..50)
-            .map(|i| (f64::from(i) * 0.1).sin().mul_add(10.0, 50.0))
-            .collect();
-        let result = rolling_max(&data, 5).unwrap();
-
-        for i in 4..data.len() {
-            assert!(
-                result[i] >= data[i],
-                "Max at {i} should be >= current value"
-            );
-        }
-    }
-
-    #[test]
-    fn test_rolling_min_always_lte_input() {
-        let data: Vec<f64> = (0..50)
-            .map(|i| (f64::from(i) * 0.1).sin().mul_add(10.0, 50.0))
-            .collect();
-        let result = rolling_min(&data, 5).unwrap();
-
-        for i in 4..data.len() {
-            assert!(
-                result[i] <= data[i],
-                "Min at {i} should be <= current value"
-            );
-        }
-    }
-
-    #[test]
-    fn test_rolling_max_gte_rolling_min() {
-        let data: Vec<f64> = (0..50)
-            .map(|i| (f64::from(i) * 0.1).sin().mul_add(10.0, 50.0))
-            .collect();
-        let extrema = rolling_extrema(&data, 5).unwrap();
-
-        for i in 4..data.len() {
-            assert!(
-                extrema.max[i] >= extrema.min[i],
-                "Max should be >= min at index {i}"
-            );
-        }
-    }
-
-    #[test]
-    fn test_rolling_nan_count() {
-        let data = vec![1.0_f64; 100];
-
-        for period in [1, 2, 5, 10, 50] {
-            let max_result = rolling_max(&data, period).unwrap();
-            let min_result = rolling_min(&data, period).unwrap();
-
-            let max_nan_count = max_result.iter().filter(|x| x.is_nan()).count();
-            let min_nan_count = min_result.iter().filter(|x| x.is_nan()).count();
-
-            assert_eq!(
-                max_nan_count,
-                period - 1,
-                "Max NaN count for period {period}"
-            );
-            assert_eq!(
-                min_nan_count,
-                period - 1,
-                "Min NaN count for period {period}"
-            );
-        }
-    }
-
-    // ==================== Edge Cases ====================
-
-    #[test]
-    fn test_rolling_extrema_ascending() {
-        let data = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0];
-        let result = rolling_extrema(&data, 3).unwrap();
-
-        // For ascending data, min is always the oldest in window
-        // max is always the newest
-        assert!(approx_eq(result.max[2], 3.0, EPSILON));
-        assert!(approx_eq(result.max[3], 4.0, EPSILON));
-        assert!(approx_eq(result.max[4], 5.0, EPSILON));
-
-        assert!(approx_eq(result.min[2], 1.0, EPSILON));
-        assert!(approx_eq(result.min[3], 2.0, EPSILON));
-        assert!(approx_eq(result.min[4], 3.0, EPSILON));
-    }
-
-    #[test]
-    fn test_rolling_extrema_descending() {
-        let data = vec![5.0_f64, 4.0, 3.0, 2.0, 1.0];
-        let result = rolling_extrema(&data, 3).unwrap();
-
-        // For descending data, max is always the oldest in window
-        // min is always the newest
-        assert!(approx_eq(result.max[2], 5.0, EPSILON));
-        assert!(approx_eq(result.max[3], 4.0, EPSILON));
-        assert!(approx_eq(result.max[4], 3.0, EPSILON));
-
-        assert!(approx_eq(result.min[2], 3.0, EPSILON));
-        assert!(approx_eq(result.min[3], 2.0, EPSILON));
-        assert!(approx_eq(result.min[4], 1.0, EPSILON));
-    }
-
-    #[test]
-    fn test_rolling_extrema_large_period() {
-        let data: Vec<f64> = (0..100).map(f64::from).collect();
-        let result = rolling_extrema(&data, 50).unwrap();
-
-        // First 49 values should be NaN
-        for i in 0..49 {
-            assert!(result.max[i].is_nan());
-            assert!(result.min[i].is_nan());
-        }
-
-        // At index 49: window is 0..49, max=49, min=0
-        assert!(approx_eq(result.max[49], 49.0, EPSILON));
-        assert!(approx_eq(result.min[49], 0.0, EPSILON));
-
-        // At index 99: window is 50..99, max=99, min=50
-        assert!(approx_eq(result.max[99], 99.0, EPSILON));
-        assert!(approx_eq(result.min[99], 50.0, EPSILON));
-    }
-
-    #[test]
-    fn test_rolling_extrema_negative_values() {
-        let data = vec![-5.0_f64, -3.0, -1.0, -4.0, -2.0];
-        let result = rolling_extrema(&data, 3).unwrap();
-
-        // [-5, -3, -1]: max=-1, min=-5
-        assert!(approx_eq(result.max[2], -1.0, EPSILON));
-        assert!(approx_eq(result.min[2], -5.0, EPSILON));
-
-        // [-3, -1, -4]: max=-1, min=-4
-        assert!(approx_eq(result.max[3], -1.0, EPSILON));
-        assert!(approx_eq(result.min[3], -4.0, EPSILON));
-    }
-
-    #[test]
-    fn test_rolling_extrema_very_large_values() {
-        let data = vec![1e15_f64, 1e16_f64, 1e14_f64, 1e15_f64, 1e17_f64];
-        let result = rolling_extrema(&data, 3).unwrap();
-
-        assert!(approx_eq(result.max[2], 1e16, 1e6));
-        assert!(approx_eq(result.min[2], 1e14, 1e6));
-    }
-
-    // ==================== Consistency Tests ====================
-
-    #[test]
-    fn test_rolling_max_and_max_into_produce_same_result() {
-        let data = vec![1.0_f64, 3.0, 2.0, 5.0, 4.0, 6.0, 3.0, 8.0];
-        let result1 = rolling_max(&data, 3).unwrap();
-
-        let mut result2 = vec![0.0_f64; data.len()];
-        rolling_max_into(&data, 3, &mut result2).unwrap();
-
-        for i in 0..data.len() {
-            assert!(
-                approx_eq(result1[i], result2[i], EPSILON),
-                "Mismatch at {i}"
-            );
-        }
-    }
-
-    #[test]
-    fn test_rolling_min_and_min_into_produce_same_result() {
-        let data = vec![5.0_f64, 3.0, 4.0, 1.0, 2.0, 6.0, 3.0, 0.0];
-        let result1 = rolling_min(&data, 3).unwrap();
-
-        let mut result2 = vec![0.0_f64; data.len()];
-        rolling_min_into(&data, 3, &mut result2).unwrap();
-
-        for i in 0..data.len() {
-            assert!(
-                approx_eq(result1[i], result2[i], EPSILON),
-                "Mismatch at {i}"
-            );
-        }
-    }
-
-    #[test]
-    fn test_rolling_extrema_and_extrema_into_produce_same_result() {
-        let data = vec![3.0_f64, 1.0, 4.0, 1.0, 5.0, 9.0, 2.0, 6.0];
-        let result1 = rolling_extrema(&data, 3).unwrap();
-
-        let mut result2 = RollingExtremaOutput {
-            max: vec![0.0_f64; data.len()],
-            min: vec![0.0_f64; data.len()],
-        };
-        rolling_extrema_into(&data, 3, &mut result2).unwrap();
-
-        for i in 0..data.len() {
-            assert!(
-                approx_eq(result1.max[i], result2.max[i], EPSILON),
-                "Max mismatch at {i}"
-            );
-            assert!(
-                approx_eq(result1.min[i], result2.min[i], EPSILON),
-                "Min mismatch at {i}"
-            );
-        }
-    }
-
-    // ==================== Clone Tests ====================
-
-    #[test]
-    fn test_monotonic_deque_clone() {
-        let data = vec![3.0_f64, 1.0, 4.0];
-        let mut deque: MonotonicDeque<f64> = MonotonicDeque::new(3);
-        deque.push_max(0, &data);
-        deque.push_max(1, &data);
-
-        let cloned = deque.clone();
-        assert_eq!(cloned.len(), deque.len());
-        assert_eq!(cloned.period(), deque.period());
-    }
-
-    #[test]
-    fn test_rolling_extrema_output_clone() {
-        let data = vec![3.0_f64, 1.0, 4.0, 1.0, 5.0];
-        let result = rolling_extrema(&data, 3).unwrap();
-        let cloned = result.clone();
-
-        for i in 0..result.max.len() {
-            assert!(approx_eq(result.max[i], cloned.max[i], EPSILON));
-            assert!(approx_eq(result.min[i], cloned.min[i], EPSILON));
-        }
-    }
-
-    // ==================== NaN Propagating Tests ====================
-
-    #[test]
-    fn test_rolling_max_nan_propagating_basic() {
-        let data = vec![1.0_f64, 3.0, 2.0, 5.0, 4.0];
-        let result = rolling_max_nan_propagating(&data, 3).unwrap();
-
-        assert!(result[0].is_nan());
-        assert!(result[1].is_nan());
-        assert!(approx_eq(result[2], 3.0, EPSILON));
-        assert!(approx_eq(result[3], 5.0, EPSILON));
-        assert!(approx_eq(result[4], 5.0, EPSILON));
-    }
-
-    #[test]
-    fn test_rolling_max_nan_propagating_with_nan() {
-        let data = vec![1.0_f64, f64::NAN, 3.0, 4.0, 5.0];
-        let result = rolling_max_nan_propagating(&data, 3).unwrap();
-
-        // Window [1, NaN, 3] should be NaN (NaN propagates)
-        assert!(result[2].is_nan());
-        // Window [NaN, 3, 4] should be NaN
-        assert!(result[3].is_nan());
-        // Window [3, 4, 5] should be 5
-        assert!(approx_eq(result[4], 5.0, EPSILON));
-    }
-
-    #[test]
-    fn test_rolling_min_nan_propagating_with_nan() {
-        let data = vec![5.0_f64, f64::NAN, 3.0, 2.0, 1.0];
-        let result = rolling_min_nan_propagating(&data, 3).unwrap();
-
-        // Window [5, NaN, 3] should be NaN
-        assert!(result[2].is_nan());
-        // Window [NaN, 3, 2] should be NaN
-        assert!(result[3].is_nan());
-        // Window [3, 2, 1] should be 1
-        assert!(approx_eq(result[4], 1.0, EPSILON));
-    }
-
-    #[test]
-    fn test_rolling_extrema_fused_nan_propagating_basic() {
-        let high = vec![10.0_f64, 11.0, 12.0, 11.5, 12.5];
-        let low = vec![9.0_f64, 10.0, 11.0, 10.5, 11.5];
-
-        let result = rolling_extrema_fused_nan_propagating(&high, &low, 3).unwrap();
-
-        assert!(result.max[0].is_nan());
-        assert!(result.max[1].is_nan());
-        // max of high[0..3] = 12
-        assert!(approx_eq(result.max[2], 12.0, EPSILON));
-        // min of low[0..3] = 9
-        assert!(approx_eq(result.min[2], 9.0, EPSILON));
-    }
-
-    #[test]
-    fn test_rolling_extrema_fused_nan_propagating_with_nan_in_high() {
-        // NaN at index 2, period 3
-        // Window at index 2: [0,1,2] - contains NaN
-        // Window at index 3: [1,2,3] - contains NaN
-        // Window at index 4: [2,3,4] - contains NaN
-        // Window at index 5: [3,4,5] - first without NaN
-        let high = vec![10.0_f64, 11.0, f64::NAN, 11.5, 12.5, 13.0];
-        let low = vec![9.0_f64, 10.0, 11.0, 10.5, 11.5, 12.0];
-
-        let result = rolling_extrema_fused_nan_propagating(&high, &low, 3).unwrap();
-
-        // Window contains NaN in high at index 2
-        assert!(result.max[2].is_nan());
-        assert!(result.min[2].is_nan());
-        // Window [11.0, NaN, 11.5] still has NaN
-        assert!(result.max[3].is_nan());
-        assert!(result.min[3].is_nan());
-        // Window [NaN, 11.5, 12.5] still has NaN
-        assert!(result.max[4].is_nan());
-        assert!(result.min[4].is_nan());
-        // Window [11.5, 12.5, 13.0] - first without NaN
-        assert!(approx_eq(result.max[5], 13.0, EPSILON));
-        assert!(approx_eq(result.min[5], 10.5, EPSILON));
-    }
-
-    #[test]
-    fn test_rolling_extrema_fused_nan_propagating_with_nan_in_low() {
-        // NaN at index 2 in low, period 3
-        // Window at index 5: [3,4,5] - first without NaN
-        let high = vec![10.0_f64, 11.0, 12.0, 11.5, 12.5, 13.0];
-        let low = vec![9.0_f64, 10.0, f64::NAN, 10.5, 11.5, 12.0];
-
-        let result = rolling_extrema_fused_nan_propagating(&high, &low, 3).unwrap();
-
-        // Window contains NaN in low at index 2
-        assert!(result.max[2].is_nan());
-        assert!(result.min[2].is_nan());
-        // Window [10.0, NaN, 10.5] still has NaN
-        assert!(result.max[3].is_nan());
-        assert!(result.min[3].is_nan());
-        // Window [NaN, 10.5, 11.5] still has NaN
-        assert!(result.max[4].is_nan());
-        assert!(result.min[4].is_nan());
-        // Window [10.5, 11.5, 12.0] - now clean
-        assert!(approx_eq(result.max[5], 13.0, EPSILON));
-        assert!(approx_eq(result.min[5], 10.5, EPSILON));
-    }
 }

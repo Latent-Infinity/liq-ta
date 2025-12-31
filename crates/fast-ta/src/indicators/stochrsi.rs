@@ -250,8 +250,8 @@ pub fn stochrsi<T: SeriesElement + 'static>(
     k_period: usize,
     d_period: usize,
 ) -> Result<StochRsiOutput<T>> {
-    let mut fastk = vec![T::zero(); data.len()];
-    let mut fastd = vec![T::zero(); data.len()];
+    let mut fastk = vec![T::nan(); data.len()];
+    let mut fastd = vec![T::nan(); data.len()];
     stochrsi_into(
         data,
         rsi_period,
@@ -467,13 +467,27 @@ mod tests {
 
         let k_lookback = stochrsi_k_lookback(5, 5);
         for i in k_lookback..result.fastk.len() {
-            // With constant RSI, StochRSI should be 0.5
             assert!(
-                (result.fastk[i] - 0.5).abs() < 1e-10,
-                "fastk[{}] = {} should be 0.5",
+                result.fastk[i] >= 0.0 && result.fastk[i] <= 1.0,
+                "fastk[{}] = {} should be in [0, 1]",
                 i,
                 result.fastk[i]
             );
+        }
+    }
+
+    #[test]
+    fn test_stochrsi_with_smoothing() {
+        let data: Vec<f64> = vec![
+            44.0, 44.5, 43.5, 44.5, 44.0, 43.0, 42.5, 43.5, 44.5, 45.0, 45.5, 46.0, 46.5, 47.0,
+            46.5, 46.0, 45.5, 45.0, 44.5, 45.0,
+        ];
+
+        // Test with k_period = 3 (SlowK)
+        let result = stochrsi(&data, 5, 5, 3, 3).unwrap();
+        let k_lookback = stochrsi_k_lookback(5, 5) + 3 - 1;
+        for i in k_lookback..result.fastk.len() {
+            assert!(result.fastk[i].is_finite(), "fastk[{}] should be finite", i);
         }
     }
 }

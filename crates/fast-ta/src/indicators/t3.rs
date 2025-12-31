@@ -27,7 +27,7 @@
 //! The lookback period is `6 * (period - 1)`.
 
 use crate::error::{Error, Result};
-use crate::traits::SeriesElement;
+use crate::traits::{validate_period, SeriesElement, ValidatedInput};
 
 /// Computes the lookback period for T3.
 ///
@@ -109,28 +109,11 @@ pub fn t3_full_into<T: SeriesElement>(
     vfactor: T,
     output: &mut [T],
 ) -> Result<()> {
-    // Validate inputs
-    if data.is_empty() {
-        return Err(Error::EmptyInput);
-    }
-
-    if period == 0 {
-        return Err(Error::InvalidPeriod {
-            period,
-            reason: "period must be at least 1",
-        });
-    }
-
-    let lookback = t3_lookback(period);
+    // Validate inputs using shared utilities
+    validate_period(period)?;
+    data.validate_not_empty()?;
     let min_len = t3_min_len(period);
-
-    if data.len() < min_len {
-        return Err(Error::InsufficientData {
-            indicator: "t3",
-            required: min_len,
-            actual: data.len(),
-        });
-    }
+    data.validate_min_length(min_len, "t3")?;
 
     if output.len() < data.len() {
         return Err(Error::BufferTooSmall {
@@ -139,6 +122,8 @@ pub fn t3_full_into<T: SeriesElement>(
             actual: output.len(),
         });
     }
+
+    let lookback = t3_lookback(period);
 
     // Fill lookback period with NaN
     for i in 0..lookback {
@@ -219,14 +204,16 @@ pub fn t3_full_into<T: SeriesElement>(
     e5 = alpha * e4 + one_minus_alpha * e5;
     let mut e6 = e5;
 
-    // Calculate coefficients after initialization (TA-Lib style - keeps values in registers)
-    let temp_real = vfactor * vfactor;  // v^2
-    let c1 = T::zero() - (temp_real * vfactor);  // -v^3
+    // Calculate coefficients
+    let v2 = vfactor * vfactor;
+    let v3 = v2 * vfactor;
     let three = T::from_usize(3)?;
     let six = T::from_usize(6)?;
-    let c2 = three * (temp_real - c1);  // 3(v^2 + v^3)
-    let c3 = T::zero() - six * temp_real - three * (vfactor - c1);  // -6v^2 - 3v - 3v^3
-    let c4 = T::one() + three * vfactor - c1 + three * temp_real;  // 1 + 3v + v^3 + 3v^2
+
+    let c1 = T::zero() - v3;
+    let c2 = three * v2 + three * v3;
+    let c3 = T::zero() - six * v2 - three * vfactor - three * v3;
+    let c4 = T::one() + three * vfactor + v3 + three * v2;
 
     // First valid T3 value
     output[lookback] = c1 * e6 + c2 * e5 + c3 * e4 + c4 * e3;
@@ -525,11 +512,10 @@ mod tests {
 
     #[test]
     fn test_t3_large_values() {
-        let data: Vec<f64> = (1..=20).map(|x| x as f64 * 1e6).collect();
+        let data: Vec<f64> = (1..=20).map(|x| x as f64 * 1e15).collect();
         let result = t3(&data, 3).unwrap();
 
-        let lookback = t3_lookback(3);
-        for i in lookback..result.len() {
+        for i in 12..20 {
             assert!(result[i].is_finite());
         }
     }

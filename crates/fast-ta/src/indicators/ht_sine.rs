@@ -1,8 +1,44 @@
-//! `HT_SINE` (Hilbert Transform - `SineWave`)
+//! `HT_SINE` (Hilbert Transform - Sine Wave)
 //!
 //! This indicator uses the Hilbert Transform to compute sine wave values
-//! based on the dominant cycle phase. Outputs both sine and `lead_sine`
+//! based on the dominant cycle phase. Outputs both sine and lead_sine
 //! (45 degrees ahead).
+//!
+//! # Algorithm
+//!
+//! Once the instantaneous phase is computed by the Hilbert Transform, sine waves
+//! are generated:
+//!
+//! ```text
+//! Sine = sin(Phase)
+//! Lead Sine = sin(Phase + 45°)
+//! ```
+//!
+//! The lead sine is 45 degrees (1/8 of a cycle) ahead, providing an early warning
+//! of phase changes.
+//!
+//! # Interpretation
+//!
+//! - **Crossover signals**: When sine crosses lead_sine from below, it may indicate
+//!   a cycle bottom; crossing from above may indicate a cycle top
+//! - **Value range**: Both outputs are bounded to [-1, +1]
+//! - **Cycle mode**: Crossovers are most reliable when `HT_TRENDMODE` = 0 (cycling)
+//! - **Trending markets**: Crossovers may generate false signals in strong trends
+//!
+//! # Trading Strategy
+//!
+//! A common approach:
+//! 1. Use `HT_TRENDMODE` to filter for cycling markets
+//! 2. Buy when sine crosses above lead_sine
+//! 3. Sell when sine crosses below lead_sine
+//!
+//! # Lookback
+//!
+//! The lookback period is 63 bars (warm-up period for the Hilbert Transform).
+//!
+//! # Performance
+//!
+//! Uses the shared [`ht_core::hilbert_transform`] computation with O(n) complexity.
 
 use super::ht_core::{hilbert_transform, ht_lookback, ht_min_len};
 use crate::error::{Error, Result};

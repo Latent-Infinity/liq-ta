@@ -164,8 +164,8 @@ pub fn midprice_into<T: SeriesElement>(
     midprice_monotonic_deque(high, low, period, lookback, two, output)
 }
 
-/// Optimized f64 path with minimal overhead for clean data.
-/// Uses monotonic deques but skips invalid tracking in hot path.
+/// Optimized f64 path with NaN/infinity tracking.
+/// Uses monotonic deques with a ring buffer to track invalid values in the window.
 #[inline]
 fn midprice_f64_optimized(
     high: &[f64],
@@ -181,19 +181,59 @@ fn midprice_f64_optimized(
     let mut max_deque: MonotonicDeque<f64> = MonotonicDeque::new(period);
     let mut min_deque: MonotonicDeque<f64> = MonotonicDeque::new(period);
 
-    // Single pass through data - assume clean data, validate results
+    // Ring buffer for tracking invalid value indices (for NaN/Infinity propagation)
+    let mut invalid_buf = vec![0usize; period];
+    let mut invalid_head = 0usize;
+    let mut invalid_tail = 0usize;
+    let mut invalid_len = 0usize;
+
+    // Single pass through data
     for i in 0..n {
+        let h = high[i];
+        let l = low[i];
+
+        // Track non-finite values for propagation policy
+        if !h.is_finite() || !l.is_finite() {
+            invalid_buf[invalid_tail] = i;
+            invalid_tail += 1;
+            if invalid_tail == period {
+                invalid_tail = 0; // Wrap-branch instead of modulo
+            }
+            invalid_len += 1;
+        }
+
         // Update deques with current elements
         max_deque.push_max(i, high);
         min_deque.push_min(i, low);
 
+        // Remove expired invalid indices from the window
+        if i >= period {
+            let window_start = i + 1 - period;
+            while invalid_len > 0 && invalid_buf[invalid_head] < window_start {
+                invalid_head += 1;
+                if invalid_head == period {
+                    invalid_head = 0; // Wrap-branch
+                }
+                invalid_len -= 1;
+            }
+        }
+
         // Output valid values after lookback period
         if i >= lookback {
-            let highest_high = max_deque.get_extremum(high);
-            let lowest_low = min_deque.get_extremum(low);
+            // If any invalid value is still in the window, output NaN (propagation policy)
+            if invalid_len > 0 {
+                output[i] = f64::NAN;
+            } else {
+                let highest_high = max_deque.get_extremum(high);
+                let lowest_low = min_deque.get_extremum(low);
 
-            // NaN propagates naturally through arithmetic
-            output[i] = (highest_high + lowest_low) * half;
+                // If either deque returned a non-finite value, output NaN
+                if !highest_high.is_finite() || !lowest_low.is_finite() {
+                    output[i] = f64::NAN;
+                } else {
+                    output[i] = (highest_high + lowest_low) * half;
+                }
+            }
         }
     }
 

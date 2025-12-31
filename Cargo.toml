@@ -1,6 +1,8 @@
 [workspace]
 resolver = "2"
 members = ["crates/fast-ta", "crates/fast-ta-cli", "crates/fast-ta-python"]
+# Python crate requires maturin to build properly, exclude from default cargo commands
+default-members = ["crates/fast-ta", "crates/fast-ta-cli"]
 
 [workspace.package]
 version = "0.1.0"

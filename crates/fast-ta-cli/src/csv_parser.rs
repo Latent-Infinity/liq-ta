@@ -167,8 +167,8 @@ pub fn parse_csv_from_reader<R: Read>(reader: R) -> Result<ParsedCsv> {
         });
     }
 
-    // Build column map
-    let mut column_map = HashMap::new();
+    // Build column map with pre-allocated capacity
+    let mut column_map = HashMap::with_capacity(headers.len());
     let mut date_column_idx: Option<usize> = None;
 
     for (idx, header) in headers.iter().enumerate() {
@@ -180,8 +180,8 @@ pub fn parse_csv_from_reader<R: Read>(reader: R) -> Result<ParsedCsv> {
         }
     }
 
-    // Initialize column storage
-    let mut columns: HashMap<usize, Vec<f64>> = HashMap::new();
+    // Initialize column storage with pre-allocated capacity
+    let mut columns: HashMap<usize, Vec<f64>> = HashMap::with_capacity(column_map.len());
     for &idx in column_map.values() {
         columns.insert(idx, Vec::new());
     }

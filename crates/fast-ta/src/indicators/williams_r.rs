@@ -312,10 +312,11 @@ fn validate_inputs<T: SeriesElement>(
     Ok(())
 }
 
-/// Core Williams %R computation using monotonic deque for O(n) complexity.
+/// Core Williams %R computation using Van Herk/Gil-Werman algorithm.
 ///
-/// This implementation uses MonotonicDeque directly to avoid intermediate
-/// allocations and compute everything in a single pass over the data.
+/// Both f32 and f64 inputs use the same Van Herk algorithm for consistency.
+/// For f32 inputs, data is converted to f64 for computation (satisfying the
+/// f64 accumulator requirement) then converted back to f32.
 fn compute_williams_r_core<T: SeriesElement + 'static>(
     high: &[T],
     low: &[T],
@@ -323,36 +324,63 @@ fn compute_williams_r_core<T: SeriesElement + 'static>(
     period: usize,
     output: &mut [T],
 ) -> Result<()> {
-    // Use specialized f64 path for common case
     use std::any::TypeId;
+
+    // Use specialized f64 path for f64 inputs
     if TypeId::of::<T>() == TypeId::of::<f64>() {
         let h = unsafe { std::slice::from_raw_parts(high.as_ptr() as *const f64, high.len()) };
         let l = unsafe { std::slice::from_raw_parts(low.as_ptr() as *const f64, low.len()) };
         let c = unsafe { std::slice::from_raw_parts(close.as_ptr() as *const f64, close.len()) };
-        let out = unsafe { std::slice::from_raw_parts_mut(output.as_mut_ptr() as *mut f64, output.len()) };
+        let out =
+            unsafe { std::slice::from_raw_parts_mut(output.as_mut_ptr() as *mut f64, output.len()) };
         return williams_r_f64_optimized(h, l, c, period, out);
     }
 
+    // For f32 inputs: convert to f64, run Van Herk, convert back
+    // This ensures both types use the same algorithm AND satisfies f64 accumulator requirement
+    if TypeId::of::<T>() == TypeId::of::<f32>() {
+        let h_f32 =
+            unsafe { std::slice::from_raw_parts(high.as_ptr() as *const f32, high.len()) };
+        let l_f32 = unsafe { std::slice::from_raw_parts(low.as_ptr() as *const f32, low.len()) };
+        let c_f32 =
+            unsafe { std::slice::from_raw_parts(close.as_ptr() as *const f32, close.len()) };
+        let out_f32 = unsafe {
+            std::slice::from_raw_parts_mut(output.as_mut_ptr() as *mut f32, output.len())
+        };
+
+        // Convert f32 to f64
+        let h_f64: Vec<f64> = h_f32.iter().map(|&x| x as f64).collect();
+        let l_f64: Vec<f64> = l_f32.iter().map(|&x| x as f64).collect();
+        let c_f64: Vec<f64> = c_f32.iter().map(|&x| x as f64).collect();
+        let mut out_f64 = vec![f64::NAN; output.len()];
+
+        // Run Van Herk in f64
+        williams_r_f64_optimized(&h_f64, &l_f64, &c_f64, period, &mut out_f64)?;
+
+        // Convert back to f32
+        for (dst, &src) in out_f32.iter_mut().zip(out_f64.iter()) {
+            *dst = src as f32;
+        }
+
+        return Ok(());
+    }
+
+    // Fallback for other types: use MonotonicDeque
     let neg_hundred = T::from_i32(-100)?;
     let neg_fifty = T::from_i32(-50)?;
     let lookback = williams_r_lookback(period);
     let n = close.len();
 
-    // Initialize monotonic deques for tracking rolling max/min
     let mut max_deque: MonotonicDeque<T> = MonotonicDeque::new(period);
     let mut min_deque: MonotonicDeque<T> = MonotonicDeque::new(period);
 
-    // Single pass computation
     for i in 0..n {
-        // Update deques with current values
         max_deque.push_max(i, high);
         min_deque.push_min(i, low);
 
         if i < lookback {
-            // Lookback period: output NaN
             output[i] = T::nan();
         } else {
-            // Get rolling highest high and lowest low
             let hh = max_deque.get_extremum(high);
             let ll = min_deque.get_extremum(low);
             let c = close[i];
@@ -363,10 +391,8 @@ fn compute_williams_r_core<T: SeriesElement + 'static>(
                 let range = hh - ll;
 
                 if range <= T::zero() {
-                    // When high == low (no range), return midpoint (-50)
                     output[i] = neg_fifty;
                 } else {
-                    // %R = -100 × (HH - Close) / (HH - LL)
                     output[i] = compute_williams_r_value(hh, c, range, neg_hundred)?;
                 }
             }

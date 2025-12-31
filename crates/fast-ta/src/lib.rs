@@ -134,7 +134,7 @@
 #![warn(clippy::inefficient_to_string)]
 #![warn(clippy::useless_conversion)]
 // Allowed pedantic lints - intentional design choices for this codebase
-#![allow(clippy::module_name_repetitions)]
+#![allow(clippy::module_name_repetitions)] // Types like error::Error are idiomatic in Rust libraries
 #![allow(clippy::similar_names)] // Financial indicator variables often have similar names (e.g., ema1, ema2)
 #![allow(clippy::cast_precision_loss)] // Expected when casting usize to f64 for indicator calculations
 #![allow(clippy::cast_possible_truncation)] // Controlled truncation in period calculations

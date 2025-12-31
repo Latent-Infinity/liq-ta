@@ -2,6 +2,34 @@
 //!
 //! This indicator uses the Hilbert Transform to compute the instantaneous phase
 //! of the dominant cycle in the price data.
+//!
+//! # Algorithm
+//!
+//! The phase is computed from the arctangent of the ratio between the quadrature (Q)
+//! and in-phase (I) components produced by the Hilbert Transform:
+//!
+//! ```text
+//! Phase = atan(Q / I) × (180 / π)
+//! ```
+//!
+//! The result is normalized to the range [0, 360] degrees, representing where we are
+//! in the current market cycle.
+//!
+//! # Interpretation
+//!
+//! - **0°/360°**: Cycle trough (potential buy point)
+//! - **90°**: Rising phase (upward momentum)
+//! - **180°**: Cycle peak (potential sell point)
+//! - **270°**: Falling phase (downward momentum)
+//! - **Rate of change**: Fast phase changes indicate cycling; slow changes indicate trending
+//!
+//! # Lookback
+//!
+//! The lookback period is 63 bars (warm-up period for the Hilbert Transform).
+//!
+//! # Performance
+//!
+//! Uses the shared [`ht_core::hilbert_transform`] computation with O(n) complexity.
 
 use super::ht_core::{hilbert_transform, ht_lookback, ht_min_len};
 use crate::error::{Error, Result};

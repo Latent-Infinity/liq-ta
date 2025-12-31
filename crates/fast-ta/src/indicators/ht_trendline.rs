@@ -13,28 +13,43 @@
 //! 3. Estimate the dominant cycle period from the phase relationship
 //! 4. Use the period to compute an adaptive smoothed trendline
 //!
+//! The trendline adapts its smoothing length based on the detected dominant cycle,
+//! making it more responsive when cycles are short and smoother when cycles are long.
+//!
+//! # Interpretation
+//!
+//! - When price is above the trendline, the market is in an uptrend
+//! - When price is below the trendline, the market is in a downtrend
+//! - Crossovers can be used as potential entry/exit signals
+//! - The trendline works best in trending markets; use `HT_TRENDMODE` to filter
+//!
 //! # Lookback
 //!
 //! The lookback period is 63 bars (warm-up period for the Hilbert Transform).
+//!
+//! # Performance
+//!
+//! This indicator uses the shared [`ht_core::hilbert_transform`] computation,
+//! which has O(n) time complexity and allocates working arrays internally.
 
+use super::ht_core::{hilbert_transform, ht_lookback, ht_min_len};
 use crate::error::{Error, Result};
 use crate::traits::SeriesElement;
-use std::f64::consts::PI;
 
-/// Computes the lookback period for `HT_TRENDLINE`.
+/// Returns the lookback period for `HT_TRENDLINE`.
 ///
 /// The Hilbert Transform requires a warm-up period of 63 bars.
 #[inline]
 #[must_use]
 pub const fn ht_trendline_lookback() -> usize {
-    63
+    ht_lookback()
 }
 
 /// Returns the minimum input length required for `HT_TRENDLINE` calculation.
 #[inline]
 #[must_use]
 pub const fn ht_trendline_min_len() -> usize {
-    64
+    ht_min_len()
 }
 
 /// Computes Hilbert Transform Trendline and stores results in output.
@@ -53,7 +68,6 @@ pub const fn ht_trendline_min_len() -> usize {
 ///
 /// Returns an error if:
 /// - The input data is empty (`Error::EmptyInput`)
-/// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 /// - The output buffer is too small (`Error::BufferTooSmall`)
 pub fn ht_trendline_into<T: SeriesElement>(data: &[T], output: &mut [T]) -> Result<()> {
@@ -81,149 +95,17 @@ pub fn ht_trendline_into<T: SeriesElement>(data: &[T], output: &mut [T]) -> Resu
         });
     }
 
+    // Use shared Hilbert Transform computation
+    let state = hilbert_transform(data)?;
+
     // Fill lookback period with NaN
     for i in 0..lookback {
         output[i] = T::nan();
     }
 
-    // Constants for the algorithm
-    let two_pi = T::from_f64(2.0 * PI)?;
-
-    // Smoothing coefficients
-    let a = T::from_f64(0.0962)?;
-    let b = T::from_f64(0.5769)?;
-
-    // State variables
-    let mut smooth = vec![T::zero(); n];
-    let mut detrender = vec![T::zero(); n];
-    let mut i1 = vec![T::zero(); n];
-    let mut q1 = vec![T::zero(); n];
-    let mut ji = vec![T::zero(); n];
-    let mut jq = vec![T::zero(); n];
-    let mut i2 = vec![T::zero(); n];
-    let mut q2 = vec![T::zero(); n];
-    let mut re = vec![T::zero(); n];
-    let mut im = vec![T::zero(); n];
-    let mut period = vec![T::zero(); n];
-    let mut smooth_period = vec![T::zero(); n];
-    let mut trendline = vec![T::zero(); n];
-
-    // Initial period estimate
-    let six = T::from_usize(6)?;
-    for i in 0..n.min(12) {
-        period[i] = six;
-        smooth_period[i] = six;
-    }
-
-    // WMA coefficients
-    let c1 = T::from_f64(4.0)?;
-    let c2 = T::from_f64(3.0)?;
-    let c3 = T::from_f64(2.0)?;
-    let c4 = T::one();
-    let c_sum = T::from_f64(10.0)?;
-
-    // Main calculation loop
-    for i in 6..n {
-        // Compute smoothed price (4-bar WMA)
-        if i >= 3 {
-            smooth[i] =
-                (c1 * data[i] + c2 * data[i - 1] + c3 * data[i - 2] + c4 * data[i - 3]) / c_sum;
-        } else {
-            smooth[i] = data[i];
-        }
-
-        // Compute Hilbert Transform components
-        if i >= 6 {
-            let adj_prev_period = T::from_f64(0.075)? * period[i - 1] + T::from_f64(0.54)?;
-
-            // Detrender
-            detrender[i] =
-                (a * smooth[i] + b * smooth[i - 2] - b * smooth[i - 4] - a * smooth[i - 6])
-                    * adj_prev_period;
-
-            // Compute InPhase and Quadrature components
-            q1[i] = (a * detrender[i] + b * detrender[i - 2]
-                - b * detrender[i - 4]
-                - a * detrender[i - 6])
-                * adj_prev_period;
-            i1[i] = detrender[i - 3];
-
-            // Advance the phase of I1 and Q1 by 90 degrees
-            ji[i] = (a * i1[i] + b * i1[i - 2] - b * i1[i - 4] - a * i1[i - 6]) * adj_prev_period;
-            jq[i] = (a * q1[i] + b * q1[i - 2] - b * q1[i - 4] - a * q1[i - 6]) * adj_prev_period;
-
-            // Phasor addition for 3-bar averaging
-            i2[i] = i1[i] - jq[i];
-            q2[i] = q1[i] + ji[i];
-
-            // Smooth the I and Q components
-            let smooth_coef = T::from_f64(0.2)?;
-            i2[i] = smooth_coef * i2[i] + (T::one() - smooth_coef) * i2[i - 1];
-            q2[i] = smooth_coef * q2[i] + (T::one() - smooth_coef) * q2[i - 1];
-
-            // Homodyne Discriminator
-            re[i] = i2[i] * i2[i - 1] + q2[i] * q2[i - 1];
-            im[i] = i2[i] * q2[i - 1] - q2[i] * i2[i - 1];
-
-            re[i] = smooth_coef * re[i] + (T::one() - smooth_coef) * re[i - 1];
-            im[i] = smooth_coef * im[i] + (T::one() - smooth_coef) * im[i - 1];
-
-            // Compute period
-            if im[i] != T::zero() && re[i] != T::zero() {
-                period[i] = two_pi / (im[i] / re[i]).atan();
-            }
-
-            // Limit period to reasonable range
-            let min_period = T::from_f64(6.0)?;
-            let max_period = T::from_f64(50.0)?;
-            if period[i] > max_period {
-                period[i] = max_period;
-            }
-            if period[i] < min_period {
-                period[i] = min_period;
-            }
-
-            // Smooth the period
-            let period_smooth = T::from_f64(0.33)?;
-            smooth_period[i] =
-                period_smooth * period[i] + (T::one() - period_smooth) * smooth_period[i - 1];
-
-            // Compute the trendline using the dominant cycle period
-            let dc_period = smooth_period[i];
-            let half_period = (dc_period / T::from_f64(2.0)?).floor();
-            let hp_int = half_period.to_f64().unwrap_or(3.0) as usize;
-            let hp_int = hp_int.max(1).min(25);
-
-            // WMA-style trendline based on dominant cycle
-            if i >= hp_int {
-                let mut sum = T::zero();
-                let mut weight_sum = T::zero();
-                for j in 0..hp_int {
-                    let weight = T::from_usize(hp_int - j)?;
-                    if i >= j {
-                        sum = sum + weight * data[i - j];
-                        weight_sum = weight_sum + weight;
-                    }
-                }
-                if weight_sum > T::zero() {
-                    trendline[i] = sum / weight_sum;
-                } else {
-                    trendline[i] = data[i];
-                }
-            } else {
-                trendline[i] = data[i];
-            }
-        } else {
-            // Initialize with simple values
-            period[i] = six;
-            smooth_period[i] = six;
-            trendline[i] = data[i];
-        }
-    }
-
-    // Copy trendline to output
+    // Copy trendline from shared HT computation
     for i in lookback..n {
-        output[i] = trendline[i];
+        output[i] = state.trendline[i];
     }
 
     Ok(())
