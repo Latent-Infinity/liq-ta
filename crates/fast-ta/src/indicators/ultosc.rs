@@ -135,14 +135,38 @@ pub fn ultosc_into<T: SeriesElement>(
     }
 
     let lookback = ultosc_lookback(period1, period2, period3);
-    let hundred = T::from_f64(100.0)?;
-    let seven = T::from_f64(7.0)?;
+
+    // Precompute constants - hundred/seven eliminates one division per output
+    let hundred_seventh = T::from_f64(100.0 / 7.0)?;  // ~14.285714...
     let four = T::from_f64(4.0)?;
     let two = T::from_f64(2.0)?;
 
-    // Calculate BP and TR for all bars
-    let mut bp = vec![T::zero(); n];
-    let mut tr = vec![T::zero(); n];
+    // Calculate BP and TR for all bars using branchless min/max
+    // Optimization: Use uninitialized allocation for f64/f32 since we write all elements
+    use std::any::TypeId;
+    let mut bp = if TypeId::of::<T>() == TypeId::of::<f64>() {
+        let mut v: Vec<T> = Vec::with_capacity(n);
+        unsafe { v.set_len(n); }
+        v
+    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
+        let mut v: Vec<T> = Vec::with_capacity(n);
+        unsafe { v.set_len(n); }
+        v
+    } else {
+        vec![T::zero(); n]
+    };
+
+    let mut tr = if TypeId::of::<T>() == TypeId::of::<f64>() {
+        let mut v: Vec<T> = Vec::with_capacity(n);
+        unsafe { v.set_len(n); }
+        v
+    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
+        let mut v: Vec<T> = Vec::with_capacity(n);
+        unsafe { v.set_len(n); }
+        v
+    } else {
+        vec![T::zero(); n]
+    };
 
     // First bar has no prior close, so BP and TR are 0
     bp[0] = T::zero();
@@ -150,16 +174,10 @@ pub fn ultosc_into<T: SeriesElement>(
 
     for i in 1..n {
         let prior_close = close[i - 1];
-        let true_low = if low[i] < prior_close {
-            low[i]
-        } else {
-            prior_close
-        };
-        let true_high = if high[i] > prior_close {
-            high[i]
-        } else {
-            prior_close
-        };
+
+        // Branchless min/max using SeriesElement trait methods
+        let true_low = low[i].min(prior_close);
+        let true_high = high[i].max(prior_close);
 
         bp[i] = close[i] - true_low;
         tr[i] = true_high - true_low;
@@ -170,30 +188,38 @@ pub fn ultosc_into<T: SeriesElement>(
         output[i] = T::nan();
     }
 
-    // Calculate ULTOSC for each bar after lookback
-    for i in lookback..n {
-        // Calculate sum of BP and TR for each period
-        let mut sum_bp1 = T::zero();
-        let mut sum_tr1 = T::zero();
-        for j in (i + 1 - period1)..=i {
+    // Use rolling sums instead of recalculating from scratch
+    // This changes O(n×k) to O(n)
+
+    // Initialize sums for the first window of each period
+    let mut sum_bp1 = T::zero();
+    let mut sum_tr1 = T::zero();
+    let mut sum_bp2 = T::zero();
+    let mut sum_tr2 = T::zero();
+    let mut sum_bp3 = T::zero();
+    let mut sum_tr3 = T::zero();
+
+    // Build initial sums up to lookback
+    for j in 1..=lookback {
+        // Period 1 (shortest)
+        if j > lookback - period1 {
             sum_bp1 = sum_bp1 + bp[j];
             sum_tr1 = sum_tr1 + tr[j];
         }
-
-        let mut sum_bp2 = T::zero();
-        let mut sum_tr2 = T::zero();
-        for j in (i + 1 - period2)..=i {
+        // Period 2 (medium)
+        if j > lookback - period2 {
             sum_bp2 = sum_bp2 + bp[j];
             sum_tr2 = sum_tr2 + tr[j];
         }
-
-        let mut sum_bp3 = T::zero();
-        let mut sum_tr3 = T::zero();
-        for j in (i + 1 - period3)..=i {
+        // Period 3 (longest)
+        if j > lookback - period3 {
             sum_bp3 = sum_bp3 + bp[j];
             sum_tr3 = sum_tr3 + tr[j];
         }
+    }
 
+    // Calculate ULTOSC for each bar after lookback using rolling sums
+    for i in lookback..n {
         // Calculate averages
         let avg1 = if sum_tr1 == T::zero() {
             T::zero()
@@ -212,7 +238,21 @@ pub fn ultosc_into<T: SeriesElement>(
         };
 
         // ULTOSC = 100 * ((4 * avg1) + (2 * avg2) + avg3) / 7
-        output[i] = hundred * ((four * avg1) + (two * avg2) + avg3) / seven;
+        // Optimized: precomputed hundred/seven = ~14.285714 to eliminate division
+        output[i] = hundred_seventh * ((four * avg1) + (two * avg2) + avg3);
+
+        // Update rolling sums for next iteration (if not last)
+        if i + 1 < n {
+            // Add new value, remove old value
+            sum_bp1 = sum_bp1 + bp[i + 1] - bp[i + 1 - period1];
+            sum_tr1 = sum_tr1 + tr[i + 1] - tr[i + 1 - period1];
+
+            sum_bp2 = sum_bp2 + bp[i + 1] - bp[i + 1 - period2];
+            sum_tr2 = sum_tr2 + tr[i + 1] - tr[i + 1 - period2];
+
+            sum_bp3 = sum_bp3 + bp[i + 1] - bp[i + 1 - period3];
+            sum_tr3 = sum_tr3 + tr[i + 1] - tr[i + 1 - period3];
+        }
     }
 
     Ok(())
@@ -261,7 +301,24 @@ pub fn ultosc<T: SeriesElement>(
     period2: usize,
     period3: usize,
 ) -> Result<Vec<T>> {
-    let mut output = vec![T::zero(); high.len()];
+    use std::any::TypeId;
+    let n = high.len();
+
+    // Optimization: For f64/f32, allocate uninitialized memory since ultosc_into
+    // fully overwrites every element (lookback + computed region).
+    // This avoids the initialization penalty for large datasets.
+    let mut output = if TypeId::of::<T>() == TypeId::of::<f64>() {
+        let mut v: Vec<T> = Vec::with_capacity(n);
+        unsafe { v.set_len(n); } // Safe: ultosc_into writes all n elements
+        v
+    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
+        let mut v: Vec<T> = Vec::with_capacity(n);
+        unsafe { v.set_len(n); } // Safe: ultosc_into writes all n elements
+        v
+    } else {
+        vec![T::nan(); n]
+    };
+
     ultosc_into(high, low, close, period1, period2, period3, &mut output)?;
     Ok(output)
 }
