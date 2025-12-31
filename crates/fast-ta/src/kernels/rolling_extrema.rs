@@ -765,3 +765,141 @@ pub fn rolling_extrema_into<T: SeriesElement>(
 
     Ok(n - period + 1)
 }
+
+/// Computes the rolling maximum with strict NaN propagation.
+///
+/// Unlike `rolling_max`, this function propagates NaN values: if any value
+/// in the window is NaN, the result for that window will be NaN.
+///
+/// # Arguments
+///
+/// * `data` - The input data series
+/// * `period` - The window size for rolling calculations
+///
+/// # Returns
+///
+/// A `Result` containing a vector of rolling maximum values,
+/// or an error if validation fails.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The input data is empty (`Error::EmptyInput`)
+/// - The period is zero (`Error::InvalidPeriod`)
+/// - The input data is shorter than the period (`Error::InsufficientData`)
+pub fn rolling_max_nan_propagating<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
+    // Validate inputs
+    if period == 0 {
+        return Err(Error::InvalidPeriod {
+            period,
+            reason: "period must be at least 1",
+        });
+    }
+
+    if data.is_empty() {
+        return Err(Error::EmptyInput);
+    }
+
+    if data.len() < period {
+        return Err(Error::InsufficientData {
+            required: period,
+            actual: data.len(),
+            indicator: "rolling_max_nan_propagating",
+        });
+    }
+
+    let n = data.len();
+    let mut result = vec![T::nan(); n];
+
+    for i in (period - 1)..n {
+        let window_start = i + 1 - period;
+        let window = &data[window_start..=i];
+
+        // Check for NaN in window
+        let has_nan = window.iter().any(|&v| is_invalid(v));
+
+        if has_nan {
+            result[i] = T::nan();
+        } else {
+            // Find max in window
+            let mut max_val = window[0];
+            for &val in &window[1..] {
+                if val > max_val {
+                    max_val = val;
+                }
+            }
+            result[i] = max_val;
+        }
+    }
+
+    Ok(result)
+}
+
+/// Computes the rolling minimum with strict NaN propagation.
+///
+/// Unlike `rolling_min`, this function propagates NaN values: if any value
+/// in the window is NaN, the result for that window will be NaN.
+///
+/// # Arguments
+///
+/// * `data` - The input data series
+/// * `period` - The window size for rolling calculations
+///
+/// # Returns
+///
+/// A `Result` containing a vector of rolling minimum values,
+/// or an error if validation fails.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The input data is empty (`Error::EmptyInput`)
+/// - The period is zero (`Error::InvalidPeriod`)
+/// - The input data is shorter than the period (`Error::InsufficientData`)
+pub fn rolling_min_nan_propagating<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
+    // Validate inputs
+    if period == 0 {
+        return Err(Error::InvalidPeriod {
+            period,
+            reason: "period must be at least 1",
+        });
+    }
+
+    if data.is_empty() {
+        return Err(Error::EmptyInput);
+    }
+
+    if data.len() < period {
+        return Err(Error::InsufficientData {
+            required: period,
+            actual: data.len(),
+            indicator: "rolling_min_nan_propagating",
+        });
+    }
+
+    let n = data.len();
+    let mut result = vec![T::nan(); n];
+
+    for i in (period - 1)..n {
+        let window_start = i + 1 - period;
+        let window = &data[window_start..=i];
+
+        // Check for NaN in window
+        let has_nan = window.iter().any(|&v| is_invalid(v));
+
+        if has_nan {
+            result[i] = T::nan();
+        } else {
+            // Find min in window
+            let mut min_val = window[0];
+            for &val in &window[1..] {
+                if val < min_val {
+                    min_val = val;
+                }
+            }
+            result[i] = min_val;
+        }
+    }
+
+    Ok(result)
+}

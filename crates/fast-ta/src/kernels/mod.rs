@@ -42,11 +42,8 @@ pub use accumulators::{
 // Rolling extrema kernel exports: O(n) rolling max/min using monotonic deque
 pub use rolling_extrema::{
     rolling_extrema, rolling_extrema_into, rolling_extrema_lookback, rolling_extrema_min_len,
-    rolling_max, rolling_max_into, rolling_max_naive, rolling_min, rolling_min_into,
-    rolling_min_naive, MonotonicDeque, RollingExtremaOutput,
-    // NaN-propagating variants (for indicators that require strict NaN propagation)
-    rolling_max_nan_propagating, rolling_min_nan_propagating,
-    rolling_extrema_fused_nan_propagating, rolling_extrema_fused_nan_propagating_into,
+    rolling_max, rolling_max_into, rolling_max_nan_propagating, rolling_min, rolling_min_into,
+    rolling_min_nan_propagating, MonotonicDeque, RollingExtremaOutput,
 };
 
 // SIMD kernel exports

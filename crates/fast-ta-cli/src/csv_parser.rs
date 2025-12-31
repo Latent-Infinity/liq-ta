@@ -79,6 +79,12 @@ impl ParsedCsv {
             .and_then(|idx| self.columns.get(idx))
     }
 
+    /// Take ownership of a column by normalized name, removing it from storage.
+    pub fn take_column(&mut self, name: &str) -> Option<Vec<f64>> {
+        let idx = self.column_map.get(name).copied()?;
+        self.columns.remove(&idx)
+    }
+
     /// Get close prices, trying multiple common column names.
     #[must_use] 
     pub fn get_close(&self) -> Option<&Vec<f64>> {
@@ -86,6 +92,14 @@ impl ParsedCsv {
             .or_else(|| self.get_column("price"))
             .or_else(|| self.get_column("adj close"))
             .or_else(|| self.get_column("adjusted close"))
+    }
+
+    /// Take ownership of close prices, trying multiple common column names.
+    pub fn take_close(&mut self) -> Option<Vec<f64>> {
+        self.take_column("close")
+            .or_else(|| self.take_column("price"))
+            .or_else(|| self.take_column("adj close"))
+            .or_else(|| self.take_column("adjusted close"))
     }
 }
 
@@ -236,10 +250,9 @@ pub fn parse_csv_from_reader<R: Read>(reader: R) -> Result<ParsedCsv> {
 ///
 /// This is a convenience function for indicators that only need close prices.
 pub fn parse_close_prices<P: AsRef<Path>>(path: P) -> Result<Vec<f64>> {
-    let parsed = parse_csv(path)?;
+    let mut parsed = parse_csv(path)?;
     parsed
-        .get_close()
-        .cloned()
+        .take_close()
         .ok_or_else(|| CliError::CsvParseError {
             message: "no close price column found (expected 'close', 'price', or 'adj close')"
                 .to_string(),
@@ -249,42 +262,38 @@ pub fn parse_close_prices<P: AsRef<Path>>(path: P) -> Result<Vec<f64>> {
 
 /// Parse a CSV file into OHLC data.
 pub fn parse_ohlc<P: AsRef<Path>>(path: P) -> Result<OhlcData> {
-    let parsed = parse_csv(path)?;
+    let mut parsed = parse_csv(path)?;
 
     let open = parsed
-        .get_column("open")
-        .cloned()
+        .take_column("open")
         .ok_or_else(|| CliError::CsvParseError {
             message: "no 'open' column found".to_string(),
             line: None,
         })?;
 
     let high = parsed
-        .get_column("high")
-        .cloned()
+        .take_column("high")
         .ok_or_else(|| CliError::CsvParseError {
             message: "no 'high' column found".to_string(),
             line: None,
         })?;
 
     let low = parsed
-        .get_column("low")
-        .cloned()
+        .take_column("low")
         .ok_or_else(|| CliError::CsvParseError {
             message: "no 'low' column found".to_string(),
             line: None,
         })?;
 
     let close = parsed
-        .get_close()
-        .cloned()
+        .take_close()
         .ok_or_else(|| CliError::CsvParseError {
             message: "no close price column found".to_string(),
             line: None,
         })?;
 
     Ok(OhlcData {
-        dates: parsed.dates,
+        dates: parsed.dates.take(),
         open,
         high,
         low,
@@ -294,51 +303,46 @@ pub fn parse_ohlc<P: AsRef<Path>>(path: P) -> Result<OhlcData> {
 
 /// Parse a CSV file into OHLCV data.
 pub fn parse_ohlcv<P: AsRef<Path>>(path: P) -> Result<OhlcvData> {
-    let parsed = parse_csv(path)?;
+    let mut parsed = parse_csv(path)?;
 
     let open = parsed
-        .get_column("open")
-        .cloned()
+        .take_column("open")
         .ok_or_else(|| CliError::CsvParseError {
             message: "no 'open' column found".to_string(),
             line: None,
         })?;
 
     let high = parsed
-        .get_column("high")
-        .cloned()
+        .take_column("high")
         .ok_or_else(|| CliError::CsvParseError {
             message: "no 'high' column found".to_string(),
             line: None,
         })?;
 
     let low = parsed
-        .get_column("low")
-        .cloned()
+        .take_column("low")
         .ok_or_else(|| CliError::CsvParseError {
             message: "no 'low' column found".to_string(),
             line: None,
         })?;
 
     let close = parsed
-        .get_close()
-        .cloned()
+        .take_close()
         .ok_or_else(|| CliError::CsvParseError {
             message: "no close price column found".to_string(),
             line: None,
         })?;
 
     let volume = parsed
-        .get_column("volume")
-        .or_else(|| parsed.get_column("vol"))
-        .cloned()
+        .take_column("volume")
+        .or_else(|| parsed.take_column("vol"))
         .ok_or_else(|| CliError::CsvParseError {
             message: "no 'volume' column found".to_string(),
             line: None,
         })?;
 
     Ok(OhlcvData {
-        dates: parsed.dates,
+        dates: parsed.dates.take(),
         open,
         high,
         low,

@@ -29,7 +29,7 @@ impl OutputDest {
     /// Create a writer for this output destination.
     pub fn writer(&self) -> Result<Box<dyn Write>> {
         match self {
-            OutputDest::Stdout => Ok(Box::new(io::stdout())),
+            OutputDest::Stdout => Ok(Box::new(BufWriter::new(io::stdout()))),
             OutputDest::File(path) => {
                 let file = File::create(path).map_err(|e| CliError::IoError {
                     source: e,
