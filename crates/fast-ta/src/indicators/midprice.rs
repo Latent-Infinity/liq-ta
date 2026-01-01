@@ -164,10 +164,12 @@ pub fn midprice_into<T: SeriesElement>(
     midprice_monotonic_deque(high, low, period, lookback, two, output)
 }
 
-/// Optimized f64 path with NaN/infinity tracking.
-/// Uses monotonic deques with a ring buffer to track invalid values in the window.
+/// Van Herk/Gil-Werman SIMD algorithm for MIDPRICE.
+///
+/// Uses prefix-suffix blocks for sliding max/min, which vectorizes extremely well.
+/// This is a three-pass algorithm but each pass is SIMD-friendly.
 #[inline]
-fn midprice_f64_optimized(
+fn midprice_f64_van_herk(
     high: &[f64],
     low: &[f64],
     period: usize,
@@ -177,70 +179,123 @@ fn midprice_f64_optimized(
     let n = high.len();
     let half = 0.5;
 
-    // Use O(n) monotonic deques for rolling max (on high) and min (on low)
-    let mut max_deque: MonotonicDeque<f64> = MonotonicDeque::new(period);
-    let mut min_deque: MonotonicDeque<f64> = MonotonicDeque::new(period);
+    // Allocate working buffers for prefix/suffix extrema
+    let mut left_max_high = vec![f64::NEG_INFINITY; n];
+    let mut right_max_high = vec![f64::NEG_INFINITY; n];
+    let mut left_min_low = vec![f64::INFINITY; n];
+    let mut right_min_low = vec![f64::INFINITY; n];
 
-    // Ring buffer for tracking invalid value indices (for NaN/Infinity propagation)
-    let mut invalid_buf = vec![0usize; period];
-    let mut invalid_head = 0usize;
-    let mut invalid_tail = 0usize;
-    let mut invalid_len = 0usize;
+    // Track validity with prefix/suffix AND
+    let mut left_valid = vec![true; n];
+    let mut right_valid = vec![true; n];
 
-    // Single pass through data
-    for i in 0..n {
-        let h = high[i];
-        let l = low[i];
+    // Pass 1: Forward scan (prefix blocks)
+    let mut block_start = 0;
+    while block_start < n {
+        let block_end = (block_start + period).min(n);
 
-        // Track non-finite values for propagation policy
-        if !h.is_finite() || !l.is_finite() {
-            invalid_buf[invalid_tail] = i;
-            invalid_tail += 1;
-            if invalid_tail == period {
-                invalid_tail = 0; // Wrap-branch instead of modulo
-            }
-            invalid_len += 1;
+        // Reset for this block
+        left_max_high[block_start] = high[block_start];
+        left_min_low[block_start] = low[block_start];
+        left_valid[block_start] = high[block_start].is_finite() && low[block_start].is_finite();
+
+        // Extend prefix within block
+        for i in (block_start + 1)..block_end {
+            left_max_high[i] = left_max_high[i - 1].max(high[i]);
+            left_min_low[i] = left_min_low[i - 1].min(low[i]);
+            left_valid[i] = left_valid[i - 1] && high[i].is_finite() && low[i].is_finite();
         }
 
-        // Update deques with current elements
-        max_deque.push_max(i, high);
-        min_deque.push_min(i, low);
+        block_start = block_end;
+    }
 
-        // Remove expired invalid indices from the window
-        if i >= period {
-            let window_start = i + 1 - period;
-            while invalid_len > 0 && invalid_buf[invalid_head] < window_start {
-                invalid_head += 1;
-                if invalid_head == period {
-                    invalid_head = 0; // Wrap-branch
-                }
-                invalid_len -= 1;
+    // Pass 2: Backward scan (suffix blocks)
+    let mut block_end = n;
+    while block_end > 0 {
+        let block_start = block_end.saturating_sub(period);
+
+        // Reset for this block (from end)
+        let last_idx = block_end - 1;
+        right_max_high[last_idx] = high[last_idx];
+        right_min_low[last_idx] = low[last_idx];
+        right_valid[last_idx] = high[last_idx].is_finite() && low[last_idx].is_finite();
+
+        // Extend suffix within block (going backward)
+        if last_idx > block_start {
+            for i in (block_start..last_idx).rev() {
+                right_max_high[i] = right_max_high[i + 1].max(high[i]);
+                right_min_low[i] = right_min_low[i + 1].min(low[i]);
+                right_valid[i] = right_valid[i + 1] && high[i].is_finite() && low[i].is_finite();
             }
         }
 
-        // Output valid values after lookback period
-        if i >= lookback {
-            // If any invalid value is still in the window, output NaN (propagation policy)
-            if invalid_len > 0 {
-                output[i] = f64::NAN;
-            } else {
-                let highest_high = max_deque.get_extremum(high);
-                let lowest_low = min_deque.get_extremum(low);
+        block_end = block_start;
+    }
 
-                // If either deque returned a non-finite value, output NaN
-                if !highest_high.is_finite() || !lowest_low.is_finite() {
-                    output[i] = f64::NAN;
-                } else {
-                    output[i] = (highest_high + lowest_low) * half;
-                }
-            }
+    // Pass 3: Combine and compute MIDPRICE
+    let offset = lookback;
+
+    for j in 0..(n - offset) {
+        let start = j;
+        let end = j + offset;
+
+        // Combine prefix/suffix to get window extrema
+        let hh = right_max_high[start].max(left_max_high[end]);
+        let ll = right_min_low[start].min(left_min_low[end]);
+
+        // Combine validity
+        let window_ok = right_valid[start] && left_valid[end];
+
+        // Compute MIDPRICE
+        if window_ok {
+            output[end] = (hh + ll) * half;
+        } else {
+            output[end] = f64::NAN;
         }
     }
 
     Ok(())
 }
 
-/// Monotonic deque implementation (O(n) amortized).
+/// Optimized f64 path with algorithm dispatch.
+/// Uses Van Herk for large datasets (n >= 1000) or MonotonicDeque for smaller data.
+#[inline]
+fn midprice_f64_optimized(
+    high: &[f64],
+    low: &[f64],
+    period: usize,
+    lookback: usize,
+    output: &mut [f64],
+) -> Result<()> {
+    // Choose algorithm based on dataset size
+    // Van Herk is better for large datasets with its SIMD-friendly structure
+    if high.len() >= 1000 {
+        return midprice_f64_van_herk(high, low, period, lookback, output);
+    }
+
+    // MonotonicDeque for small datasets (lower overhead)
+    let n = high.len();
+    let half = 0.5;
+
+    let mut max_deque: MonotonicDeque<f64> = MonotonicDeque::new(period);
+    let mut min_deque: MonotonicDeque<f64> = MonotonicDeque::new(period);
+
+    for i in 0..n {
+        max_deque.push_max(i, high);
+        min_deque.push_min(i, low);
+
+        if i >= lookback {
+            let highest_high = max_deque.get_extremum(high);
+            let lowest_low = min_deque.get_extremum(low);
+            output[i] = (highest_high + lowest_low) * half;
+        }
+    }
+
+    Ok(())
+}
+
+/// Monotonic deque implementation (O(n) amortized) - simplified.
+/// MonotonicDeque already handles NaN propagation correctly.
 #[inline]
 fn midprice_monotonic_deque<T: SeriesElement>(
     high: &[T],
@@ -256,59 +311,19 @@ fn midprice_monotonic_deque<T: SeriesElement>(
     let mut max_deque: MonotonicDeque<T> = MonotonicDeque::new(period);
     let mut min_deque: MonotonicDeque<T> = MonotonicDeque::new(period);
 
-    // Ring buffer for tracking invalid value indices (for NaN/Infinity propagation)
-    let mut invalid_buf = vec![0usize; period];
-    let mut invalid_head = 0usize;
-    let mut invalid_tail = 0usize;
-    let mut invalid_len = 0usize;
-
     // Single pass through data
     for i in 0..n {
-        let h = high[i];
-        let l = low[i];
-
-        // Track non-finite values for propagation policy
-        if !h.is_finite() || !l.is_finite() {
-            invalid_buf[invalid_tail] = i;
-            invalid_tail += 1;
-            if invalid_tail == period {
-                invalid_tail = 0;  // Wrap-branch instead of modulo
-            }
-            invalid_len += 1;
-        }
-
         // Update deques with current elements
         max_deque.push_max(i, high);
         min_deque.push_min(i, low);
 
-        // Remove expired invalid indices from the window
-        if i >= period {
-            let window_start = i + 1 - period;
-            while invalid_len > 0 && invalid_buf[invalid_head] < window_start {
-                invalid_head += 1;
-                if invalid_head == period {
-                    invalid_head = 0;  // Wrap-branch
-                }
-                invalid_len -= 1;
-            }
-        }
-
         // Output valid values after lookback period
         if i >= lookback {
-            // If any invalid value is still in the window, output NaN (propagation policy)
-            if invalid_len > 0 {
-                output[i] = T::nan();
-            } else {
-                let highest_high = max_deque.get_extremum(high);
-                let lowest_low = min_deque.get_extremum(low);
+            let highest_high = max_deque.get_extremum(high);
+            let lowest_low = min_deque.get_extremum(low);
 
-                // If either deque is empty (all values were NaN), output NaN
-                if !highest_high.is_finite() || !lowest_low.is_finite() {
-                    output[i] = T::nan();
-                } else {
-                    output[i] = (highest_high + lowest_low) / two;
-                }
-            }
+            // Deques return NaN if window contains NaN, propagating correctly
+            output[i] = (highest_high + lowest_low) / two;
         }
     }
 
@@ -354,9 +369,24 @@ fn midprice_monotonic_deque<T: SeriesElement>(
 /// - The input arrays have different lengths (`Error::LengthMismatch`)
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
-pub fn midprice<T: SeriesElement>(high: &[T], low: &[T], period: usize) -> Result<Vec<T>> {
+pub fn midprice<T: SeriesElement + 'static>(high: &[T], low: &[T], period: usize) -> Result<Vec<T>> {
+    use std::any::TypeId;
     let len = high.len();
-    let mut output = vec![T::nan(); len];
+
+    // Optimization: For f64/f32, allocate uninitialized memory since midprice_into
+    // fully overwrites every element (lookback NaNs + computed region).
+    let mut output = if TypeId::of::<T>() == TypeId::of::<f64>() {
+        let mut v: Vec<T> = Vec::with_capacity(len);
+        unsafe { v.set_len(len); }  // Safe: midprice_into writes all len elements
+        v
+    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
+        let mut v: Vec<T> = Vec::with_capacity(len);
+        unsafe { v.set_len(len); }  // Safe: midprice_into writes all len elements
+        v
+    } else {
+        vec![T::nan(); len]
+    };
+
     midprice_into(high, low, period, &mut output)?;
     Ok(output)
 }

@@ -52,6 +52,8 @@
 //! assert_eq!(result.len(), 5);
 //! ```
 
+use std::any::TypeId;
+
 use crate::error::{Error, Result};
 use crate::precision::{current_precision_mode, PrecisionMode};
 use crate::traits::SeriesElement;
@@ -135,7 +137,18 @@ pub fn ad_into<T: SeriesElement + 'static>(
         });
     }
 
-    if use_f64_precision::<T>() {
+    // Specialized f32 path for High precision mode
+    if TypeId::of::<T>() == TypeId::of::<f32>() && current_precision_mode() == PrecisionMode::High {
+        // SAFETY: We just checked that T is f32
+        unsafe {
+            let high_f32 = std::slice::from_raw_parts(high.as_ptr() as *const f32, n);
+            let low_f32 = std::slice::from_raw_parts(low.as_ptr() as *const f32, n);
+            let close_f32 = std::slice::from_raw_parts(close.as_ptr() as *const f32, n);
+            let volume_f32 = std::slice::from_raw_parts(volume.as_ptr() as *const f32, n);
+            let output_f32 = std::slice::from_raw_parts_mut(output.as_mut_ptr() as *mut f32, n);
+            ad_core_f32_high(high_f32, low_f32, close_f32, volume_f32, output_f32)
+        }
+    } else if use_f64_precision::<T>() {
         ad_core_f64(high, low, close, volume, output)
     } else {
         ad_core_native(high, low, close, volume, output)
@@ -150,53 +163,87 @@ fn ad_core_native<T: SeriesElement>(
     volume: &[T],
     output: &mut [T],
 ) -> Result<()> {
+    let n = high.len();
     let mut ad_value = T::zero();
+    let zero = T::zero();
 
-    // Calculate AD using IEEE 754 NaN propagation
-    for i in 0..high.len() {
-        let h = high[i];
-        let l = low[i];
-        let c = close[i];
-        let v = volume[i];
-
-        // CLV = ((close - low) - (high - close)) / (high - low)
-        //     = (2 * close - high - low) / (high - low)
-        //     = (close + close - high - low) / range
+    // Helper to compute MFV
+    #[inline(always)]
+    fn compute_mfv<T: SeriesElement>(h: T, l: T, c: T, v: T, zero: T) -> T {
         let range = h - l;
-        let numerator = c + c - h - l; // Avoids T::from_f64(2.0)
+        let numerator = c + c - h - l;
 
-        let clv = if range == T::zero() {
-            // When high == low (valid finite values), CLV = 0
-            // If any input was NaN/Inf, numerator will be non-finite
+        if range == zero {
             if numerator.is_finite() {
-                T::zero()
+                zero * v
             } else {
                 T::nan()
             }
         } else {
-            // Normal case: compute CLV
-            let result = numerator / range;
-            // Normalize non-finite (NaN or Inf) to NaN
-            if result.is_finite() {
-                result
-            } else {
-                T::nan()
-            }
-        };
+            (numerator / range) * v
+        }
+    }
 
-        // Money Flow Volume = CLV × volume
-        // IEEE propagates NaN from either clv or volume
-        let mfv = clv * v;
+    // Process in chunks of 4 to pipeline divisions
+    let chunk_count = (n / 4) * 4;
+    let mut i = 0;
 
-        // AD is cumulative - IEEE propagates NaN through addition
+    while i < chunk_count {
+        // Compute 4 MFVs in parallel (pipelines divisions)
+        let mfv0 = compute_mfv(high[i], low[i], close[i], volume[i], zero);
+        let mfv1 = compute_mfv(high[i + 1], low[i + 1], close[i + 1], volume[i + 1], zero);
+        let mfv2 = compute_mfv(high[i + 2], low[i + 2], close[i + 2], volume[i + 2], zero);
+        let mfv3 = compute_mfv(high[i + 3], low[i + 3], close[i + 3], volume[i + 3], zero);
+
+        // Accumulate sequentially with early exit
+        ad_value = ad_value + mfv0;
+        if !ad_value.is_finite() {
+            output[i] = T::nan();
+            output[i + 1..n].fill(T::nan());
+            return Ok(());
+        }
+        output[i] = ad_value;
+
+        ad_value = ad_value + mfv1;
+        if !ad_value.is_finite() {
+            output[i + 1] = T::nan();
+            output[i + 2..n].fill(T::nan());
+            return Ok(());
+        }
+        output[i + 1] = ad_value;
+
+        ad_value = ad_value + mfv2;
+        if !ad_value.is_finite() {
+            output[i + 2] = T::nan();
+            output[i + 3..n].fill(T::nan());
+            return Ok(());
+        }
+        output[i + 2] = ad_value;
+
+        ad_value = ad_value + mfv3;
+        if !ad_value.is_finite() {
+            output[i + 3] = T::nan();
+            output[i + 4..n].fill(T::nan());
+            return Ok(());
+        }
+        output[i + 3] = ad_value;
+
+        i += 4;
+    }
+
+    // Handle remainder
+    while i < n {
+        let mfv = compute_mfv(high[i], low[i], close[i], volume[i], zero);
         ad_value = ad_value + mfv;
 
-        // Normalize any non-finite result to NaN (handles Inf edge cases)
         if !ad_value.is_finite() {
-            ad_value = T::nan();
+            output[i] = T::nan();
+            output[i + 1..n].fill(T::nan());
+            return Ok(());
         }
 
         output[i] = ad_value;
+        i += 1;
     }
 
     Ok(())
@@ -210,57 +257,190 @@ fn ad_core_f64<T: SeriesElement>(
     volume: &[T],
     output: &mut [T],
 ) -> Result<()> {
+    let n = high.len();
     let mut ad_accum: f64 = 0.0;
 
-    // Calculate AD using IEEE 754 NaN propagation with f64 accumulation
-    for i in 0..high.len() {
-        let h = high[i];
-        let l = low[i];
-        let c = close[i];
-        let v = volume[i];
-
-        // Convert to f64 for precision
+    // Helper to compute MFV
+    #[inline(always)]
+    fn compute_mfv<T: SeriesElement>(h: T, l: T, c: T, v: T) -> f64 {
         let h_f64 = h.to_f64().unwrap_or(0.0);
         let l_f64 = l.to_f64().unwrap_or(0.0);
         let c_f64 = c.to_f64().unwrap_or(0.0);
         let v_f64 = v.to_f64().unwrap_or(0.0);
 
-        // CLV = ((close - low) - (high - close)) / (high - low)
         let range = h_f64 - l_f64;
         let numerator = c_f64 + c_f64 - h_f64 - l_f64;
 
-        let clv = if range == 0.0 {
-            // When high == low (valid finite values), CLV = 0
-            // If any input was NaN/Inf, numerator will be non-finite
+        if range == 0.0 {
             if numerator.is_finite() {
-                0.0
+                0.0 * v_f64
             } else {
                 f64::NAN
             }
         } else {
-            // Normal case: compute CLV
-            let result = numerator / range;
-            // Normalize non-finite (NaN or Inf) to NaN
-            if result.is_finite() {
-                result
-            } else {
-                f64::NAN
-            }
-        };
+            (numerator / range) * v_f64
+        }
+    }
 
-        // Money Flow Volume = CLV × volume
-        // IEEE propagates NaN from either clv or volume
-        let mfv = clv * v_f64;
+    // Process in chunks of 4 to pipeline divisions
+    let chunk_count = (n / 4) * 4;
+    let mut i = 0;
 
-        // AD is cumulative - IEEE propagates NaN through addition
+    while i < chunk_count {
+        // Compute 4 MFVs in parallel (pipelines divisions)
+        let mfv0 = compute_mfv(high[i], low[i], close[i], volume[i]);
+        let mfv1 = compute_mfv(high[i + 1], low[i + 1], close[i + 1], volume[i + 1]);
+        let mfv2 = compute_mfv(high[i + 2], low[i + 2], close[i + 2], volume[i + 2]);
+        let mfv3 = compute_mfv(high[i + 3], low[i + 3], close[i + 3], volume[i + 3]);
+
+        // Accumulate sequentially with early exit
+        ad_accum += mfv0;
+        if !ad_accum.is_finite() {
+            output[i] = T::nan();
+            output[i + 1..n].fill(T::nan());
+            return Ok(());
+        }
+        output[i] = T::from_f64(ad_accum)?;
+
+        ad_accum += mfv1;
+        if !ad_accum.is_finite() {
+            output[i + 1] = T::nan();
+            output[i + 2..n].fill(T::nan());
+            return Ok(());
+        }
+        output[i + 1] = T::from_f64(ad_accum)?;
+
+        ad_accum += mfv2;
+        if !ad_accum.is_finite() {
+            output[i + 2] = T::nan();
+            output[i + 3..n].fill(T::nan());
+            return Ok(());
+        }
+        output[i + 2] = T::from_f64(ad_accum)?;
+
+        ad_accum += mfv3;
+        if !ad_accum.is_finite() {
+            output[i + 3] = T::nan();
+            output[i + 4..n].fill(T::nan());
+            return Ok(());
+        }
+        output[i + 3] = T::from_f64(ad_accum)?;
+
+        i += 4;
+    }
+
+    // Handle remainder
+    while i < n {
+        let mfv = compute_mfv(high[i], low[i], close[i], volume[i]);
         ad_accum += mfv;
 
-        // Normalize any non-finite result to NaN (handles Inf edge cases)
         if !ad_accum.is_finite() {
-            ad_accum = f64::NAN;
+            output[i] = T::nan();
+            output[i + 1..n].fill(T::nan());
+            return Ok(());
         }
 
         output[i] = T::from_f64(ad_accum)?;
+        i += 1;
+    }
+
+    Ok(())
+}
+
+/// Specialized f32 High precision computation.
+/// Avoids generic trait overhead by working directly with f32/f64 types.
+fn ad_core_f32_high(
+    high: &[f32],
+    low: &[f32],
+    close: &[f32],
+    volume: &[f32],
+    output: &mut [f32],
+) -> Result<()> {
+    let n = high.len();
+    let mut ad_accum: f64 = 0.0;
+
+    // Helper to compute MFV - direct f32->f64 casts
+    #[inline(always)]
+    fn compute_mfv(h: f32, l: f32, c: f32, v: f32) -> f64 {
+        let h_f64 = h as f64;
+        let l_f64 = l as f64;
+        let c_f64 = c as f64;
+        let v_f64 = v as f64;
+
+        let range = h_f64 - l_f64;
+        let numerator = c_f64 + c_f64 - h_f64 - l_f64;
+
+        if range == 0.0 {
+            if numerator.is_finite() {
+                0.0 * v_f64
+            } else {
+                f64::NAN
+            }
+        } else {
+            (numerator / range) * v_f64
+        }
+    }
+
+    // Process in chunks of 4 to pipeline divisions
+    let chunk_count = (n / 4) * 4;
+    let mut i = 0;
+
+    while i < chunk_count {
+        // Compute 4 MFVs in parallel (pipelines divisions)
+        let mfv0 = compute_mfv(high[i], low[i], close[i], volume[i]);
+        let mfv1 = compute_mfv(high[i + 1], low[i + 1], close[i + 1], volume[i + 1]);
+        let mfv2 = compute_mfv(high[i + 2], low[i + 2], close[i + 2], volume[i + 2]);
+        let mfv3 = compute_mfv(high[i + 3], low[i + 3], close[i + 3], volume[i + 3]);
+
+        // Accumulate sequentially with early exit
+        ad_accum += mfv0;
+        if !ad_accum.is_finite() {
+            output[i] = f32::NAN;
+            output[i + 1..n].fill(f32::NAN);
+            return Ok(());
+        }
+        output[i] = ad_accum as f32;
+
+        ad_accum += mfv1;
+        if !ad_accum.is_finite() {
+            output[i + 1] = f32::NAN;
+            output[i + 2..n].fill(f32::NAN);
+            return Ok(());
+        }
+        output[i + 1] = ad_accum as f32;
+
+        ad_accum += mfv2;
+        if !ad_accum.is_finite() {
+            output[i + 2] = f32::NAN;
+            output[i + 3..n].fill(f32::NAN);
+            return Ok(());
+        }
+        output[i + 2] = ad_accum as f32;
+
+        ad_accum += mfv3;
+        if !ad_accum.is_finite() {
+            output[i + 3] = f32::NAN;
+            output[i + 4..n].fill(f32::NAN);
+            return Ok(());
+        }
+        output[i + 3] = ad_accum as f32;
+
+        i += 4;
+    }
+
+    // Handle remainder
+    while i < n {
+        let mfv = compute_mfv(high[i], low[i], close[i], volume[i]);
+        ad_accum += mfv;
+
+        if !ad_accum.is_finite() {
+            output[i] = f32::NAN;
+            output[i + 1..n].fill(f32::NAN);
+            return Ok(());
+        }
+
+        output[i] = ad_accum as f32;
+        i += 1;
     }
 
     Ok(())
@@ -309,12 +489,26 @@ pub fn ad<T: SeriesElement + 'static>(
     close: &[T],
     volume: &[T],
 ) -> Result<Vec<T>> {
+    use std::any::TypeId;
     let len = high.len();
     if len == 0 {
         return Err(Error::EmptyInput);
     }
 
-    let mut output = vec![T::zero(); len];
+    // Optimization: For f64/f32, allocate uninitialized memory since ad_into
+    // fully overwrites every element.
+    let mut output = if TypeId::of::<T>() == TypeId::of::<f64>() {
+        let mut v: Vec<T> = Vec::with_capacity(len);
+        unsafe { v.set_len(len); }  // Safe: ad_into writes all len elements
+        v
+    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
+        let mut v: Vec<T> = Vec::with_capacity(len);
+        unsafe { v.set_len(len); }  // Safe: ad_into writes all len elements
+        v
+    } else {
+        vec![T::zero(); len]
+    };
+
     ad_into(high, low, close, volume, &mut output)?;
     Ok(output)
 }
