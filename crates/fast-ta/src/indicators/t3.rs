@@ -79,6 +79,15 @@ pub fn t3_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) ->
     t3_full_into(data, period, vfactor, output)
 }
 
+// EMA update using difference form to reduce critical path latency.
+// Mathematically equivalent to: e_new = alpha * x + (1 - alpha) * e_old
+// But uses: e_new = e_old + alpha * (x - e_old)
+// This replaces mul with sub, which has lower latency on modern CPUs.
+#[inline(always)]
+fn ema_step<T: SeriesElement>(x: T, e: T, alpha: T) -> T {
+    (x - e).mul_add(alpha, e)
+}
+
 /// Computes T3 with custom volume factor and stores results in output.
 ///
 /// This implementation fuses all 6 EMA passes into a single loop for
@@ -132,15 +141,12 @@ pub fn t3_full_into<T: SeriesElement>(
 
     // For period 1, T3 equals the input (no smoothing)
     if period == 1 {
-        for i in 0..data.len() {
-            output[i] = data[i];
-        }
+        output[..data.len()].copy_from_slice(data);
         return Ok(());
     }
 
     // EMA smoothing factor
     let alpha = T::from_usize(2)? / T::from_usize(period + 1)?;
-    let one_minus_alpha = T::one() - alpha;
 
     let ema_lookback = period - 1;
     let n = data.len();
@@ -159,49 +165,49 @@ pub fn t3_full_into<T: SeriesElement>(
 
     // Advance EMA1 to start2 and initialize EMA2
     for i in (start1 + 1)..=start2 {
-        e1 = alpha * data[i] + one_minus_alpha * e1;
+        e1 = ema_step(data[i], e1, alpha);
     }
     let mut e2 = e1;
 
     // Advance EMAs to start3 and initialize EMA3
     for i in (start2 + 1)..=start3 {
-        e1 = alpha * data[i] + one_minus_alpha * e1;
-        e2 = alpha * e1 + one_minus_alpha * e2;
+        e1 = ema_step(data[i], e1, alpha);
+        e2 = ema_step(e1, e2, alpha);
     }
     let mut e3 = e2;
 
     // Advance EMAs to start4 and initialize EMA4
     for i in (start3 + 1)..=start4 {
-        e1 = alpha * data[i] + one_minus_alpha * e1;
-        e2 = alpha * e1 + one_minus_alpha * e2;
-        e3 = alpha * e2 + one_minus_alpha * e3;
+        e1 = ema_step(data[i], e1, alpha);
+        e2 = ema_step(e1, e2, alpha);
+        e3 = ema_step(e2, e3, alpha);
     }
     let mut e4 = e3;
 
     // Advance EMAs to start5 and initialize EMA5
     for i in (start4 + 1)..=start5 {
-        e1 = alpha * data[i] + one_minus_alpha * e1;
-        e2 = alpha * e1 + one_minus_alpha * e2;
-        e3 = alpha * e2 + one_minus_alpha * e3;
-        e4 = alpha * e3 + one_minus_alpha * e4;
+        e1 = ema_step(data[i], e1, alpha);
+        e2 = ema_step(e1, e2, alpha);
+        e3 = ema_step(e2, e3, alpha);
+        e4 = ema_step(e3, e4, alpha);
     }
     let mut e5 = e4;
 
     // Advance EMAs to lookback and initialize EMA6
     for i in (start5 + 1)..lookback {
-        e1 = alpha * data[i] + one_minus_alpha * e1;
-        e2 = alpha * e1 + one_minus_alpha * e2;
-        e3 = alpha * e2 + one_minus_alpha * e3;
-        e4 = alpha * e3 + one_minus_alpha * e4;
-        e5 = alpha * e4 + one_minus_alpha * e5;
+        e1 = ema_step(data[i], e1, alpha);
+        e2 = ema_step(e1, e2, alpha);
+        e3 = ema_step(e2, e3, alpha);
+        e4 = ema_step(e3, e4, alpha);
+        e5 = ema_step(e4, e5, alpha);
     }
 
     // At lookback, update all EMAs
-    e1 = alpha * data[lookback] + one_minus_alpha * e1;
-    e2 = alpha * e1 + one_minus_alpha * e2;
-    e3 = alpha * e2 + one_minus_alpha * e3;
-    e4 = alpha * e3 + one_minus_alpha * e4;
-    e5 = alpha * e4 + one_minus_alpha * e5;
+    e1 = ema_step(data[lookback], e1, alpha);
+    e2 = ema_step(e1, e2, alpha);
+    e3 = ema_step(e2, e3, alpha);
+    e4 = ema_step(e3, e4, alpha);
+    e5 = ema_step(e4, e5, alpha);
     let mut e6 = e5;
 
     // Calculate coefficients
@@ -219,14 +225,15 @@ pub fn t3_full_into<T: SeriesElement>(
     output[lookback] = c1 * e6 + c2 * e5 + c3 * e4 + c4 * e3;
 
     // Main loop: update all 6 EMAs and compute T3 in single pass
+    // Use difference form for EMA to reduce critical path latency
     for i in (lookback + 1)..n {
-        e1 = alpha * data[i] + one_minus_alpha * e1;
-        e2 = alpha * e1 + one_minus_alpha * e2;
-        e3 = alpha * e2 + one_minus_alpha * e3;
-        e4 = alpha * e3 + one_minus_alpha * e4;
-        e5 = alpha * e4 + one_minus_alpha * e5;
-        e6 = alpha * e5 + one_minus_alpha * e6;
-        output[i] = c1 * e6 + c2 * e5 + c3 * e4 + c4 * e3;
+        e1 = ema_step(data[i], e1, alpha);
+        e2 = ema_step(e1, e2, alpha);
+        e3 = ema_step(e2, e3, alpha);
+        e4 = ema_step(e3, e4, alpha);
+        e5 = ema_step(e4, e5, alpha);
+        e6 = ema_step(e5, e6, alpha);
+        output[i] = e6.mul_add(c1, e5.mul_add(c2, e4.mul_add(c3, e3 * c4)));
     }
 
     Ok(())
@@ -265,9 +272,28 @@ pub fn t3_full_into<T: SeriesElement>(
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 pub fn t3<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
-    let mut output = vec![T::nan(); data.len()];
-    t3_into(data, period, &mut output)?;
-    Ok(output)
+    use std::any::TypeId;
+
+    // Optimized allocation for f64/f32: avoid double-initialization
+    // t3_into() writes all elements, so this is pure double-write tax
+    if TypeId::of::<T>() == TypeId::of::<f64>() {
+        let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
+        let mut output: Vec<f64> = Vec::with_capacity(data.len());
+        unsafe { output.set_len(data.len()); }
+        t3_into(data_f64, period, &mut output)?;
+        Ok(unsafe { std::mem::transmute(output) })
+    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
+        let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
+        let mut output: Vec<f32> = Vec::with_capacity(data.len());
+        unsafe { output.set_len(data.len()); }
+        t3_into(data_f32, period, &mut output)?;
+        Ok(unsafe { std::mem::transmute(output) })
+    } else {
+        // Generic fallback: initialize to NaN
+        let mut output = vec![T::nan(); data.len()];
+        t3_into(data, period, &mut output)?;
+        Ok(output)
+    }
 }
 
 /// Computes T3 with custom volume factor.
@@ -290,9 +316,29 @@ pub fn t3<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 pub fn t3_full<T: SeriesElement>(data: &[T], period: usize, vfactor: T) -> Result<Vec<T>> {
-    let mut output = vec![T::nan(); data.len()];
-    t3_full_into(data, period, vfactor, &mut output)?;
-    Ok(output)
+    use std::any::TypeId;
+
+    // Optimized allocation for f64/f32: avoid double-initialization
+    if TypeId::of::<T>() == TypeId::of::<f64>() {
+        let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
+        let vfactor_f64: f64 = unsafe { std::mem::transmute_copy(&vfactor) };
+        let mut output: Vec<f64> = Vec::with_capacity(data.len());
+        unsafe { output.set_len(data.len()); }
+        t3_full_into(data_f64, period, vfactor_f64, &mut output)?;
+        Ok(unsafe { std::mem::transmute(output) })
+    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
+        let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
+        let vfactor_f32: f32 = unsafe { std::mem::transmute_copy(&vfactor) };
+        let mut output: Vec<f32> = Vec::with_capacity(data.len());
+        unsafe { output.set_len(data.len()); }
+        t3_full_into(data_f32, period, vfactor_f32, &mut output)?;
+        Ok(unsafe { std::mem::transmute(output) })
+    } else {
+        // Generic fallback: initialize to NaN
+        let mut output = vec![T::nan(); data.len()];
+        t3_full_into(data, period, vfactor, &mut output)?;
+        Ok(output)
+    }
 }
 
 #[cfg(test)]

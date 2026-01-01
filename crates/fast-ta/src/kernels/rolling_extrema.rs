@@ -903,3 +903,158 @@ pub fn rolling_min_nan_propagating<T: SeriesElement>(data: &[T], period: usize) 
 
     Ok(result)
 }
+/// Van Herk/Gil-Werman algorithm for fused rolling extrema on separate high/low series.
+///
+/// This algorithm computes both rolling max (on high) and rolling min (on low) in O(3n) time
+/// with O(6n) space using prefix-suffix decomposition. The memory access patterns are
+/// SIMD-friendly and cache-optimal for large datasets.
+///
+/// # Algorithm
+///
+/// 1. **Divide**: Split data into blocks of size `period`
+/// 2. **Forward pass**: Compute prefix max/min within each block
+/// 3. **Backward pass**: Compute suffix max/min within each block
+/// 4. **Combine**: For window [i-period+1, i], result = max(suffix[i-period+1], prefix[i])
+///
+/// # Arguments
+///
+/// * `high` - High price series for maximum computation
+/// * `low` - Low price series for minimum computation
+/// * `period` - The window size for rolling calculations
+///
+/// # Returns
+///
+/// A `Result` containing `RollingExtremaOutput` with both max and min vectors,
+/// or an error if validation fails.
+///
+/// # NaN Handling
+///
+/// This function uses **NaN propagation mode**: any NaN/Inf in the window causes NaN output.
+/// Validity is tracked using prefix/suffix AND operations on finite checks.
+///
+/// # Performance
+///
+/// - **Time**: O(3n) - three passes over the data
+/// - **Space**: O(6n) - six working buffers plus output
+/// - **Best for**: Large datasets (n >= 1000) where SIMD benefits outweigh overhead
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - Either input is empty (`Error::EmptyInput`)
+/// - The inputs have different lengths (`Error::LengthMismatch`)
+/// - The period is zero (`Error::InvalidPeriod`)
+/// - Either input is shorter than the period (`Error::InsufficientData`)
+#[inline]
+pub fn rolling_extrema_fused_vhgw(
+    high: &[f64],
+    low: &[f64],
+    period: usize,
+) -> Result<RollingExtremaOutput<f64>> {
+    // Validate inputs
+    if high.is_empty() || low.is_empty() {
+        return Err(Error::EmptyInput);
+    }
+
+    if high.len() != low.len() {
+        return Err(Error::LengthMismatch {
+            description: format!("high has {} elements, low has {}", high.len(), low.len()),
+        });
+    }
+
+    if period == 0 {
+        return Err(Error::InvalidPeriod {
+            period,
+            reason: "period must be at least 1",
+        });
+    }
+
+    if high.len() < period {
+        return Err(Error::InsufficientData {
+            required: period,
+            actual: high.len(),
+            indicator: "rolling_extrema_fused_vhgw",
+        });
+    }
+
+    let n = high.len();
+    let lookback = period - 1;
+
+    // Allocate output vectors
+    let mut max = vec![f64::NAN; n];
+    let mut min = vec![f64::NAN; n];
+
+    // Allocate working buffers for prefix/suffix extrema
+    let mut left_max_high = vec![f64::NEG_INFINITY; n];
+    let mut right_max_high = vec![f64::NEG_INFINITY; n];
+    let mut left_min_low = vec![f64::INFINITY; n];
+    let mut right_min_low = vec![f64::INFINITY; n];
+
+    // Track validity with prefix/suffix AND
+    let mut left_valid = vec![true; n];
+    let mut right_valid = vec![true; n];
+
+    // Pass 1: Forward scan (prefix blocks)
+    let mut block_start = 0;
+    while block_start < n {
+        let block_end = (block_start + period).min(n);
+
+        // Reset for this block
+        left_max_high[block_start] = high[block_start];
+        left_min_low[block_start] = low[block_start];
+        left_valid[block_start] = high[block_start].is_finite() && low[block_start].is_finite();
+
+        // Extend prefix within block
+        for i in (block_start + 1)..block_end {
+            left_max_high[i] = left_max_high[i - 1].max(high[i]);
+            left_min_low[i] = left_min_low[i - 1].min(low[i]);
+            left_valid[i] = left_valid[i - 1] && high[i].is_finite() && low[i].is_finite();
+        }
+
+        block_start = block_end;
+    }
+
+    // Pass 2: Backward scan (suffix blocks)
+    let mut block_end = n;
+    while block_end > 0 {
+        let block_start = block_end.saturating_sub(period);
+
+        // Reset for this block (from end)
+        let last_idx = block_end - 1;
+        right_max_high[last_idx] = high[last_idx];
+        right_min_low[last_idx] = low[last_idx];
+        right_valid[last_idx] = high[last_idx].is_finite() && low[last_idx].is_finite();
+
+        // Extend suffix within block (going backward)
+        if last_idx > block_start {
+            for i in (block_start..last_idx).rev() {
+                right_max_high[i] = right_max_high[i + 1].max(high[i]);
+                right_min_low[i] = right_min_low[i + 1].min(low[i]);
+                right_valid[i] = right_valid[i + 1] && high[i].is_finite() && low[i].is_finite();
+            }
+        }
+
+        block_end = block_start;
+    }
+
+    // Pass 3: Combine prefix/suffix to get rolling extrema
+    for j in 0..(n - lookback) {
+        let start = j;
+        let end = j + lookback;
+
+        // Combine prefix/suffix to get window extrema
+        let hh = right_max_high[start].max(left_max_high[end]);
+        let ll = right_min_low[start].min(left_min_low[end]);
+
+        // Combine validity
+        let window_ok = right_valid[start] && left_valid[end];
+
+        if window_ok {
+            max[end] = hh;
+            min[end] = ll;
+        }
+        // else: already initialized to NaN
+    }
+
+    Ok(RollingExtremaOutput { max, min })
+}
