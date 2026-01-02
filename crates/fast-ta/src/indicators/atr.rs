@@ -191,25 +191,40 @@ pub const fn true_range_lookback() -> usize {
 /// ```
 #[must_use = "this returns a Result with the True Range values, which should be used"]
 pub fn true_range<T: SeriesElement + 'static>(high: &[T], low: &[T], close: &[T]) -> Result<Vec<T>> {
+    use std::any::TypeId;
+
     // Validate inputs
     validate_ohlc_inputs(high, low, close)?;
 
     let n = high.len();
-    let mut tr = vec![T::nan(); n];
 
-    // Use specialized f64 fast path when possible
-    use std::any::TypeId;
+    // Optimized allocation for f64/f32: avoid double-initialization
+    // true_range_into() writes all elements, so vec![T::nan(); n] is pure double-write tax
     if TypeId::of::<T>() == TypeId::of::<f64>() {
-        // Safety: We've checked the type is f64
         let h = unsafe { std::slice::from_raw_parts(high.as_ptr() as *const f64, high.len()) };
         let l = unsafe { std::slice::from_raw_parts(low.as_ptr() as *const f64, low.len()) };
         let c = unsafe { std::slice::from_raw_parts(close.as_ptr() as *const f64, close.len()) };
-        let out = unsafe { std::slice::from_raw_parts_mut(tr.as_mut_ptr() as *mut f64, tr.len()) };
-        true_range_f64_optimized(h, l, c, out);
-        return Ok(tr);
+
+        let mut tr: Vec<f64> = Vec::with_capacity(n);
+        unsafe { tr.set_len(n); }
+
+        true_range_f64_optimized(h, l, c, &mut tr);
+        return Ok(unsafe { std::mem::transmute(tr) });
+    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
+        let h = unsafe { std::slice::from_raw_parts(high.as_ptr() as *const f32, high.len()) };
+        let l = unsafe { std::slice::from_raw_parts(low.as_ptr() as *const f32, low.len()) };
+        let c = unsafe { std::slice::from_raw_parts(close.as_ptr() as *const f32, close.len()) };
+
+        let mut tr: Vec<f32> = Vec::with_capacity(n);
+        unsafe { tr.set_len(n); }
+
+        let out = unsafe { std::slice::from_raw_parts_mut(tr.as_mut_ptr() as *mut f32, n) };
+        true_range_into(h, l, c, out)?;
+        return Ok(unsafe { std::mem::transmute(tr) });
     }
 
-    // Scalar path for other types - handles NaN/infinity correctly via compute_true_range
+    // Generic fallback: initialize to NaN
+    let mut tr = vec![T::nan(); n];
     for i in 1..n {
         tr[i] = compute_true_range(high[i], low[i], close[i - 1]);
     }

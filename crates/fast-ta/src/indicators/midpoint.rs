@@ -17,7 +17,6 @@
 //! - Space: O(k) for the deques, where k is the period
 
 use crate::error::{Error, Result};
-use crate::kernels::rolling_extrema::MonotonicDeque;
 use crate::traits::SeriesElement;
 
 /// Computes the lookback period for MIDPOINT.
@@ -86,6 +85,8 @@ pub const fn midpoint_min_len(period: usize) -> usize {
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 /// - The output buffer is too small (`Error::BufferTooSmall`)
 pub fn midpoint_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -> Result<()> {
+    use std::any::TypeId;
+
     // Validate inputs
     if data.is_empty() {
         return Err(Error::EmptyInput);
@@ -114,8 +115,19 @@ pub fn midpoint_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [
         });
     }
 
-    let lookback = midpoint_lookback(period);
     let n = data.len();
+
+    // VHGW dispatch for f64: use VHGW for large n
+    // Threshold: n >= 1000 (bench-derived, adjust based on benchmarks)
+    const VHGW_THRESHOLD: usize = 1000;
+    if TypeId::of::<T>() == TypeId::of::<f64>() && n >= VHGW_THRESHOLD {
+        let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
+        let output_f64: &mut [f64] = unsafe { std::mem::transmute(output) };
+        crate::kernels::rolling_midpoint_vhgw_f64(data_f64, period, output_f64)?;
+        return Ok(());
+    }
+
+    let lookback = midpoint_lookback(period);
 
     // Fill lookback period with NaN
     for i in 0..lookback {
@@ -135,60 +147,100 @@ pub fn midpoint_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [
         return Ok(());
     }
 
+    // For f64/f32: use specialized path with * 0.5 instead of / 2
+    // This allows compiler to use multiply instead of divide (faster)
+    if TypeId::of::<T>() == TypeId::of::<f64>() {
+        let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
+        let output_f64: &mut [f64] = unsafe { std::mem::transmute(output) };
+        return midpoint_deque_f64(data_f64, period, lookback, output_f64);
+    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
+        let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
+        let output_f32: &mut [f32] = unsafe { std::mem::transmute(output) };
+        return midpoint_deque_f32(data_f32, period, lookback, output_f32);
+    }
+
+    // Generic fallback path with division
     let two = T::from_usize(2)?;
+    let mut max_deque: crate::kernels::rolling_extrema::MonotonicDeque<T> =
+        crate::kernels::rolling_extrema::MonotonicDeque::new(period);
+    let mut min_deque: crate::kernels::rolling_extrema::MonotonicDeque<T> =
+        crate::kernels::rolling_extrema::MonotonicDeque::new(period);
 
-    // Use O(n) monotonic deques for rolling max and min
-    let mut max_deque: MonotonicDeque<T> = MonotonicDeque::new(period);
-    let mut min_deque: MonotonicDeque<T> = MonotonicDeque::new(period);
-
-    // Ring buffer for tracking invalid value indices (for NaN/Infinity propagation)
-    let mut invalid_buf = vec![0usize; period];
-    let mut invalid_head = 0usize;
-    let mut invalid_tail = 0usize;
-    let mut invalid_len = 0usize;
-    let wrap = |idx: usize| idx % period;
-
-    // Single pass through data
     for i in 0..n {
-        let val = data[i];
-
-        // Track non-finite values for propagation policy
-        if !val.is_finite() {
-            invalid_buf[invalid_tail] = i;
-            invalid_tail = wrap(invalid_tail + 1);
-            invalid_len += 1;
-        }
-
-        // Update deques with current element
         max_deque.push_max(i, data);
         min_deque.push_min(i, data);
 
-        // Remove expired invalid indices from the window
-        if i >= period {
-            let window_start = i + 1 - period;
-            while invalid_len > 0 && invalid_buf[invalid_head] < window_start {
-                invalid_head = wrap(invalid_head + 1);
-                invalid_len -= 1;
-            }
-        }
-
-        // Output valid values after lookback period
         if i >= lookback {
-            // If any invalid value is still in the window, output NaN (propagation policy)
-            if invalid_len > 0 {
-                output[i] = T::nan();
-            } else {
-                let highest = max_deque.get_extremum(data);
-                let lowest = min_deque.get_extremum(data);
-
-                // If either deque is empty (all values were NaN), output NaN
-                if !highest.is_finite() || !lowest.is_finite() {
-                    output[i] = T::nan();
-                } else {
-                    output[i] = (highest + lowest) / two;
-                }
-            }
+            let highest = max_deque.get_extremum(data);
+            let lowest = min_deque.get_extremum(data);
+            output[i] = (highest + lowest) / two;
         }
+    }
+
+    Ok(())
+}
+
+/// Specialized f64 deque path with multiplication optimization
+#[inline]
+fn midpoint_deque_f64(
+    data: &[f64],
+    period: usize,
+    lookback: usize,
+    output: &mut [f64],
+) -> Result<()> {
+    let n = data.len();
+    let mut max_deque: crate::kernels::rolling_extrema::MonotonicDeque<f64> =
+        crate::kernels::rolling_extrema::MonotonicDeque::new(period);
+    let mut min_deque: crate::kernels::rolling_extrema::MonotonicDeque<f64> =
+        crate::kernels::rolling_extrema::MonotonicDeque::new(period);
+
+    // Warmup loop: only update deques, no output
+    for i in 0..lookback {
+        max_deque.push_max(i, data);
+        min_deque.push_min(i, data);
+    }
+
+    // Steady-state loop: update deques and write output (no branch)
+    for i in lookback..n {
+        max_deque.push_max(i, data);
+        min_deque.push_min(i, data);
+
+        let highest = max_deque.get_extremum(data);
+        let lowest = min_deque.get_extremum(data);
+        output[i] = (highest + lowest) * 0.5;
+    }
+
+    Ok(())
+}
+
+/// Specialized f32 deque path with multiplication optimization
+#[inline]
+fn midpoint_deque_f32(
+    data: &[f32],
+    period: usize,
+    lookback: usize,
+    output: &mut [f32],
+) -> Result<()> {
+    let n = data.len();
+    let mut max_deque: crate::kernels::rolling_extrema::MonotonicDeque<f32> =
+        crate::kernels::rolling_extrema::MonotonicDeque::new(period);
+    let mut min_deque: crate::kernels::rolling_extrema::MonotonicDeque<f32> =
+        crate::kernels::rolling_extrema::MonotonicDeque::new(period);
+
+    // Warmup loop: only update deques, no output
+    for i in 0..lookback {
+        max_deque.push_max(i, data);
+        min_deque.push_min(i, data);
+    }
+
+    // Steady-state loop: update deques and write output (no branch)
+    for i in lookback..n {
+        max_deque.push_max(i, data);
+        min_deque.push_min(i, data);
+
+        let highest = max_deque.get_extremum(data);
+        let lowest = min_deque.get_extremum(data);
+        output[i] = (highest + lowest) * 0.5;
     }
 
     Ok(())
@@ -230,9 +282,28 @@ pub fn midpoint_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 pub fn midpoint<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
-    let mut output = vec![T::nan(); data.len()];
-    midpoint_into(data, period, &mut output)?;
-    Ok(output)
+    use std::any::TypeId;
+
+    // Optimized allocation for f64/f32: avoid double-initialization
+    // midpoint_into() writes all elements, so this is pure double-write tax
+    if TypeId::of::<T>() == TypeId::of::<f64>() {
+        let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
+        let mut output: Vec<f64> = Vec::with_capacity(data.len());
+        unsafe { output.set_len(data.len()); }
+        midpoint_into(data_f64, period, &mut output)?;
+        Ok(unsafe { std::mem::transmute(output) })
+    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
+        let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
+        let mut output: Vec<f32> = Vec::with_capacity(data.len());
+        unsafe { output.set_len(data.len()); }
+        midpoint_into(data_f32, period, &mut output)?;
+        Ok(unsafe { std::mem::transmute(output) })
+    } else {
+        // Generic fallback: initialize to NaN
+        let mut output = vec![T::nan(); data.len()];
+        midpoint_into(data, period, &mut output)?;
+        Ok(output)
+    }
 }
 
 #[cfg(test)]

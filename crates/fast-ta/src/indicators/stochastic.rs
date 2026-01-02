@@ -396,15 +396,74 @@ pub fn stochastic_fast<T: SeriesElement>(
         compute_sma_of_series(&k, d_period, k_period - 1, &mut d)?;
         Ok(StochasticOutput { k, d })
     } else {
-        // Fast path: streaming single-pass implementation with uninit buffers
-        let mut k = Vec::with_capacity(n);
-        let mut d = Vec::with_capacity(n);
-        unsafe {
-            k.set_len(n);
-            d.set_len(n);
+        // Fast path: VHGW algorithm (always, no threshold)
+        use std::any::TypeId;
+
+        // f64 specialization: zero-overhead VHGW
+        if TypeId::of::<T>() == TypeId::of::<f64>() {
+            let high_f64: &[f64] = unsafe { std::mem::transmute(high) };
+            let low_f64: &[f64] = unsafe { std::mem::transmute(low) };
+            let close_f64: &[f64] = unsafe { std::mem::transmute(close) };
+
+            let mut k: Vec<f64> = Vec::with_capacity(n);
+            let mut d: Vec<f64> = Vec::with_capacity(n);
+            unsafe {
+                k.set_len(n);
+                d.set_len(n);
+            }
+
+            crate::kernels::compute_stochastic_fast_vhgw_f64(
+                high_f64,
+                low_f64,
+                close_f64,
+                k_period,
+                d_period,
+                &mut k,
+                &mut d,
+            )?;
+
+            Ok(StochasticOutput {
+                k: unsafe { std::mem::transmute(k) },
+                d: unsafe { std::mem::transmute(d) },
+            })
+        } else if TypeId::of::<T>() == TypeId::of::<f32>() {
+            // f32 specialization: zero-overhead VHGW
+            let high_f32: &[f32] = unsafe { std::mem::transmute(high) };
+            let low_f32: &[f32] = unsafe { std::mem::transmute(low) };
+            let close_f32: &[f32] = unsafe { std::mem::transmute(close) };
+
+            let mut k: Vec<f32> = Vec::with_capacity(n);
+            let mut d: Vec<f32> = Vec::with_capacity(n);
+            unsafe {
+                k.set_len(n);
+                d.set_len(n);
+            }
+
+            crate::kernels::compute_stochastic_fast_vhgw_f32(
+                high_f32,
+                low_f32,
+                close_f32,
+                k_period,
+                d_period,
+                &mut k,
+                &mut d,
+            )?;
+
+            Ok(StochasticOutput {
+                k: unsafe { std::mem::transmute(k) },
+                d: unsafe { std::mem::transmute(d) },
+            })
+        } else {
+            // Generic fallback: streaming deque for non-f32/f64 types
+            let mut k = Vec::with_capacity(n);
+            let mut d = Vec::with_capacity(n);
+            unsafe {
+                k.set_len(n);
+                d.set_len(n);
+            }
+            compute_stochastic_fast_streaming(high, low, close, k_period, d_period, &mut k, &mut d)?;
+            Ok(StochasticOutput { k, d })
         }
-        compute_stochastic_fast_streaming(high, low, close, k_period, d_period, &mut k, &mut d)?;
-        Ok(StochasticOutput { k, d })
     }
 }
 
@@ -455,17 +514,66 @@ pub fn stochastic_fast_into<T: SeriesElement>(
         });
     }
 
-    // Initialize with NaN
+    // Fast path: single-pass NaN check (combined to avoid 3 separate iterations)
+    let mut has_nan = false;
     for i in 0..n {
-        output.k[i] = T::nan();
-        output.d[i] = T::nan();
+        if is_invalid(high[i]) || is_invalid(low[i]) || is_invalid(close[i]) {
+            has_nan = true;
+            break;
+        }
     }
 
-    // Compute raw %K values
-    compute_raw_k(high, low, close, k_period, &mut output.k)?;
+    if has_nan {
+        // Slow path: proper NaN handling
+        for i in 0..n {
+            output.k[i] = T::nan();
+            output.d[i] = T::nan();
+        }
+        compute_raw_k(high, low, close, k_period, &mut output.k)?;
+        compute_sma_of_series(&output.k, d_period, k_period - 1, &mut output.d)?;
+    } else {
+        // Fast path: VHGW algorithm (always, no threshold)
+        use std::any::TypeId;
 
-    // Compute %D as SMA of %K
-    compute_sma_of_series(&output.k, d_period, k_period - 1, &mut output.d)?;
+        // f64 specialization: zero-overhead VHGW
+        if TypeId::of::<T>() == TypeId::of::<f64>() {
+            let high_f64: &[f64] = unsafe { std::mem::transmute(high) };
+            let low_f64: &[f64] = unsafe { std::mem::transmute(low) };
+            let close_f64: &[f64] = unsafe { std::mem::transmute(close) };
+            let k_f64: &mut [f64] = unsafe { std::mem::transmute(output.k.as_mut_slice()) };
+            let d_f64: &mut [f64] = unsafe { std::mem::transmute(output.d.as_mut_slice()) };
+
+            crate::kernels::compute_stochastic_fast_vhgw_f64(
+                high_f64,
+                low_f64,
+                close_f64,
+                k_period,
+                d_period,
+                k_f64,
+                d_f64,
+            )?;
+        } else if TypeId::of::<T>() == TypeId::of::<f32>() {
+            // f32 specialization: zero-overhead VHGW
+            let high_f32: &[f32] = unsafe { std::mem::transmute(high) };
+            let low_f32: &[f32] = unsafe { std::mem::transmute(low) };
+            let close_f32: &[f32] = unsafe { std::mem::transmute(close) };
+            let k_f32: &mut [f32] = unsafe { std::mem::transmute(output.k.as_mut_slice()) };
+            let d_f32: &mut [f32] = unsafe { std::mem::transmute(output.d.as_mut_slice()) };
+
+            crate::kernels::compute_stochastic_fast_vhgw_f32(
+                high_f32,
+                low_f32,
+                close_f32,
+                k_period,
+                d_period,
+                k_f32,
+                d_f32,
+            )?;
+        } else {
+            // Generic fallback: streaming deque for non-f32/f64 types
+            compute_stochastic_fast_streaming(high, low, close, k_period, d_period, &mut output.k, &mut output.d)?;
+        }
+    }
 
     let valid_k = n - (k_period - 1);
     let valid_d = if n >= k_period + d_period - 1 {
@@ -642,24 +750,79 @@ pub fn stochastic_full<T: SeriesElement>(
         compute_sma_of_series(&k, d_period, k_start_idx, &mut d)?;
         Ok(StochasticOutput { k, d })
     } else {
-        // Fast path: streaming single-pass implementation with uninit buffers
-        let mut k = Vec::with_capacity(n);
-        let mut d = Vec::with_capacity(n);
-        unsafe {
-            k.set_len(n);
-            d.set_len(n);
+        // Fast path: VHGW algorithm (always, no threshold)
+        use std::any::TypeId;
+
+        // f64 specialization: zero-overhead VHGW
+        if TypeId::of::<T>() == TypeId::of::<f64>() {
+            let high_f64: &[f64] = unsafe { std::mem::transmute(high) };
+            let low_f64: &[f64] = unsafe { std::mem::transmute(low) };
+            let close_f64: &[f64] = unsafe { std::mem::transmute(close) };
+            let mut k: Vec<f64> = Vec::with_capacity(n);
+            let mut d: Vec<f64> = Vec::with_capacity(n);
+            unsafe {
+                k.set_len(n);
+                d.set_len(n);
+            }
+            crate::kernels::compute_stochastic_full_vhgw_f64(
+                high_f64,
+                low_f64,
+                close_f64,
+                k_period,
+                slow_k_period,
+                d_period,
+                &mut k,
+                &mut d,
+            )?;
+            Ok(StochasticOutput {
+                k: unsafe { std::mem::transmute(k) },
+                d: unsafe { std::mem::transmute(d) },
+            })
+        } else if TypeId::of::<T>() == TypeId::of::<f32>() {
+            // f32 specialization: zero-overhead VHGW
+            let high_f32: &[f32] = unsafe { std::mem::transmute(high) };
+            let low_f32: &[f32] = unsafe { std::mem::transmute(low) };
+            let close_f32: &[f32] = unsafe { std::mem::transmute(close) };
+            let mut k: Vec<f32> = Vec::with_capacity(n);
+            let mut d: Vec<f32> = Vec::with_capacity(n);
+            unsafe {
+                k.set_len(n);
+                d.set_len(n);
+            }
+            crate::kernels::compute_stochastic_full_vhgw_f32(
+                high_f32,
+                low_f32,
+                close_f32,
+                k_period,
+                slow_k_period,
+                d_period,
+                &mut k,
+                &mut d,
+            )?;
+            Ok(StochasticOutput {
+                k: unsafe { std::mem::transmute(k) },
+                d: unsafe { std::mem::transmute(d) },
+            })
+        } else {
+            // Generic fallback: streaming deque for non-f32/f64 types
+            let mut k = Vec::with_capacity(n);
+            let mut d = Vec::with_capacity(n);
+            unsafe {
+                k.set_len(n);
+                d.set_len(n);
+            }
+            compute_stochastic_full_streaming(
+                high,
+                low,
+                close,
+                k_period,
+                slow_k_period,
+                d_period,
+                &mut k,
+                &mut d,
+            )?;
+            Ok(StochasticOutput { k, d })
         }
-        compute_stochastic_full_streaming(
-            high,
-            low,
-            close,
-            k_period,
-            slow_k_period,
-            d_period,
-            &mut k,
-            &mut d,
-        )?;
-        Ok(StochasticOutput { k, d })
     }
 }
 
@@ -694,24 +857,79 @@ pub fn stochastic_full_into<T: SeriesElement>(
         });
     }
 
-    // Initialize with NaN
+    // Fast path: single-pass NaN check (combined to avoid 3 separate iterations)
+    let mut has_nan = false;
     for i in 0..n {
-        output.k[i] = T::nan();
-        output.d[i] = T::nan();
+        if is_invalid(high[i]) || is_invalid(low[i]) || is_invalid(close[i]) {
+            has_nan = true;
+            break;
+        }
     }
 
-    // Use a temporary buffer for raw %K
-    let mut raw_k = vec![T::nan(); n];
+    if has_nan {
+        // Slow path: proper NaN handling
+        for i in 0..n {
+            output.k[i] = T::nan();
+            output.d[i] = T::nan();
+        }
 
-    // Step 1: Compute raw %K values
-    compute_raw_k(high, low, close, k_period, &mut raw_k)?;
+        let mut raw_k = vec![T::nan(); n];
+        compute_raw_k(high, low, close, k_period, &mut raw_k)?;
+        compute_sma_of_series(&raw_k, slow_k_period, k_period - 1, &mut output.k)?;
+        let k_start_idx = k_period + slow_k_period - 2;
+        compute_sma_of_series(&output.k, d_period, k_start_idx, &mut output.d)?;
+    } else {
+        // Fast path: VHGW algorithm (always, no threshold)
+        use std::any::TypeId;
 
-    // Step 2: Compute smoothed %K (SMA of raw %K)
-    compute_sma_of_series(&raw_k, slow_k_period, k_period - 1, &mut output.k)?;
-
-    // Step 3: Compute %D (SMA of smoothed %K)
-    let k_start_idx = k_period + slow_k_period - 2;
-    compute_sma_of_series(&output.k, d_period, k_start_idx, &mut output.d)?;
+        // f64 specialization: zero-overhead VHGW
+        if TypeId::of::<T>() == TypeId::of::<f64>() {
+            let high_f64: &[f64] = unsafe { std::mem::transmute(high) };
+            let low_f64: &[f64] = unsafe { std::mem::transmute(low) };
+            let close_f64: &[f64] = unsafe { std::mem::transmute(close) };
+            let k_f64: &mut [f64] = unsafe { std::mem::transmute(&mut output.k[..n]) };
+            let d_f64: &mut [f64] = unsafe { std::mem::transmute(&mut output.d[..n]) };
+            crate::kernels::compute_stochastic_full_vhgw_f64(
+                high_f64,
+                low_f64,
+                close_f64,
+                k_period,
+                slow_k_period,
+                d_period,
+                k_f64,
+                d_f64,
+            )?;
+        } else if TypeId::of::<T>() == TypeId::of::<f32>() {
+            // f32 specialization: zero-overhead VHGW
+            let high_f32: &[f32] = unsafe { std::mem::transmute(high) };
+            let low_f32: &[f32] = unsafe { std::mem::transmute(low) };
+            let close_f32: &[f32] = unsafe { std::mem::transmute(close) };
+            let k_f32: &mut [f32] = unsafe { std::mem::transmute(&mut output.k[..n]) };
+            let d_f32: &mut [f32] = unsafe { std::mem::transmute(&mut output.d[..n]) };
+            crate::kernels::compute_stochastic_full_vhgw_f32(
+                high_f32,
+                low_f32,
+                close_f32,
+                k_period,
+                slow_k_period,
+                d_period,
+                k_f32,
+                d_f32,
+            )?;
+        } else {
+            // Generic fallback: streaming deque for non-f32/f64 types
+            compute_stochastic_full_streaming(
+                high,
+                low,
+                close,
+                k_period,
+                slow_k_period,
+                d_period,
+                &mut output.k[..n],
+                &mut output.d[..n],
+            )?;
+        }
+    }
 
     let valid_k = if n >= k_period + slow_k_period - 1 {
         n - (k_period + slow_k_period - 2)

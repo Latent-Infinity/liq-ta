@@ -58,29 +58,66 @@ pub const fn var_min_len(period: usize) -> usize {
     period
 }
 
-/// Computes VAR using Welford's online algorithm (fast path - no NaN handling).
-///
-/// This function uses Welford's numerically stable algorithm for the initial window,
-/// then maintains rolling sums with a shift constant for O(n) computation.
-///
-/// Uses population variance (÷n, not ÷(n-1)) to match TA-Lib.
-///
-/// # Algorithm
-///
-/// For the initial window, uses Welford's online algorithm:
-/// - Maintains mean and M2 (sum of squared differences from mean)
-/// - Incrementally updates these values as each element is added
-///
-/// For rolling updates, uses shifted sums for numerical stability:
-/// - Subtracts a constant (first value) from all data to keep values small
-/// - Maintains sum and sum_sq with O(1) updates per element
-/// - Variance = E[X²] - E[X]² (computed on shifted values, same result)
-///
-/// # Errors
-///
-/// Returns an error if conversion from usize fails.
+/// f64-specialized TA-Lib algorithm (zero trait overhead).
 #[inline]
-fn var_welford_fast<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -> Result<()> {
+fn var_talib_f64(data: &[f64], period: usize, output: &mut [f64]) -> Result<()> {
+    let n = data.len();
+    let lookback = period - 1;
+    let period_f64 = period as f64;
+
+    // Fill lookback with NaN
+    for i in 0..lookback {
+        output[i] = f64::NAN;
+    }
+
+    if period == 1 {
+        for i in 0..n {
+            output[i] = 0.0;
+        }
+        return Ok(());
+    }
+
+    // Initialize rolling sums (pure f64, no conversions)
+    let mut period_total1 = 0.0_f64;
+    let mut period_total2 = 0.0_f64;
+
+    // Accumulate initial window
+    for i in 0..lookback {
+        let val = data[i];
+        period_total1 += val;
+        period_total2 += val * val;
+    }
+
+    // Rolling calculation
+    let mut trailing_idx = 0;
+    for i in lookback..n {
+        // Add new value
+        let val = data[i];
+        period_total1 += val;
+        period_total2 += val * val;
+
+        // Compute variance
+        let mean1 = period_total1 / period_f64;
+        let mean2 = period_total2 / period_f64;
+        output[i] = mean2 - mean1 * mean1;
+
+        // Remove old value
+        let old_val = data[trailing_idx];
+        period_total1 -= old_val;
+        period_total2 -= old_val * old_val;
+
+        trailing_idx += 1;
+    }
+
+    Ok(())
+}
+
+/// Computes VAR using TA-Lib's simpler rolling sums algorithm (fast path - no NaN handling).
+///
+/// Uses direct formula: Var = E[X²] - E[X]²
+/// This is simpler and faster than Welford's algorithm, matching TA-Lib's implementation.
+#[inline]
+fn var_talib_fast<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -> Result<()> {
     let n = data.len();
     let lookback = var_lookback(period);
     let period_t = T::from_usize(period)?;
@@ -98,47 +135,46 @@ fn var_welford_fast<T: SeriesElement>(data: &[T], period: usize, output: &mut [T
         return Ok(());
     }
 
-    // Use Welford's online algorithm for initial window
-    // This establishes mean and M2 with optimal numerical stability
-    let mut mean = T::zero();
-    let mut m2 = T::zero();
+    // Initialize rolling sums (TA-Lib style)
+    let mut period_total1 = T::zero(); // Sum of values (Σx)
+    let mut period_total2 = T::zero(); // Sum of squares (Σx²)
 
-    for i in 0..period {
-        let count_t = T::from_usize(i + 1)?;
-        let delta = data[i] - mean;
-        mean = mean + delta / count_t;
-        let delta2 = data[i] - mean;
-        m2 = m2 + delta * delta2;
-    }
-    output[lookback] = m2 / period_t;
+    let mut trailing_idx = 0;
+    let mut i = 0;
 
-    // For rolling updates, use shifted sums approach
-    // This maintains O(n) complexity with numerical stability
-    // Shifting by a constant K: Var(X) = Var(X - K) since variance is shift-invariant
-    let shift = data[0];
-
-    // Initialize shifted sums from initial window
-    let mut sum = T::zero(); // Σ(x - shift)
-    let mut sum_sq = T::zero(); // Σ(x - shift)²
-
-    for i in 0..period {
-        let shifted = data[i] - shift;
-        sum = sum + shifted;
-        sum_sq = sum_sq + shifted * shifted;
+    // Accumulate initial window (period-1 values)
+    while i < lookback {
+        let temp_real = data[i];
+        period_total1 = period_total1 + temp_real;
+        let temp_sq = temp_real * temp_real;
+        period_total2 = period_total2 + temp_sq;
+        i += 1;
     }
 
-    // Rolling updates: O(1) per element
-    for i in period..n {
-        let old_shifted = data[i - period] - shift;
-        let new_shifted = data[i] - shift;
-
-        // Update sums: remove old, add new
-        sum = sum - old_shifted + new_shifted;
-        sum_sq = sum_sq - old_shifted * old_shifted + new_shifted * new_shifted;
+    // Rolling calculation (TA-Lib style hot loop)
+    let mut out_idx = lookback;
+    while i < n {
+        // Add new value
+        let temp_real = data[i];
+        period_total1 = period_total1 + temp_real;
+        let temp_sq = temp_real * temp_real;
+        period_total2 = period_total2 + temp_sq;
 
         // Compute variance: Var = E[X²] - E[X]²
-        let mean_shifted = sum / period_t;
-        output[i] = sum_sq / period_t - mean_shifted * mean_shifted;
+        let mean_value1 = period_total1 / period_t;
+        let mean_value2 = period_total2 / period_t;
+
+        // Remove old value
+        let old_real = data[trailing_idx];
+        period_total1 = period_total1 - old_real;
+        let old_sq = old_real * old_real;
+        period_total2 = period_total2 - old_sq;
+
+        output[out_idx] = mean_value2 - mean_value1 * mean_value1;
+
+        trailing_idx += 1;
+        i += 1;
+        out_idx += 1;
     }
 
     Ok(())
@@ -338,14 +374,28 @@ pub fn var_into<T: SeriesElement + 'static>(data: &[T], period: usize, output: &
         return var_f64_precision(data, period, output);
     }
 
+    // f64 specialization: zero-overhead TA-Lib algorithm
+    use std::any::TypeId;
+    if TypeId::of::<T>() == TypeId::of::<f64>() {
+        let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
+
+        // Pre-scan for NaN
+        let has_nan = data_f64.iter().any(|&x| !x.is_finite());
+        if !has_nan {
+            let output_f64: &mut [f64] = unsafe { std::mem::transmute(output) };
+            return var_talib_f64(data_f64, period, output_f64);
+        }
+        // Fall through to slow path
+    }
+
     // Pre-scan optimization: check for NaN in input data
     // Route to fast path (no NaN tracking) or slow path (with NaN tracking)
     if var_has_nan(data) {
         // Slow path: handles NaN values with nan_count tracking
         var_welford_slow(data, period, output)
     } else {
-        // Fast path: no NaN tracking overhead
-        var_welford_fast(data, period, output)
+        // Fast path: TA-Lib's simpler algorithm (faster than Welford)
+        var_talib_fast(data, period, output)
     }
 }
 

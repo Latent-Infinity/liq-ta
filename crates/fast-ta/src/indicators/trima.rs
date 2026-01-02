@@ -21,7 +21,6 @@
 
 use crate::error::{Error, Result};
 use crate::traits::SeriesElement;
-use crate::utils::is_invalid;
 
 /// Computes the lookback period for TRIMA.
 ///
@@ -124,89 +123,124 @@ pub fn trima_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T])
         return Ok(());
     }
 
-    let n = data.len();
     let lookback = trima_lookback(period);
 
     // Fill lookback period with NaN
     output[..lookback].fill(T::nan());
 
-    // Check for NaN in data - if any, use slow path
-    let has_nan = data.iter().take(n).any(|&v| is_invalid(v));
-    if has_nan {
-        return trima_into_slow(data, period, output, lookback);
+    // No pre-scan: dispatch directly to specialized paths
+    use std::any::TypeId;
+    if TypeId::of::<T>() == TypeId::of::<f64>() {
+        let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
+        let output_f64: &mut [f64] = unsafe { std::mem::transmute(output) };
+        return trima_into_fast_f64_inline_nan(data_f64, period, output_f64, lookback);
     }
 
-    // Fast path: TA-Lib style incremental algorithm
-    // Uses numerator, numeratorSub, numeratorAdd for O(1) per-element updates
-    trima_into_fast(data, period, output, lookback)
+    if TypeId::of::<T>() == TypeId::of::<f32>() {
+        let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
+        let output_f32: &mut [f32] = unsafe { std::mem::transmute(output) };
+        return trima_into_fast_f32_inline_nan(data_f32, period, output_f32, lookback);
+    }
+
+    // Generic fallback: use inline NaN handling (no pre-scan needed)
+    trima_into_generic_inline_nan(data, period, output, lookback)
 }
 
-/// Fast path for TRIMA using TA-Lib's incremental algorithm.
-/// Computes in O(1) per element instead of SMA of SMA.
-fn trima_into_fast<T: SeriesElement>(
-    data: &[T],
+/// f64-specialized fast path with inline NaN handling - no pre-scan needed.
+/// Tracks invalid_count in rolling window and sanitizes inputs to prevent NaN propagation.
+#[inline]
+fn trima_into_fast_f64_inline_nan(
+    data: &[f64],
     period: usize,
-    output: &mut [T],
+    output: &mut [f64],
     lookback: usize,
 ) -> Result<()> {
     let n = data.len();
 
     if period % 2 == 1 {
         // Odd period logic
-        // Triangular weights: 1+2+3+...+(n/2+1)+...+2+1 = (n/2+1)^2
-        let i = period / 2;
+        let i = period >> 1;
         let factor = 1.0 / ((i + 1) * (i + 1)) as f64;
 
         let mut trailing_idx = 0usize;
         let mut middle_idx = trailing_idx + i;
         let mut today_idx = middle_idx + i;
 
-        // Initialize numerator and numeratorSub
         let mut numerator = 0.0_f64;
         let mut numerator_sub = 0.0_f64;
+        let mut invalid_count = 0usize;
 
-        // Build initial numeratorSub and numerator from trailing to middle (descending)
+        // Initialize - sanitize invalids to 0.0
         for j in (trailing_idx..=middle_idx).rev() {
-            let temp_real = data[j].to_f64().unwrap_or(0.0);
-            numerator_sub += temp_real;
+            let val = data[j];
+            let is_bad = !val.is_finite();
+            let sane_val = if is_bad { 0.0 } else { val };
+            if is_bad { invalid_count += 1; }
+            numerator_sub += sane_val;
             numerator += numerator_sub;
         }
 
-        // Build numeratorAdd and add to numerator from (middle+1) to today
         let mut numerator_add = 0.0_f64;
         for j in (middle_idx + 1)..=today_idx {
-            let temp_real = data[j].to_f64().unwrap_or(0.0);
-            numerator_add += temp_real;
+            let val = data[j];
+            let is_bad = !val.is_finite();
+            let sane_val = if is_bad { 0.0 } else { val };
+            if is_bad { invalid_count += 1; }
+            numerator_add += sane_val;
             numerator += numerator_add;
         }
 
-        // Write first output
-        let mut temp_real = data[trailing_idx].to_f64().unwrap_or(0.0);
-        output[lookback] = T::from_f64(numerator * factor)?;
+        // Track trailing value for window updates
+        let trailing_val = data[trailing_idx];
+        let trailing_invalid = !trailing_val.is_finite();
+        let temp_real_sane = if trailing_invalid { 0.0 } else { trailing_val };
+
+        // First output
+        output[lookback] = if invalid_count > 0 { f64::NAN } else { numerator * factor };
+
         trailing_idx += 1;
         middle_idx += 1;
         today_idx += 1;
 
-        // Main loop - O(1) per iteration
+        // Main loop with inline invalid tracking
+        let mut temp_sane = temp_real_sane;
+        let mut temp_was_invalid = trailing_invalid;
+
         while today_idx < n {
-            // Step 1: Remove old trailing values
+            // Update invalid count for exiting element
+            if temp_was_invalid {
+                invalid_count -= 1;
+            }
+
+            // Step 1: Update numeratorSub
             numerator -= numerator_sub;
-            numerator_sub -= temp_real;
-            temp_real = data[middle_idx].to_f64().unwrap_or(0.0);
-            numerator_sub += temp_real;
+            numerator_sub -= temp_sane;
 
-            // Step 2: Add new leading values
+            let middle_val = data[middle_idx];
+            let middle_invalid = !middle_val.is_finite();
+            let middle_sane = if middle_invalid { 0.0 } else { middle_val };
+            numerator_sub += middle_sane;
+
+            // Step 2: Update numeratorAdd
             numerator += numerator_add;
-            numerator_add -= temp_real;
-            temp_real = data[today_idx].to_f64().unwrap_or(0.0);
-            numerator_add += temp_real;
+            numerator_add -= middle_sane;
 
-            // Step 3: Add newest value
-            numerator += temp_real;
+            let today_val = data[today_idx];
+            let today_invalid = !today_val.is_finite();
+            let today_sane = if today_invalid { 0.0 } else { today_val };
+            if today_invalid {
+                invalid_count += 1;
+            }
+            numerator_add += today_sane;
+            numerator += today_sane;
 
-            // Step 4: Output and advance
-            temp_real = data[trailing_idx].to_f64().unwrap_or(0.0);
-            output[today_idx] = T::from_f64(numerator * factor)?;
+            // Prepare next iteration's trailing value
+            let next_trailing_val = data[trailing_idx];
+            temp_was_invalid = !next_trailing_val.is_finite();
+            temp_sane = if temp_was_invalid { 0.0 } else { next_trailing_val };
+
+            // Output
+            output[today_idx] = if invalid_count > 0 { f64::NAN } else { numerator * factor };
 
             trailing_idx += 1;
             middle_idx += 1;
@@ -214,60 +248,88 @@ fn trima_into_fast<T: SeriesElement>(
         }
     } else {
         // Even period logic
-        // Triangular weights: 1+2+...+n/2+n/2+...+2+1 = n/2 * (n/2 + 1)
-        let i = period / 2;
+        let i = period >> 1;
         let factor = 1.0 / (i * (i + 1)) as f64;
 
         let mut trailing_idx = 0usize;
         let mut middle_idx = trailing_idx + i - 1;
         let mut today_idx = middle_idx + i;
 
-        // Initialize numerator and numeratorSub
         let mut numerator = 0.0_f64;
         let mut numerator_sub = 0.0_f64;
+        let mut invalid_count = 0usize;
 
-        // Build initial numeratorSub and numerator from trailing to middle (descending)
+        // Initialize
         for j in (trailing_idx..=middle_idx).rev() {
-            let temp_real = data[j].to_f64().unwrap_or(0.0);
-            numerator_sub += temp_real;
+            let val = data[j];
+            let is_bad = !val.is_finite();
+            let sane_val = if is_bad { 0.0 } else { val };
+            if is_bad { invalid_count += 1; }
+            numerator_sub += sane_val;
             numerator += numerator_sub;
         }
 
-        // Build numeratorAdd and add to numerator from (middle+1) to today
         let mut numerator_add = 0.0_f64;
         for j in (middle_idx + 1)..=today_idx {
-            let temp_real = data[j].to_f64().unwrap_or(0.0);
-            numerator_add += temp_real;
+            let val = data[j];
+            let is_bad = !val.is_finite();
+            let sane_val = if is_bad { 0.0 } else { val };
+            if is_bad { invalid_count += 1; }
+            numerator_add += sane_val;
             numerator += numerator_add;
         }
 
-        // Write first output
-        let mut temp_real = data[trailing_idx].to_f64().unwrap_or(0.0);
-        output[lookback] = T::from_f64(numerator * factor)?;
+        // Track trailing value
+        let trailing_val = data[trailing_idx];
+        let trailing_invalid = !trailing_val.is_finite();
+        let temp_real_sane = if trailing_invalid { 0.0 } else { trailing_val };
+
+        // First output
+        output[lookback] = if invalid_count > 0 { f64::NAN } else { numerator * factor };
+
         trailing_idx += 1;
         middle_idx += 1;
         today_idx += 1;
 
-        // Main loop - O(1) per iteration (slightly different from odd)
+        // Main loop
+        let mut temp_sane = temp_real_sane;
+        let mut temp_was_invalid = trailing_invalid;
+
         while today_idx < n {
-            // Step 1: Remove old trailing values
+            // Update invalid count for exiting element
+            if temp_was_invalid {
+                invalid_count -= 1;
+            }
+
+            // Step 1: Update numeratorSub
             numerator -= numerator_sub;
-            numerator_sub -= temp_real;
-            temp_real = data[middle_idx].to_f64().unwrap_or(0.0);
-            numerator_sub += temp_real;
+            numerator_sub -= temp_sane;
 
-            // Step 2: Even period differs - subtract middle from add first
-            numerator_add -= temp_real;
+            let middle_val = data[middle_idx];
+            let middle_invalid = !middle_val.is_finite();
+            let middle_sane = if middle_invalid { 0.0 } else { middle_val };
+            numerator_sub += middle_sane;
+
+            // Step 2: Update numeratorAdd (even period differs)
+            numerator_add -= middle_sane;
             numerator += numerator_add;
-            temp_real = data[today_idx].to_f64().unwrap_or(0.0);
-            numerator_add += temp_real;
 
-            // Step 3: Add newest value
-            numerator += temp_real;
+            let today_val = data[today_idx];
+            let today_invalid = !today_val.is_finite();
+            let today_sane = if today_invalid { 0.0 } else { today_val };
+            if today_invalid {
+                invalid_count += 1;
+            }
+            numerator_add += today_sane;
+            numerator += today_sane;
 
-            // Step 4: Output and advance
-            temp_real = data[trailing_idx].to_f64().unwrap_or(0.0);
-            output[today_idx] = T::from_f64(numerator * factor)?;
+            // Prepare next iteration's trailing value
+            let next_trailing_val = data[trailing_idx];
+            temp_was_invalid = !next_trailing_val.is_finite();
+            temp_sane = if temp_was_invalid { 0.0 } else { next_trailing_val };
+
+            // Output
+            output[today_idx] = if invalid_count > 0 { f64::NAN } else { numerator * factor };
 
             trailing_idx += 1;
             middle_idx += 1;
@@ -278,114 +340,375 @@ fn trima_into_fast<T: SeriesElement>(
     Ok(())
 }
 
-/// Slow path for TRIMA with NaN propagation using SMA of SMA.
-fn trima_into_slow<T: SeriesElement>(
+/// f32-specialized fast path with inline NaN handling - uses f64 accumulators, no trait overhead.
+#[inline]
+fn trima_into_fast_f32_inline_nan(
+    data: &[f32],
+    period: usize,
+    output: &mut [f32],
+    lookback: usize,
+) -> Result<()> {
+    let n = data.len();
+
+    if period % 2 == 1 {
+        // Odd period logic with f64 accumulators
+        let i = period >> 1;
+        let factor = 1.0 / ((i + 1) * (i + 1)) as f64;
+
+        let mut trailing_idx = 0usize;
+        let mut middle_idx = trailing_idx + i;
+        let mut today_idx = middle_idx + i;
+
+        let mut numerator = 0.0_f64;
+        let mut numerator_sub = 0.0_f64;
+        let mut invalid_count = 0usize;
+
+        // Initialize
+        for j in (trailing_idx..=middle_idx).rev() {
+            let val = data[j] as f64;
+            let is_bad = !val.is_finite();
+            let sane_val = if is_bad { 0.0 } else { val };
+            if is_bad { invalid_count += 1; }
+            numerator_sub += sane_val;
+            numerator += numerator_sub;
+        }
+
+        let mut numerator_add = 0.0_f64;
+        for j in (middle_idx + 1)..=today_idx {
+            let val = data[j] as f64;
+            let is_bad = !val.is_finite();
+            let sane_val = if is_bad { 0.0 } else { val };
+            if is_bad { invalid_count += 1; }
+            numerator_add += sane_val;
+            numerator += numerator_add;
+        }
+
+        let trailing_val = data[trailing_idx] as f64;
+        let trailing_invalid = !trailing_val.is_finite();
+        let temp_real_sane = if trailing_invalid { 0.0 } else { trailing_val };
+
+        output[lookback] = if invalid_count > 0 { f32::NAN } else { (numerator * factor) as f32 };
+
+        trailing_idx += 1;
+        middle_idx += 1;
+        today_idx += 1;
+
+        let mut temp_sane = temp_real_sane;
+        let mut temp_was_invalid = trailing_invalid;
+
+        while today_idx < n {
+            if temp_was_invalid {
+                invalid_count -= 1;
+            }
+
+            numerator -= numerator_sub;
+            numerator_sub -= temp_sane;
+
+            let middle_val = data[middle_idx] as f64;
+            let middle_invalid = !middle_val.is_finite();
+            let middle_sane = if middle_invalid { 0.0 } else { middle_val };
+            numerator_sub += middle_sane;
+
+            numerator += numerator_add;
+            numerator_add -= middle_sane;
+
+            let today_val = data[today_idx] as f64;
+            let today_invalid = !today_val.is_finite();
+            let today_sane = if today_invalid { 0.0 } else { today_val };
+            if today_invalid {
+                invalid_count += 1;
+            }
+            numerator_add += today_sane;
+            numerator += today_sane;
+
+            let next_trailing_val = data[trailing_idx] as f64;
+            temp_was_invalid = !next_trailing_val.is_finite();
+            temp_sane = if temp_was_invalid { 0.0 } else { next_trailing_val };
+
+            output[today_idx] = if invalid_count > 0 { f32::NAN } else { (numerator * factor) as f32 };
+
+            trailing_idx += 1;
+            middle_idx += 1;
+            today_idx += 1;
+        }
+    } else {
+        // Even period logic with f64 accumulators
+        let i = period >> 1;
+        let factor = 1.0 / (i * (i + 1)) as f64;
+
+        let mut trailing_idx = 0usize;
+        let mut middle_idx = trailing_idx + i - 1;
+        let mut today_idx = middle_idx + i;
+
+        let mut numerator = 0.0_f64;
+        let mut numerator_sub = 0.0_f64;
+        let mut invalid_count = 0usize;
+
+        for j in (trailing_idx..=middle_idx).rev() {
+            let val = data[j] as f64;
+            let is_bad = !val.is_finite();
+            let sane_val = if is_bad { 0.0 } else { val };
+            if is_bad { invalid_count += 1; }
+            numerator_sub += sane_val;
+            numerator += numerator_sub;
+        }
+
+        let mut numerator_add = 0.0_f64;
+        for j in (middle_idx + 1)..=today_idx {
+            let val = data[j] as f64;
+            let is_bad = !val.is_finite();
+            let sane_val = if is_bad { 0.0 } else { val };
+            if is_bad { invalid_count += 1; }
+            numerator_add += sane_val;
+            numerator += numerator_add;
+        }
+
+        let trailing_val = data[trailing_idx] as f64;
+        let trailing_invalid = !trailing_val.is_finite();
+        let temp_real_sane = if trailing_invalid { 0.0 } else { trailing_val };
+
+        output[lookback] = if invalid_count > 0 { f32::NAN } else { (numerator * factor) as f32 };
+
+        trailing_idx += 1;
+        middle_idx += 1;
+        today_idx += 1;
+
+        let mut temp_sane = temp_real_sane;
+        let mut temp_was_invalid = trailing_invalid;
+
+        while today_idx < n {
+            if temp_was_invalid {
+                invalid_count -= 1;
+            }
+
+            numerator -= numerator_sub;
+            numerator_sub -= temp_sane;
+
+            let middle_val = data[middle_idx] as f64;
+            let middle_invalid = !middle_val.is_finite();
+            let middle_sane = if middle_invalid { 0.0 } else { middle_val };
+            numerator_sub += middle_sane;
+
+            numerator_add -= middle_sane;
+            numerator += numerator_add;
+
+            let today_val = data[today_idx] as f64;
+            let today_invalid = !today_val.is_finite();
+            let today_sane = if today_invalid { 0.0 } else { today_val };
+            if today_invalid {
+                invalid_count += 1;
+            }
+            numerator_add += today_sane;
+            numerator += today_sane;
+
+            let next_trailing_val = data[trailing_idx] as f64;
+            temp_was_invalid = !next_trailing_val.is_finite();
+            temp_sane = if temp_was_invalid { 0.0 } else { next_trailing_val };
+
+            output[today_idx] = if invalid_count > 0 { f32::NAN } else { (numerator * factor) as f32 };
+
+            trailing_idx += 1;
+            middle_idx += 1;
+            today_idx += 1;
+        }
+    }
+
+    Ok(())
+}
+
+/// Generic inline NaN handling - uses f64 accumulators for precision, no pre-scan needed.
+/// Replaces the slow SMA-of-SMA path with the same inline invalid tracking as f64/f32.
+#[inline]
+fn trima_into_generic_inline_nan<T: SeriesElement>(
     data: &[T],
     period: usize,
     output: &mut [T],
-    _lookback: usize,
+    lookback: usize,
 ) -> Result<()> {
-    // Calculate the periods for the two SMAs
-    let (sma1_period, sma2_period) = if period % 2 == 1 {
-        let p = period.div_ceil(2);
-        (p, p)
-    } else {
-        (period / 2 + 1, period / 2)
-    };
-
     let n = data.len();
 
-    // Check if we have enough data for second SMA
-    if n < sma1_period {
-        return Ok(());
-    }
-    let sma1_valid_len = n - sma1_period + 1;
-    if sma1_valid_len < sma2_period {
-        return Ok(());
-    }
+    if period % 2 == 1 {
+        // Odd period logic
+        let i = period >> 1;
+        let factor = 1.0 / ((i + 1) * (i + 1)) as f64;
 
-    // Pre-compute reciprocals for faster multiply instead of divide
-    let inv_period1 = T::one() / T::from_usize(sma1_period)?;
-    let inv_period2 = T::one() / T::from_usize(sma2_period)?;
+        let mut trailing_idx = 0usize;
+        let mut middle_idx = trailing_idx + i;
+        let mut today_idx = middle_idx + i;
 
-    // Ring buffer for SMA1 values
-    let mut sma1_ring = vec![T::zero(); sma2_period];
-    let mut invalid1_ring = vec![0usize; sma2_period];
-    let mut ring_idx = 0usize;
+        let mut numerator = 0.0_f64;
+        let mut numerator_sub = 0.0_f64;
+        let mut invalid_count = 0usize;
 
-    // SMA1 rolling state
-    let mut sum1 = T::zero();
-    let mut invalid_count1 = 0usize;
-
-    // SMA2 rolling state
-    let mut sum2 = T::zero();
-    let mut invalid_count2 = 0usize;
-    let mut sma1_count = 0usize;
-
-    // Initialize SMA1 sum for first window
-    for i in 0..sma1_period {
-        if is_invalid(data[i]) {
-            invalid_count1 += 1;
-        } else {
-            sum1 = sum1 + data[i];
+        // Initialize - sanitize invalids to 0.0
+        for j in (trailing_idx..=middle_idx).rev() {
+            let val = data[j].to_f64().unwrap_or(0.0);
+            let is_bad = !val.is_finite();
+            let sane_val = if is_bad { 0.0 } else { val };
+            if is_bad { invalid_count += 1; }
+            numerator_sub += sane_val;
+            numerator += numerator_sub;
         }
-    }
 
-    // Process all data positions where SMA1 is valid
-    for data_idx in (sma1_period - 1)..n {
-        let sma1_val = if invalid_count1 == 0 {
-            sum1 * inv_period1
-        } else {
+        let mut numerator_add = 0.0_f64;
+        for j in (middle_idx + 1)..=today_idx {
+            let val = data[j].to_f64().unwrap_or(0.0);
+            let is_bad = !val.is_finite();
+            let sane_val = if is_bad { 0.0 } else { val };
+            if is_bad { invalid_count += 1; }
+            numerator_add += sane_val;
+            numerator += numerator_add;
+        }
+
+        // Track trailing value for window updates
+        let trailing_val = data[trailing_idx].to_f64().unwrap_or(0.0);
+        let trailing_invalid = !trailing_val.is_finite();
+        let temp_real_sane = if trailing_invalid { 0.0 } else { trailing_val };
+
+        // First output
+        output[lookback] = if invalid_count > 0 {
             T::nan()
+        } else {
+            T::from_f64(numerator * factor)?
         };
 
-        let old_sma1 = sma1_ring[ring_idx];
-        let old_invalid1 = invalid1_ring[ring_idx];
+        trailing_idx += 1;
+        middle_idx += 1;
+        today_idx += 1;
 
-        sma1_ring[ring_idx] = sma1_val;
-        invalid1_ring[ring_idx] = invalid_count1;
+        // Main loop with inline invalid tracking
+        let mut temp_sane = temp_real_sane;
+        let mut temp_was_invalid = trailing_invalid;
 
-        if sma1_count >= sma2_period {
-            if old_invalid1 > 0 {
-                invalid_count2 -= 1;
-            } else {
-                sum2 = sum2 - old_sma1;
+        while today_idx < n {
+            // Update invalid count for exiting element
+            if temp_was_invalid {
+                invalid_count -= 1;
             }
+
+            // Step 1: Update numeratorSub
+            let middle_val = data[middle_idx].to_f64().unwrap_or(0.0);
+            let middle_invalid = !middle_val.is_finite();
+            let middle_sane = if middle_invalid { 0.0 } else { middle_val };
+
+            numerator_sub = numerator_sub - temp_sane + middle_sane;
+
+            // Step 2: Update numeratorAdd
+            let today_val = data[today_idx].to_f64().unwrap_or(0.0);
+            let today_invalid = !today_val.is_finite();
+            let today_sane = if today_invalid { 0.0 } else { today_val };
+
+            if today_invalid {
+                invalid_count += 1;
+            }
+
+            numerator_add = numerator_add + today_sane;
+
+            // Step 3: Update numerator and output
+            numerator = numerator - temp_sane + numerator_add;
+
+            output[today_idx] = if invalid_count > 0 {
+                T::nan()
+            } else {
+                T::from_f64(numerator * factor)?
+            };
+
+            // Prepare for next iteration
+            temp_sane = middle_sane;
+            temp_was_invalid = middle_invalid;
+
+            trailing_idx += 1;
+            middle_idx += 1;
+            today_idx += 1;
+        }
+    } else {
+        // Even period logic
+        let i = period >> 1;
+        let factor = 1.0 / (i * (i + 1)) as f64;
+
+        let mut trailing_idx = 1usize;
+        let mut middle_idx = trailing_idx + i - 1;
+        let mut today_idx = middle_idx + i;
+
+        let mut numerator = 0.0_f64;
+        let mut numerator_sub = 0.0_f64;
+        let mut invalid_count = 0usize;
+
+        // Initialize lower half
+        for j in (trailing_idx..=middle_idx).rev() {
+            let val = data[j].to_f64().unwrap_or(0.0);
+            let is_bad = !val.is_finite();
+            let sane_val = if is_bad { 0.0 } else { val };
+            if is_bad { invalid_count += 1; }
+            numerator_sub += sane_val;
+            numerator += numerator_sub;
         }
 
-        if invalid_count1 > 0 {
-            invalid_count2 += 1;
+        // Initialize upper half
+        let mut numerator_add = 0.0_f64;
+        for j in (middle_idx + 1)..=today_idx {
+            let val = data[j].to_f64().unwrap_or(0.0);
+            let is_bad = !val.is_finite();
+            let sane_val = if is_bad { 0.0 } else { val };
+            if is_bad { invalid_count += 1; }
+            numerator_add += sane_val;
+            numerator += numerator_add;
+        }
+
+        // Track trailing value
+        let trailing_val = data[trailing_idx].to_f64().unwrap_or(0.0);
+        let trailing_invalid = !trailing_val.is_finite();
+        let temp_real_sane = if trailing_invalid { 0.0 } else { trailing_val };
+
+        // First output
+        output[lookback] = if invalid_count > 0 {
+            T::nan()
         } else {
-            sum2 = sum2 + sma1_val;
-        }
+            T::from_f64(numerator * factor)?
+        };
 
-        sma1_count += 1;
+        trailing_idx += 1;
+        middle_idx += 1;
+        today_idx += 1;
 
-        if sma1_count >= sma2_period {
-            if invalid_count2 == 0 {
-                output[data_idx] = sum2 * inv_period2;
-            } else {
-                output[data_idx] = T::nan();
-            }
-        }
+        // Main loop
+        let mut temp_sane = temp_real_sane;
+        let mut temp_was_invalid = trailing_invalid;
 
-        ring_idx = (ring_idx + 1) % sma2_period;
-
-        if data_idx + 1 < n {
-            let new_value = data[data_idx + 1];
-            let old_value = data[data_idx + 1 - sma1_period];
-
-            if is_invalid(new_value) {
-                invalid_count1 += 1;
-            } else {
-                sum1 = sum1 + new_value;
+        while today_idx < n {
+            if temp_was_invalid {
+                invalid_count -= 1;
             }
 
-            if is_invalid(old_value) {
-                invalid_count1 -= 1;
-            } else {
-                sum1 = sum1 - old_value;
+            let middle_val = data[middle_idx].to_f64().unwrap_or(0.0);
+            let middle_invalid = !middle_val.is_finite();
+            let middle_sane = if middle_invalid { 0.0 } else { middle_val };
+
+            numerator_sub = numerator_sub - temp_sane + middle_sane;
+
+            let today_val = data[today_idx].to_f64().unwrap_or(0.0);
+            let today_invalid = !today_val.is_finite();
+            let today_sane = if today_invalid { 0.0 } else { today_val };
+
+            if today_invalid {
+                invalid_count += 1;
             }
+
+            numerator_add = numerator_add + today_sane;
+            numerator = numerator - temp_sane + numerator_add;
+
+            output[today_idx] = if invalid_count > 0 {
+                T::nan()
+            } else {
+                T::from_f64(numerator * factor)?
+            };
+
+            temp_sane = middle_sane;
+            temp_was_invalid = middle_invalid;
+
+            trailing_idx += 1;
+            middle_idx += 1;
+            today_idx += 1;
         }
     }
 
@@ -428,10 +751,28 @@ fn trima_into_slow<T: SeriesElement>(
 /// - The input data is empty (`Error::EmptyInput`)
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
-pub fn trima<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
-    let mut output = vec![T::nan(); data.len()];
-    trima_into(data, period, &mut output)?;
-    Ok(output)
+pub fn trima<T: SeriesElement + 'static>(data: &[T], period: usize) -> Result<Vec<T>> {
+    use std::any::TypeId;
+
+    // Wrapper optimization: uninitialized allocation for f64/f32
+    if TypeId::of::<T>() == TypeId::of::<f64>() {
+        let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
+        let mut output: Vec<f64> = Vec::with_capacity(data.len());
+        unsafe { output.set_len(data.len()); }
+        trima_into(data_f64, period, &mut output)?;
+        Ok(unsafe { std::mem::transmute(output) })
+    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
+        let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
+        let mut output: Vec<f32> = Vec::with_capacity(data.len());
+        unsafe { output.set_len(data.len()); }
+        trima_into(data_f32, period, &mut output)?;
+        Ok(unsafe { std::mem::transmute(output) })
+    } else {
+        // Generic fallback with safe initialization
+        let mut output = vec![T::nan(); data.len()];
+        trima_into(data, period, &mut output)?;
+        Ok(output)
+    }
 }
 
 #[cfg(test)]

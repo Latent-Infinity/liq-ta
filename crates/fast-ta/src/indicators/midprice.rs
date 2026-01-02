@@ -168,6 +168,7 @@ pub fn midprice_into<T: SeriesElement>(
 ///
 /// Uses prefix-suffix blocks for sliding max/min, which vectorizes extremely well.
 /// This is a three-pass algorithm but each pass is SIMD-friendly.
+/// Computes MIDPRICE directly to avoid extra allocations.
 #[inline]
 fn midprice_f64_van_herk(
     high: &[f64],
@@ -232,12 +233,10 @@ fn midprice_f64_van_herk(
         block_end = block_start;
     }
 
-    // Pass 3: Combine and compute MIDPRICE
-    let offset = lookback;
-
-    for j in 0..(n - offset) {
+    // Pass 3: Combine and compute MIDPRICE directly
+    for j in 0..(n - lookback) {
         let start = j;
-        let end = j + offset;
+        let end = j + lookback;
 
         // Combine prefix/suffix to get window extrema
         let hh = right_max_high[start].max(left_max_high[end]);
@@ -246,7 +245,7 @@ fn midprice_f64_van_herk(
         // Combine validity
         let window_ok = right_valid[start] && left_valid[end];
 
-        // Compute MIDPRICE
+        // Compute MIDPRICE directly
         if window_ok {
             output[end] = (hh + ll) * half;
         } else {

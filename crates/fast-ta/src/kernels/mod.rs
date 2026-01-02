@@ -41,10 +41,12 @@ pub use accumulators::{
 
 // Rolling extrema kernel exports: O(n) rolling max/min using monotonic deque
 pub use rolling_extrema::{
-    rolling_extrema, rolling_extrema_fused_vhgw, rolling_extrema_into, rolling_extrema_lookback,
+    compute_stochastic_fast_vhgw_f32, compute_stochastic_fast_vhgw_f64,
+    compute_stochastic_full_vhgw_f32, compute_stochastic_full_vhgw_f64, rolling_extrema,
+    rolling_extrema_fused_vhgw, rolling_extrema_into, rolling_extrema_lookback,
     rolling_extrema_min_len, rolling_max, rolling_max_into, rolling_max_nan_propagating,
-    rolling_min, rolling_min_into, rolling_min_nan_propagating, MonotonicDeque,
-    RollingExtremaOutput,
+    rolling_midpoint_vhgw_f64, rolling_min, rolling_min_into, rolling_min_nan_propagating,
+    MonotonicDeque, RollingExtremaOutput,
 };
 
 // SIMD kernel exports

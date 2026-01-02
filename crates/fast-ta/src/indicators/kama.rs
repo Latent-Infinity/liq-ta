@@ -143,6 +143,21 @@ pub fn kama_full_into<T: SeriesElement>(
         });
     }
 
+    // Type specialization for f64/f32
+    use std::any::TypeId;
+    if TypeId::of::<T>() == TypeId::of::<f64>() {
+        let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
+        let output_f64: &mut [f64] = unsafe { std::mem::transmute(output) };
+        return kama_full_into_f64(data_f64, period, fast_period, slow_period, output_f64);
+    }
+
+    if TypeId::of::<T>() == TypeId::of::<f32>() {
+        let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
+        let output_f32: &mut [f32] = unsafe { std::mem::transmute(output) };
+        return kama_full_into_f32(data_f32, period, fast_period, slow_period, output_f32);
+    }
+
+    // Generic fallback
     let n = data.len();
     let lookback = kama_lookback(period);
 
@@ -158,8 +173,6 @@ pub fn kama_full_into<T: SeriesElement>(
     let sc_diff = fast_sc - slow_sc;
 
     // Pre-compute all absolute changes to avoid redundant calculations
-    // abs_changes[i] = |data[i] - data[i-1]| for i in 1..n
-    // abs_changes[0] is unused (set to zero)
     let mut abs_changes = vec![T::zero(); n];
     for i in 1..n {
         abs_changes[i] = (data[i] - data[i - 1]).abs();
@@ -174,42 +187,166 @@ pub fn kama_full_into<T: SeriesElement>(
         return Ok(());
     }
 
-    // Initialize rolling volatility sum for the first window
-    // The first KAMA calculation (at lookback + 1) needs volatility over indices [lookback - period + 2, lookback + 1]
-    // We'll compute the initial volatility for the window ending at lookback + 1
+    // Initialize rolling volatility sum
     let mut volatility = T::zero();
-    let start = lookback + 2 - period; // = lookback - period + 2
+    let start = lookback + 2 - period;
     for j in start..=(lookback + 1) {
         volatility = volatility + abs_changes[j];
     }
 
-    // Calculate KAMA for remaining values using rolling volatility
+    // Calculate KAMA for remaining values
     for i in (lookback + 1)..n {
         if i > lookback + 1 {
-            // Update volatility using sliding window:
-            // Remove the oldest value and add the newest value
-            // Old window: [i - period, i - 1] (sum of abs_changes[i-period+1] to abs_changes[i-1])
-            // New window: [i - period + 1, i] (sum of abs_changes[i-period+2] to abs_changes[i])
             volatility = volatility - abs_changes[i - period] + abs_changes[i];
         }
 
-        // Calculate change (direction) - price change over the period
         let change = (data[i] - data[i - period]).abs();
 
-        // Calculate Efficiency Ratio
         let er = if volatility > T::zero() {
             change / volatility
         } else {
             T::zero()
         };
 
-        // Calculate Smoothing Constant
         let sc_raw = er * sc_diff + slow_sc;
         let sc = sc_raw * sc_raw;
 
-        // Update KAMA
         kama = kama + sc * (data[i] - kama);
         output[i] = kama;
+    }
+
+    Ok(())
+}
+
+/// f64-specialized KAMA implementation - eliminates trait overhead
+#[inline]
+fn kama_full_into_f64(
+    data: &[f64],
+    period: usize,
+    fast_period: usize,
+    slow_period: usize,
+    output: &mut [f64],
+) -> Result<()> {
+    let n = data.len();
+    let lookback = period - 1;
+
+    // Fill lookback period with NaN
+    output[..lookback].fill(f64::NAN);
+
+    // Calculate smoothing constants (no trait overhead)
+    let fast_sc = 2.0 / (fast_period + 1) as f64;
+    let slow_sc = 2.0 / (slow_period + 1) as f64;
+    let sc_diff = fast_sc - slow_sc;
+
+    // Pre-compute absolute changes
+    let mut abs_changes = vec![0.0_f64; n];
+    for i in 1..n {
+        abs_changes[i] = (data[i] - data[i - 1]).abs();
+    }
+
+    // Initialize KAMA
+    let mut kama = data[lookback];
+    output[lookback] = kama;
+
+    if lookback + 1 >= n {
+        return Ok(());
+    }
+
+    // Initialize rolling volatility
+    let mut volatility = 0.0_f64;
+    let start = lookback + 2 - period;
+    for j in start..=(lookback + 1) {
+        volatility += abs_changes[j];
+    }
+
+    // Main loop with optimizations
+    for i in (lookback + 1)..n {
+        if i > lookback + 1 {
+            // Rolling update
+            volatility = volatility - abs_changes[i - period] + abs_changes[i];
+        }
+
+        let change = (data[i] - data[i - period]).abs();
+
+        // Efficiency ratio
+        let er = if volatility > 0.0 {
+            change / volatility
+        } else {
+            0.0
+        };
+
+        // Smoothing constant
+        let sc_raw = sc_diff.mul_add(er, slow_sc);
+        let sc = sc_raw * sc_raw;
+
+        // KAMA update using FMA (difference form)
+        kama = (data[i] - kama).mul_add(sc, kama);
+        output[i] = kama;
+    }
+
+    Ok(())
+}
+
+/// f32-specialized KAMA implementation - uses f64 accumulators for precision
+#[inline]
+fn kama_full_into_f32(
+    data: &[f32],
+    period: usize,
+    fast_period: usize,
+    slow_period: usize,
+    output: &mut [f32],
+) -> Result<()> {
+    let n = data.len();
+    let lookback = period - 1;
+
+    // Fill lookback period with NaN
+    output[..lookback].fill(f32::NAN);
+
+    // Calculate smoothing constants using f64 for precision
+    let fast_sc = 2.0 / (fast_period + 1) as f64;
+    let slow_sc = 2.0 / (slow_period + 1) as f64;
+    let sc_diff = fast_sc - slow_sc;
+
+    // Pre-compute absolute changes with f64 accumulators
+    let mut abs_changes = vec![0.0_f64; n];
+    for i in 1..n {
+        abs_changes[i] = (data[i] as f64 - data[i - 1] as f64).abs();
+    }
+
+    // Initialize KAMA
+    let mut kama = data[lookback] as f64;
+    output[lookback] = kama as f32;
+
+    if lookback + 1 >= n {
+        return Ok(());
+    }
+
+    // Initialize rolling volatility
+    let mut volatility = 0.0_f64;
+    let start = lookback + 2 - period;
+    for j in start..=(lookback + 1) {
+        volatility += abs_changes[j];
+    }
+
+    // Main loop with f64 precision
+    for i in (lookback + 1)..n {
+        if i > lookback + 1 {
+            volatility = volatility - abs_changes[i - period] + abs_changes[i];
+        }
+
+        let change = (data[i] as f64 - data[i - period] as f64).abs();
+
+        let er = if volatility > 0.0 {
+            change / volatility
+        } else {
+            0.0
+        };
+
+        let sc_raw = sc_diff.mul_add(er, slow_sc);
+        let sc = sc_raw * sc_raw;
+
+        kama = (data[i] as f64 - kama).mul_add(sc, kama);
+        output[i] = kama as f32;
     }
 
     Ok(())
@@ -243,7 +380,25 @@ pub fn kama_full_into<T: SeriesElement>(
 /// - The input data is empty (`Error::EmptyInput`)
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
-pub fn kama<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
+pub fn kama<T: SeriesElement + 'static>(data: &[T], period: usize) -> Result<Vec<T>> {
+    use std::any::TypeId;
+
+    // Wrapper optimization: avoid initializing Vec for f64/f32
+    if TypeId::of::<T>() == TypeId::of::<f64>() {
+        let mut output: Vec<f64> = Vec::with_capacity(data.len());
+        unsafe { output.set_len(data.len()); }
+        kama_into(data, period, unsafe { std::mem::transmute(output.as_mut_slice()) })?;
+        return Ok(unsafe { std::mem::transmute(output) });
+    }
+
+    if TypeId::of::<T>() == TypeId::of::<f32>() {
+        let mut output: Vec<f32> = Vec::with_capacity(data.len());
+        unsafe { output.set_len(data.len()); }
+        kama_into(data, period, unsafe { std::mem::transmute(output.as_mut_slice()) })?;
+        return Ok(unsafe { std::mem::transmute(output) });
+    }
+
+    // Generic path: safe initialization
     let mut output = vec![T::nan(); data.len()];
     kama_into(data, period, &mut output)?;
     Ok(output)
@@ -269,12 +424,30 @@ pub fn kama<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
 /// - The input data is empty (`Error::EmptyInput`)
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
-pub fn kama_full<T: SeriesElement>(
+pub fn kama_full<T: SeriesElement + 'static>(
     data: &[T],
     period: usize,
     fast_period: usize,
     slow_period: usize,
 ) -> Result<Vec<T>> {
+    use std::any::TypeId;
+
+    // Wrapper optimization: avoid initializing Vec for f64/f32
+    if TypeId::of::<T>() == TypeId::of::<f64>() {
+        let mut output: Vec<f64> = Vec::with_capacity(data.len());
+        unsafe { output.set_len(data.len()); }
+        kama_full_into(data, period, fast_period, slow_period, unsafe { std::mem::transmute(output.as_mut_slice()) })?;
+        return Ok(unsafe { std::mem::transmute(output) });
+    }
+
+    if TypeId::of::<T>() == TypeId::of::<f32>() {
+        let mut output: Vec<f32> = Vec::with_capacity(data.len());
+        unsafe { output.set_len(data.len()); }
+        kama_full_into(data, period, fast_period, slow_period, unsafe { std::mem::transmute(output.as_mut_slice()) })?;
+        return Ok(unsafe { std::mem::transmute(output) });
+    }
+
+    // Generic path: safe initialization
     let mut output = vec![T::nan(); data.len()];
     kama_full_into(data, period, fast_period, slow_period, &mut output)?;
     Ok(output)
