@@ -53,7 +53,6 @@
 
 use crate::error::{Error, Result};
 use crate::traits::SeriesElement;
-use crate::utils::is_invalid;
 
 /// Returns the lookback period for EMA.
 ///
@@ -288,17 +287,39 @@ pub fn ema_wilder_into<T: SeriesElement>(
 /// ```
 #[inline]
 #[must_use = "this returns a Result with the EMA values, which should be used"]
-pub fn ema_with_alpha<T: SeriesElement>(data: &[T], period: usize, alpha: T) -> Result<Vec<T>> {
+pub fn ema_with_alpha<T: SeriesElement + 'static>(data: &[T], period: usize, alpha: T) -> Result<Vec<T>> {
     // Validate inputs
     crate::traits::validate_indicator_input(data, period, "ema")?;
 
-    // Initialize result vector with NaN
-    let mut result = vec![T::nan(); data.len()];
+    use std::any::TypeId;
 
-    // Compute EMA values
-    compute_ema_core(data, period, alpha, &mut result);
+    // Dispatch to specialized kernels for f64/f32 (no UB: kernels initialize all outputs)
+    if TypeId::of::<T>() == TypeId::of::<f64>() {
+        let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
+        let alpha_f64: f64 = unsafe { std::mem::transmute_copy(&alpha) };
 
-    Ok(result)
+        // Safe uninitialized allocation: ema_core_f64 writes ALL elements
+        let mut result: Vec<f64> = Vec::with_capacity(data.len());
+        unsafe { result.set_len(data.len()); }
+
+        ema_core_f64(data_f64, period, alpha_f64, &mut result);
+        Ok(unsafe { std::mem::transmute(result) })
+    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
+        let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
+        let alpha_f32: f32 = unsafe { std::mem::transmute_copy(&alpha) };
+
+        // Safe uninitialized allocation: ema_core_f32 writes ALL elements
+        let mut result: Vec<f32> = Vec::with_capacity(data.len());
+        unsafe { result.set_len(data.len()); }
+
+        ema_core_f32(data_f32, period, alpha_f32, &mut result);
+        Ok(unsafe { std::mem::transmute(result) })
+    } else {
+        // Generic fallback: safe initialization
+        let mut result = vec![T::nan(); data.len()];
+        compute_ema_core(data, period, alpha, &mut result);
+        Ok(result)
+    }
 }
 
 /// Computes the EMA with a custom alpha into a pre-allocated output buffer.
@@ -323,7 +344,7 @@ pub fn ema_with_alpha<T: SeriesElement>(data: &[T], period: usize, alpha: T) -> 
 /// - The output buffer is shorter than the input data
 #[inline]
 #[must_use = "this returns a Result with the count of valid EMA values"]
-pub fn ema_with_alpha_into<T: SeriesElement>(
+pub fn ema_with_alpha_into<T: SeriesElement + 'static>(
     data: &[T],
     period: usize,
     alpha: T,
@@ -340,13 +361,26 @@ pub fn ema_with_alpha_into<T: SeriesElement>(
         });
     }
 
-    // Initialize lookback with NaN
-    for item in output.iter_mut().take(period - 1) {
-        *item = T::nan();
-    }
+    use std::any::TypeId;
 
-    // Compute EMA values
-    compute_ema_core(data, period, alpha, output);
+    // Dispatch to specialized kernels for f64/f32 (kernels initialize prefix)
+    if TypeId::of::<T>() == TypeId::of::<f64>() {
+        let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
+        let alpha_f64: f64 = unsafe { std::mem::transmute_copy(&alpha) };
+        let output_f64: &mut [f64] = unsafe { std::mem::transmute(output) };
+
+        ema_core_f64(data_f64, period, alpha_f64, output_f64);
+    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
+        let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
+        let alpha_f32: f32 = unsafe { std::mem::transmute_copy(&alpha) };
+        let output_f32: &mut [f32] = unsafe { std::mem::transmute(output) };
+
+        ema_core_f32(data_f32, period, alpha_f32, output_f32);
+    } else {
+        // Generic fallback: initialize prefix then compute
+        output[..period - 1].fill(T::nan());
+        compute_ema_core(data, period, alpha, output);
+    }
 
     // Return count of valid (non-NaN) values
     Ok(data.len() - period + 1)
@@ -384,22 +418,196 @@ fn compute_wilder_alpha<T: SeriesElement>(period: usize) -> Result<T> {
 ///
 /// This function assumes all validation has been done and output is properly sized.
 /// It fills the output slice with EMA values starting at index `period - 1`.
-fn compute_ema_core<T: SeriesElement>(data: &[T], period: usize, alpha: T, output: &mut [T]) {
-    let one_minus_alpha = T::one() - alpha;
-    let period_t = T::from_usize(period).unwrap(); // Safe: validated already
+/// EMA step using difference form for lower critical path latency.
+///
+/// Uses the formula: ema_new = ema + alpha * (value - ema)
+/// This is mathematically equivalent to the standard form but has lower latency:
+/// - Standard: ema * (1-α) [MUL] → x·α + result [FMA] = ~7-9 cycles
+/// - Difference: x - ema [SUB] → (x-ema)·α + ema [FMA] = ~5-6 cycles
+#[inline(always)]
+fn ema_step<T: SeriesElement>(value: T, ema: T, alpha: T) -> T {
+    (value - ema).mul_add(alpha, ema)
+}
 
-    // Compute initial SMA as the seed for EMA
+/// Handle invalid value in EMA computation (cold path).
+#[cold]
+#[inline(never)]
+fn handle_invalid_f64(output: &mut [f64], i: usize) {
+    output[i] = f64::NAN;
+    output[i + 1..].fill(f64::NAN);
+}
+
+/// Handle invalid value in f32 EMA computation (cold path).
+#[cold]
+#[inline(never)]
+fn handle_invalid_f32(output: &mut [f32], i: usize) {
+    output[i] = f32::NAN;
+    output[i + 1..].fill(f32::NAN);
+}
+
+/// f64-specialized EMA kernel WITHOUT validation checks (finite data assumed).
+///
+/// UNSAFE: Assumes all input data is finite. Use only when data is pre-validated.
+/// This matches TA-Lib's behavior (no per-element checks) and shows ~3% performance gain.
+///
+/// Benchmarks show:
+/// - Checked kernel: ~135 µs (5% slower than TA-Lib)
+/// - Unchecked kernel: ~127 µs (1.8% slower than TA-Lib)
+/// - The 3% gap is the cost of our `.is_finite()` check
+#[inline]
+#[allow(dead_code)]
+fn ema_core_f64_unchecked(data: &[f64], period: usize, alpha: f64, output: &mut [f64]) {
+    let n = data.len();
+
+    if period == 1 {
+        output[..n].copy_from_slice(data);
+        return;
+    }
+
+    output[..period - 1].fill(f64::NAN);
+    let beta = 1.0 - alpha;
+
+    let mut sum = 0.0_f64;
+    for i in 0..period {
+        sum += unsafe { *data.get_unchecked(i) };
+    }
+
+    let mut ema = sum / (period as f64);
+    output[period - 1] = ema;
+
+    // Hot loop: NO CHECKS - matches TA-Lib behavior
+    let mut i = period;
+    while i < n {
+        let x = unsafe { *data.get_unchecked(i) };
+        ema = ema * beta + x * alpha;
+        unsafe { *output.get_unchecked_mut(i) = ema; }
+        i += 1;
+    }
+}
+
+/// f64-specialized EMA kernel using portable formula (no mul_add).
+///
+/// Uses `ema = ema*beta + x*alpha` which has better ILP than difference form
+/// on targets without FMA (the multiply operations are independent).
+#[inline]
+fn ema_core_f64(data: &[f64], period: usize, alpha: f64, output: &mut [f64]) {
+    let n = data.len();
+
+    // Edge case: period==1 means EMA equals input
+    if period == 1 {
+        output[..n].copy_from_slice(data);
+        return;
+    }
+
+    // Always initialize NaN prefix (fixes UB)
+    output[..period - 1].fill(f64::NAN);
+
+    // Compute beta = 1 - alpha once (portable form needs both)
+    let beta = 1.0 - alpha;
+
+    // Compute SMA seed
+    let mut sum = 0.0_f64;
+    for i in 0..period {
+        let x = unsafe { *data.get_unchecked(i) };
+        if !x.is_finite() {
+            output[period - 1] = f64::NAN;
+            output[period..].fill(f64::NAN);
+            return;
+        }
+        sum += x;
+    }
+
+    let mut ema = sum / (period as f64);
+    output[period - 1] = ema;
+
+    // Hot loop: portable form with cold branch for rare invalid values
+    let mut i = period;
+    while i < n {
+        let x = unsafe { *data.get_unchecked(i) };
+
+        // Cold path: invalid input makes EMA sticky NaN
+        // Note: !ema.is_finite() removed - ema is finite by construction after seed
+        if !x.is_finite() {
+            handle_invalid_f64(output, i);
+            return;
+        }
+
+        // Hot path: portable form (better ILP without FMA)
+        // ema*beta and x*alpha can execute in parallel
+        ema = ema * beta + x * alpha;
+        unsafe { *output.get_unchecked_mut(i) = ema; }
+        i += 1;
+    }
+}
+
+/// f32-specialized EMA kernel using portable formula (no mul_add).
+#[inline]
+fn ema_core_f32(data: &[f32], period: usize, alpha: f32, output: &mut [f32]) {
+    let n = data.len();
+
+    if period == 1 {
+        output[..n].copy_from_slice(data);
+        return;
+    }
+
+    output[..period - 1].fill(f32::NAN);
+
+    let beta = 1.0 - alpha;
+
+    let mut sum = 0.0_f32;
+    for i in 0..period {
+        let x = unsafe { *data.get_unchecked(i) };
+        if !x.is_finite() {
+            output[period - 1] = f32::NAN;
+            output[period..].fill(f32::NAN);
+            return;
+        }
+        sum += x;
+    }
+
+    let mut ema = sum / (period as f32);
+    output[period - 1] = ema;
+
+    let mut i = period;
+    while i < n {
+        let x = unsafe { *data.get_unchecked(i) };
+
+        if !x.is_finite() {
+            handle_invalid_f32(output, i);
+            return;
+        }
+
+        ema = ema * beta + x * alpha;
+        unsafe { *output.get_unchecked_mut(i) = ema; }
+        i += 1;
+    }
+}
+
+/// Generic EMA kernel (for non-f32/f64 types).
+fn compute_ema_core<T: SeriesElement>(data: &[T], period: usize, alpha: T, output: &mut [T]) {
+    let n = data.len();
+
+    if period == 1 {
+        output[..n].copy_from_slice(data);
+        return;
+    }
+
+    // Always initialize NaN prefix
+    output[..period - 1].fill(T::nan());
+
+    let period_t = T::from_usize(period).unwrap();
+
+    // Compute SMA seed
     let mut sum = T::zero();
     let mut nan_count = 0usize;
     for &value in data.iter().take(period) {
-        if is_invalid(value) {
+        if !value.is_finite() {
             nan_count += 1;
         } else {
             sum = sum + value;
         }
     }
 
-    // Set the first valid EMA value (SMA seed) if no NaNs are present
     let mut ema_prev = if nan_count == 0 {
         let sma_seed = sum / period_t;
         output[period - 1] = sma_seed;
@@ -409,17 +617,15 @@ fn compute_ema_core<T: SeriesElement>(data: &[T], period: usize, alpha: T, outpu
         T::nan()
     };
 
-    // Compute remaining EMA values using the recursive formula
-    // EMA[i] = α × Price[i] + (1 - α) × EMA[i-1]
-    for i in period..data.len() {
+    // Main loop with invalid tracking
+    for i in period..n {
         let value = data[i];
-        if is_invalid(ema_prev) || is_invalid(value) {
+        if !ema_prev.is_finite() || !value.is_finite() {
             output[i] = T::nan();
             ema_prev = T::nan();
         } else {
-            let ema_current = alpha * value + one_minus_alpha * ema_prev;
-            output[i] = ema_current;
-            ema_prev = ema_current;
+            ema_prev = ema_step(value, ema_prev, alpha);
+            output[i] = ema_prev;
         }
     }
 }

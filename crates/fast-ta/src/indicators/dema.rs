@@ -148,7 +148,6 @@ pub fn dema<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
 
     // Compute EMA2 manually, starting from valid EMA1 values
     let alpha = T::from_usize(2)? / T::from_usize(period + 1)?;
-    let one_minus_alpha = T::one() - alpha;
 
     // Seed EMA2 with the first valid EMA1 value
     let mut ema2 = ema1[ema1_lookback];
@@ -160,8 +159,8 @@ pub fn dema<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
                 // Seed value - EMA2 equals EMA1 at this point
                 ema2 = ema1[i];
             } else {
-                // Standard EMA update
-                ema2 = alpha * ema1[i] + one_minus_alpha * ema2;
+                // Difference form EMA update (lower critical path latency)
+                ema2 = (ema1[i] - ema2).mul_add(alpha, ema2);
             }
 
             // DEMA is valid starting at lookback
@@ -240,9 +239,8 @@ pub fn dema_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) 
         *item = T::nan();
     }
 
-    // Compute EMA2 manually
+    // Compute EMA2 manually using difference form
     let alpha = T::from_usize(2)? / T::from_usize(period + 1)?;
-    let one_minus_alpha = T::one() - alpha;
     let mut ema2 = ema1[ema1_lookback];
 
     for i in ema1_lookback..data.len() {
@@ -250,7 +248,8 @@ pub fn dema_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) 
             if i == ema1_lookback {
                 ema2 = ema1[i];
             } else {
-                ema2 = alpha * ema1[i] + one_minus_alpha * ema2;
+                // Difference form (lower critical path latency)
+                ema2 = (ema1[i] - ema2).mul_add(alpha, ema2);
             }
 
             if i >= lookback {
