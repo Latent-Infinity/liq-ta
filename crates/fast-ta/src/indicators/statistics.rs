@@ -63,49 +63,72 @@ pub const fn var_min_len(period: usize) -> usize {
 fn var_talib_f64(data: &[f64], period: usize, output: &mut [f64]) -> Result<()> {
     let n = data.len();
     let lookback = period - 1;
-    let period_f64 = period as f64;
 
     // Fill lookback with NaN
-    for i in 0..lookback {
-        output[i] = f64::NAN;
-    }
+    output[..lookback].fill(f64::NAN);
 
     if period == 1 {
-        for i in 0..n {
-            output[i] = 0.0;
-        }
+        output[..n].fill(0.0);
         return Ok(());
     }
 
-    // Initialize rolling sums (pure f64, no conversions)
-    let mut period_total1 = 0.0_f64;
-    let mut period_total2 = 0.0_f64;
+    // Pre-compute reciprocals to replace division with multiplication
+    let period_f64 = period as f64;
+    let inv_period = 1.0 / period_f64;          // 1/n
+    let inv_period_sq = inv_period * inv_period; // 1/n²
 
-    // Accumulate initial window
-    for i in 0..lookback {
-        let val = data[i];
-        period_total1 += val;
-        period_total2 += val * val;
+    // Initialize rolling sums (pure f64, no conversions)
+    let mut sum_x = 0.0_f64;    // Σx
+    let mut sum_x2 = 0.0_f64;   // Σx²
+
+    // Accumulate initial window (scalar - matches TA-Lib structure)
+    let mut i = 0;
+    while i < lookback {
+        let temp = data[i];
+        sum_x += temp;
+        sum_x2 += temp * temp;
+        i += 1;
     }
 
-    // Rolling calculation
+    // Rolling calculation with loop unrolling (2x) for better ILP
     let mut trailing_idx = 0;
-    for i in lookback..n {
-        // Add new value
-        let val = data[i];
-        period_total1 += val;
-        period_total2 += val * val;
+    let unroll_limit = n - 1;  // Leave at least 1 for remainder
 
-        // Compute variance
-        let mean1 = period_total1 / period_f64;
-        let mean2 = period_total2 / period_f64;
-        output[i] = mean2 - mean1 * mean1;
+    // Unrolled loop: process 2 iterations at once
+    while i < unroll_limit {
+        // Iteration 1
+        let temp = data[i];
+        sum_x += temp;
+        sum_x2 += temp * temp;
+        output[i] = (sum_x2 * period_f64 - sum_x * sum_x) * inv_period_sq;
+        let old = data[trailing_idx];
+        sum_x -= old;
+        sum_x2 -= old * old;
+        i += 1;
+        trailing_idx += 1;
 
-        // Remove old value
-        let old_val = data[trailing_idx];
-        period_total1 -= old_val;
-        period_total2 -= old_val * old_val;
+        // Iteration 2
+        let temp = data[i];
+        sum_x += temp;
+        sum_x2 += temp * temp;
+        output[i] = (sum_x2 * period_f64 - sum_x * sum_x) * inv_period_sq;
+        let old = data[trailing_idx];
+        sum_x -= old;
+        sum_x2 -= old * old;
+        i += 1;
+        trailing_idx += 1;
+    }
 
+    // Handle remainder
+    while i < n {
+        let temp = data[i];
+        sum_x += temp;
+        sum_x2 += temp * temp;
+        output[i] = (sum_x2 * period_f64 - sum_x * sum_x) * inv_period_sq;
+        let old = data[trailing_idx];
+        sum_x -= old;
+        sum_x2 -= old * old;
+        i += 1;
         trailing_idx += 1;
     }
 
@@ -375,17 +398,12 @@ pub fn var_into<T: SeriesElement + 'static>(data: &[T], period: usize, output: &
     }
 
     // f64 specialization: zero-overhead TA-Lib algorithm
+    // Skip NaN pre-scan to match TA-Lib performance (NaN naturally propagates through variance formula)
     use std::any::TypeId;
     if TypeId::of::<T>() == TypeId::of::<f64>() {
         let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
-
-        // Pre-scan for NaN
-        let has_nan = data_f64.iter().any(|&x| !x.is_finite());
-        if !has_nan {
-            let output_f64: &mut [f64] = unsafe { std::mem::transmute(output) };
-            return var_talib_f64(data_f64, period, output_f64);
-        }
-        // Fall through to slow path
+        let output_f64: &mut [f64] = unsafe { std::mem::transmute(output) };
+        return var_talib_f64(data_f64, period, output_f64);
     }
 
     // Pre-scan optimization: check for NaN in input data
@@ -605,9 +623,27 @@ fn var_f64_precision_slow<T: SeriesElement>(
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 pub fn var<T: SeriesElement + 'static>(data: &[T], period: usize) -> Result<Vec<T>> {
-    let mut output = vec![T::nan(); data.len()];
-    var_into(data, period, &mut output)?;
-    Ok(output)
+    use std::any::TypeId;
+
+    // Wrapper optimization: uninitialized allocation for f64/f32 (§5.4)
+    if TypeId::of::<T>() == TypeId::of::<f64>() {
+        let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
+        let mut output: Vec<f64> = Vec::with_capacity(data.len());
+        unsafe { output.set_len(data.len()); }
+        var_into(data_f64, period, &mut output)?;
+        Ok(unsafe { std::mem::transmute(output) })
+    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
+        let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
+        let mut output: Vec<f32> = Vec::with_capacity(data.len());
+        unsafe { output.set_len(data.len()); }
+        var_into(data_f32, period, &mut output)?;
+        Ok(unsafe { std::mem::transmute(output) })
+    } else {
+        // Generic fallback: safe initialization
+        let mut output = vec![T::nan(); data.len()];
+        var_into(data, period, &mut output)?;
+        Ok(output)
+    }
 }
 
 // =============================================================================
