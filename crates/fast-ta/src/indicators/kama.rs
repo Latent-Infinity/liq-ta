@@ -172,12 +172,6 @@ pub fn kama_full_into<T: SeriesElement>(
     let slow_sc = two / T::from_usize(slow_period + 1)?;
     let sc_diff = fast_sc - slow_sc;
 
-    // Pre-compute all absolute changes to avoid redundant calculations
-    let mut abs_changes = vec![T::zero(); n];
-    for i in 1..n {
-        abs_changes[i] = (data[i] - data[i - 1]).abs();
-    }
-
     // Initialize KAMA with first valid value
     let mut kama = data[lookback];
     output[lookback] = kama;
@@ -187,18 +181,34 @@ pub fn kama_full_into<T: SeriesElement>(
         return Ok(());
     }
 
-    // Initialize rolling volatility sum
+    // Initialize rolling volatility for first window (compute on-the-fly)
     let mut volatility = T::zero();
     let start = lookback + 2 - period;
     for j in start..=(lookback + 1) {
-        volatility = volatility + abs_changes[j];
+        volatility = volatility + (data[j] - data[j - 1]).abs();
     }
 
-    // Calculate KAMA for remaining values
-    for i in (lookback + 1)..n {
-        if i > lookback + 1 {
-            volatility = volatility - abs_changes[i - period] + abs_changes[i];
-        }
+    // First iteration
+    if lookback + 1 < n {
+        let i = lookback + 1;
+        let change = (data[i] - data[i - period]).abs();
+        let er = if volatility > T::zero() {
+            change / volatility
+        } else {
+            T::zero()
+        };
+        let sc_raw = er * sc_diff + slow_sc;
+        let sc = sc_raw * sc_raw;
+        kama = kama + sc * (data[i] - kama);
+        output[i] = kama;
+    }
+
+    // Steady-state loop
+    for i in (lookback + 2)..n {
+        // Rolling volatility update (compute on-the-fly)
+        let old_change = (data[i - period] - data[i - period - 1]).abs();
+        let new_change = (data[i] - data[i - 1]).abs();
+        volatility = volatility - old_change + new_change;
 
         let change = (data[i] - data[i - period]).abs();
 
@@ -238,12 +248,6 @@ fn kama_full_into_f64(
     let slow_sc = 2.0 / (slow_period + 1) as f64;
     let sc_diff = fast_sc - slow_sc;
 
-    // Pre-compute absolute changes
-    let mut abs_changes = vec![0.0_f64; n];
-    for i in 1..n {
-        abs_changes[i] = (data[i] - data[i - 1]).abs();
-    }
-
     // Initialize KAMA
     let mut kama = data[lookback];
     output[lookback] = kama;
@@ -252,19 +256,34 @@ fn kama_full_into_f64(
         return Ok(());
     }
 
-    // Initialize rolling volatility
+    // Initialize rolling volatility for first window (compute on-the-fly)
     let mut volatility = 0.0_f64;
     let start = lookback + 2 - period;
     for j in start..=(lookback + 1) {
-        volatility += abs_changes[j];
+        volatility += (data[j] - data[j - 1]).abs();
     }
 
-    // Main loop with optimizations
-    for i in (lookback + 1)..n {
-        if i > lookback + 1 {
-            // Rolling update
-            volatility = volatility - abs_changes[i - period] + abs_changes[i];
-        }
+    // First iteration (no volatility update needed)
+    if lookback + 1 < n {
+        let i = lookback + 1;
+        let change = (data[i] - data[i - period]).abs();
+        let er = if volatility > 0.0 {
+            change / volatility
+        } else {
+            0.0
+        };
+        let sc_raw = sc_diff.mul_add(er, slow_sc);
+        let sc = sc_raw * sc_raw;
+        kama = (data[i] - kama).mul_add(sc, kama);
+        output[i] = kama;
+    }
+
+    // Steady-state loop (no branch, compute abs_changes on-the-fly)
+    for i in (lookback + 2)..n {
+        // Rolling volatility update (compute old and new abs changes on-the-fly)
+        let old_change = (data[i - period] - data[i - period - 1]).abs();
+        let new_change = (data[i] - data[i - 1]).abs();
+        volatility = volatility - old_change + new_change;
 
         let change = (data[i] - data[i - period]).abs();
 
@@ -307,12 +326,6 @@ fn kama_full_into_f32(
     let slow_sc = 2.0 / (slow_period + 1) as f64;
     let sc_diff = fast_sc - slow_sc;
 
-    // Pre-compute absolute changes with f64 accumulators
-    let mut abs_changes = vec![0.0_f64; n];
-    for i in 1..n {
-        abs_changes[i] = (data[i] as f64 - data[i - 1] as f64).abs();
-    }
-
     // Initialize KAMA
     let mut kama = data[lookback] as f64;
     output[lookback] = kama as f32;
@@ -321,18 +334,34 @@ fn kama_full_into_f32(
         return Ok(());
     }
 
-    // Initialize rolling volatility
+    // Initialize rolling volatility for first window (compute on-the-fly with f64 precision)
     let mut volatility = 0.0_f64;
     let start = lookback + 2 - period;
     for j in start..=(lookback + 1) {
-        volatility += abs_changes[j];
+        volatility += (data[j] as f64 - data[j - 1] as f64).abs();
     }
 
-    // Main loop with f64 precision
-    for i in (lookback + 1)..n {
-        if i > lookback + 1 {
-            volatility = volatility - abs_changes[i - period] + abs_changes[i];
-        }
+    // First iteration (no volatility update needed)
+    if lookback + 1 < n {
+        let i = lookback + 1;
+        let change = (data[i] as f64 - data[i - period] as f64).abs();
+        let er = if volatility > 0.0 {
+            change / volatility
+        } else {
+            0.0
+        };
+        let sc_raw = sc_diff.mul_add(er, slow_sc);
+        let sc = sc_raw * sc_raw;
+        kama = (data[i] as f64 - kama).mul_add(sc, kama);
+        output[i] = kama as f32;
+    }
+
+    // Steady-state loop (no branch, compute on-the-fly with f64 precision)
+    for i in (lookback + 2)..n {
+        // Rolling volatility update (compute old and new abs changes on-the-fly)
+        let old_change = (data[i - period] as f64 - data[i - period - 1] as f64).abs();
+        let new_change = (data[i] as f64 - data[i - 1] as f64).abs();
+        volatility = volatility - old_change + new_change;
 
         let change = (data[i] as f64 - data[i - period] as f64).abs();
 
