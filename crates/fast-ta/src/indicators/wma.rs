@@ -47,6 +47,7 @@
 
 use crate::error::{Error, Result};
 use crate::traits::SeriesElement;
+use std::any::TypeId;
 
 /// Check if a value is invalid (NaN or Infinity).
 /// Both NaN and Infinity must propagate through indicators per IEEE 754 policy.
@@ -56,6 +57,311 @@ use crate::traits::SeriesElement;
 #[inline]
 fn is_invalid<T: SeriesElement>(value: T) -> bool {
     !value.is_finite()
+}
+
+/// Optimized f64 WMA kernel with unchecked rolling sum (no validation).
+/// Fast path for clean data.
+#[inline]
+fn wma_f64_unchecked(data: &[f64], period: usize, output: &mut [f64]) {
+    let n = data.len();
+    let weight_sum = (period * (period + 1) / 2) as f64;
+    let inv_weight_sum = 1.0 / weight_sum;
+    let period_f64 = period as f64;
+
+    // Fill lookback
+    output[..period - 1].fill(f64::NAN);
+
+    // Compute initial weighted sum
+    let mut weighted_sum = 0.0;
+    let mut simple_sum = 0.0;
+
+    for i in 0..period {
+        let val = unsafe { *data.get_unchecked(i) };
+        let weight = (i + 1) as f64;
+        weighted_sum += val * weight;
+        simple_sum += val;
+    }
+
+    unsafe { *output.get_unchecked_mut(period - 1) = weighted_sum * inv_weight_sum; }
+
+    // Rolling update
+    for i in period..n {
+        let new_val = unsafe { *data.get_unchecked(i) };
+        let old_val = unsafe { *data.get_unchecked(i - period) };
+
+        weighted_sum = weighted_sum - simple_sum + new_val * period_f64;
+        simple_sum = simple_sum - old_val + new_val;
+
+        unsafe { *output.get_unchecked_mut(i) = weighted_sum * inv_weight_sum; }
+    }
+}
+
+/// Optimized f32 WMA kernel with unchecked rolling sum.
+/// Uses f64 accumulator for better accuracy.
+#[inline]
+fn wma_f32_unchecked(data: &[f32], period: usize, output: &mut [f32]) {
+    let n = data.len();
+    let weight_sum = (period * (period + 1) / 2) as f64;
+    let inv_weight_sum = 1.0 / weight_sum;
+    let period_f64 = period as f64;
+
+    output[..period - 1].fill(f32::NAN);
+
+    let mut weighted_sum = 0.0f64;
+    let mut simple_sum = 0.0f64;
+
+    for i in 0..period {
+        let val = unsafe { *data.get_unchecked(i) as f64 };
+        let weight = (i + 1) as f64;
+        weighted_sum += val * weight;
+        simple_sum += val;
+    }
+
+    unsafe { *output.get_unchecked_mut(period - 1) = (weighted_sum * inv_weight_sum) as f32; }
+
+    for i in period..n {
+        let new_val = unsafe { *data.get_unchecked(i) as f64 };
+        let old_val = unsafe { *data.get_unchecked(i - period) as f64 };
+
+        weighted_sum = weighted_sum - simple_sum + new_val * period_f64;
+        simple_sum = simple_sum - old_val + new_val;
+
+        unsafe { *output.get_unchecked_mut(i) = (weighted_sum * inv_weight_sum) as f32; }
+    }
+}
+
+/// f64 WMA with ring buffer for invalid tracking.
+#[inline]
+fn wma_f64_with_tracking(data: &[f64], period: usize, output: &mut [f64]) {
+    let n = data.len();
+    let weight_sum = (period * (period + 1) / 2) as f64;
+    let inv_weight_sum = 1.0 / weight_sum;
+    let period_f64 = period as f64;
+
+    output[..period - 1].fill(f64::NAN);
+
+    // Ring buffers
+    let mut buf = vec![0.0f64; period];
+    let mut inv = vec![0u8; period];
+
+    let mut weighted_sum = 0.0;
+    let mut simple_sum = 0.0;
+    let mut invalid_count = 0usize;
+
+    // Initialize first window
+    for i in 0..period {
+        let val = data[i];
+        let is_invalid = !val.is_finite();
+
+        buf[i] = if is_invalid { 0.0 } else { val };
+        inv[i] = is_invalid as u8;
+
+        let weight = (i + 1) as f64;
+        weighted_sum += buf[i] * weight;
+        simple_sum += buf[i];
+        invalid_count += inv[i] as usize;
+    }
+
+    if invalid_count == 0 {
+        output[period - 1] = weighted_sum * inv_weight_sum;
+    } else {
+        output[period - 1] = f64::NAN;
+    }
+
+    // Rolling window
+    for i in period..n {
+        let idx = i % period;
+
+        // Evict old value from weighted_sum
+        // Since the ring rotates, we need to recompute weighted_sum
+        // This is because weights change position in the window
+
+        let val = data[i];
+        let is_invalid = !val.is_finite();
+
+        // Update ring
+        buf[idx] = if is_invalid { 0.0 } else { val };
+        let old_inv = inv[idx];
+        inv[idx] = is_invalid as u8;
+
+        invalid_count = invalid_count - old_inv as usize + inv[idx] as usize;
+
+        // Recompute sums from ring
+        weighted_sum = 0.0;
+        simple_sum = 0.0;
+        for j in 0..period {
+            let ring_idx = (i - period + 1 + j) % period;
+            let weight = (j + 1) as f64;
+            weighted_sum += buf[ring_idx] * weight;
+            simple_sum += buf[ring_idx];
+        }
+
+        if invalid_count == 0 {
+            output[i] = weighted_sum * inv_weight_sum;
+        } else {
+            output[i] = f64::NAN;
+        }
+    }
+}
+
+/// f32 WMA with ring buffer for invalid tracking.
+#[inline]
+fn wma_f32_with_tracking(data: &[f32], period: usize, output: &mut [f32]) {
+    let n = data.len();
+    let weight_sum = (period * (period + 1) / 2) as f64;
+    let inv_weight_sum = 1.0 / weight_sum;
+
+    output[..period - 1].fill(f32::NAN);
+
+    let mut buf = vec![0.0f64; period];
+    let mut inv = vec![0u8; period];
+
+    let mut weighted_sum = 0.0f64;
+    let mut simple_sum = 0.0f64;
+    let mut invalid_count = 0usize;
+
+    for i in 0..period {
+        let val = data[i];
+        let is_invalid = !val.is_finite();
+
+        buf[i] = if is_invalid { 0.0 } else { val as f64 };
+        inv[i] = is_invalid as u8;
+
+        let weight = (i + 1) as f64;
+        weighted_sum += buf[i] * weight;
+        simple_sum += buf[i];
+        invalid_count += inv[i] as usize;
+    }
+
+    if invalid_count == 0 {
+        output[period - 1] = (weighted_sum * inv_weight_sum) as f32;
+    } else {
+        output[period - 1] = f32::NAN;
+    }
+
+    for i in period..n {
+        let idx = i % period;
+
+        let val = data[i];
+        let is_invalid = !val.is_finite();
+
+        buf[idx] = if is_invalid { 0.0 } else { val as f64 };
+        let old_inv = inv[idx];
+        inv[idx] = is_invalid as u8;
+
+        invalid_count = invalid_count - old_inv as usize + inv[idx] as usize;
+
+        weighted_sum = 0.0;
+        simple_sum = 0.0;
+        for j in 0..period {
+            let ring_idx = (i - period + 1 + j) % period;
+            let weight = (j + 1) as f64;
+            weighted_sum += buf[ring_idx] * weight;
+            simple_sum += buf[ring_idx];
+        }
+
+        if invalid_count == 0 {
+            output[i] = (weighted_sum * inv_weight_sum) as f32;
+        } else {
+            output[i] = f32::NAN;
+        }
+    }
+}
+
+/// f64 WMA with optimistic fast path.
+#[inline]
+fn wma_f64_optimistic(data: &[f64], period: usize, output: &mut [f64]) {
+    let n = data.len();
+    let weight_sum = (period * (period + 1) / 2) as f64;
+    let inv_weight_sum = 1.0 / weight_sum;
+    let period_f64 = period as f64;
+
+    output[..period - 1].fill(f64::NAN);
+
+    let mut weighted_sum = 0.0;
+    let mut simple_sum = 0.0;
+    let mut has_invalid = false;
+
+    for i in 0..period {
+        let val = unsafe { *data.get_unchecked(i) };
+        if !val.is_finite() {
+            has_invalid = true;
+            break;
+        }
+        let weight = (i + 1) as f64;
+        weighted_sum += val * weight;
+        simple_sum += val;
+    }
+
+    if has_invalid {
+        wma_f64_with_tracking(data, period, output);
+        return;
+    }
+
+    unsafe { *output.get_unchecked_mut(period - 1) = weighted_sum * inv_weight_sum; }
+
+    // Optimistic fast path
+    for i in period..n {
+        let new_val = unsafe { *data.get_unchecked(i) };
+
+        if new_val.is_finite() {
+            let old_val = unsafe { *data.get_unchecked(i - period) };
+            weighted_sum = weighted_sum - simple_sum + new_val * period_f64;
+            simple_sum = simple_sum - old_val + new_val;
+            unsafe { *output.get_unchecked_mut(i) = weighted_sum * inv_weight_sum; }
+        } else {
+            // Hit invalid - switch to tracking
+            wma_f64_with_tracking(data, period, output);
+            return;
+        }
+    }
+}
+
+/// f32 WMA with optimistic fast path.
+#[inline]
+fn wma_f32_optimistic(data: &[f32], period: usize, output: &mut [f32]) {
+    let n = data.len();
+    let weight_sum = (period * (period + 1) / 2) as f64;
+    let inv_weight_sum = 1.0 / weight_sum;
+    let period_f64 = period as f64;
+
+    output[..period - 1].fill(f32::NAN);
+
+    let mut weighted_sum = 0.0f64;
+    let mut simple_sum = 0.0f64;
+    let mut has_invalid = false;
+
+    for i in 0..period {
+        let val = unsafe { *data.get_unchecked(i) };
+        if !val.is_finite() {
+            has_invalid = true;
+            break;
+        }
+        let weight = (i + 1) as f64;
+        weighted_sum += val as f64 * weight;
+        simple_sum += val as f64;
+    }
+
+    if has_invalid {
+        wma_f32_with_tracking(data, period, output);
+        return;
+    }
+
+    unsafe { *output.get_unchecked_mut(period - 1) = (weighted_sum * inv_weight_sum) as f32; }
+
+    for i in period..n {
+        let new_val = unsafe { *data.get_unchecked(i) };
+
+        if new_val.is_finite() {
+            let old_val = unsafe { *data.get_unchecked(i - period) };
+            weighted_sum = weighted_sum - simple_sum + new_val as f64 * period_f64;
+            simple_sum = simple_sum - old_val as f64 + new_val as f64;
+            unsafe { *output.get_unchecked_mut(i) = (weighted_sum * inv_weight_sum) as f32; }
+        } else {
+            wma_f32_with_tracking(data, period, output);
+            return;
+        }
+    }
 }
 
 /// Returns the lookback period for WMA.
@@ -151,40 +457,63 @@ pub fn wma<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
     // Validate inputs
     crate::traits::validate_indicator_input(data, period, "wma")?;
 
-    // Weight sum: n + (n-1) + ... + 1 = n*(n+1)/2
+    let n = data.len();
+
+    // Optimized path for f64: uninitialized allocation + optimistic fast path
+    if TypeId::of::<T>() == TypeId::of::<f64>() {
+        let data_f64: &[f64] =
+            unsafe { std::slice::from_raw_parts(data.as_ptr() as *const f64, n) };
+
+        let mut result_vec = Vec::<f64>::with_capacity(n);
+        unsafe { result_vec.set_len(n); }
+        let result_f64 = result_vec.as_mut_slice();
+
+        wma_f64_optimistic(data_f64, period, result_f64);
+
+        return Ok(unsafe { std::mem::transmute(result_vec) });
+    }
+
+    // Optimized path for f32: uninitialized allocation + f64 accumulator
+    if TypeId::of::<T>() == TypeId::of::<f32>() {
+        let data_f32: &[f32] =
+            unsafe { std::slice::from_raw_parts(data.as_ptr() as *const f32, n) };
+
+        let mut result_vec = Vec::<f32>::with_capacity(n);
+        unsafe { result_vec.set_len(n); }
+        let result_f32 = result_vec.as_mut_slice();
+
+        wma_f32_optimistic(data_f32, period, result_f32);
+
+        return Ok(unsafe { std::mem::transmute(result_vec) });
+    }
+
+    // Generic fallback for other types
     let weight_sum = T::from_usize(period * (period + 1) / 2)?;
+    let mut result = vec![T::nan(); n];
 
-    // Initialize result vector with NaN
-    let mut result = vec![T::nan(); data.len()];
-
-    // Compute initial weighted sum for the first window
-    // Weights: oldest=1, ..., newest=period
     let mut weighted_sum = T::zero();
-    let mut simple_sum = T::zero(); // Sum of all values in window (for rolling update)
+    let mut simple_sum = T::zero();
     let mut has_nan = false;
 
     for (i, &value) in data.iter().take(period).enumerate() {
         if is_invalid(value) {
             has_nan = true;
         }
-        let weight = T::from_usize(i + 1)?; // Weight 1 for oldest, period for newest
+        let weight = T::from_usize(i + 1)?;
         weighted_sum = weighted_sum + value * weight;
         simple_sum = simple_sum + value;
     }
 
-    // Set the first valid WMA value
     if !has_nan {
         result[period - 1] = weighted_sum / weight_sum;
     }
 
-    // Rolling update for remaining elements
     let period_t = T::from_usize(period)?;
 
-    for i in period..data.len() {
+    for i in period..n {
         let new_value = data[i];
         let old_value = data[i - period];
 
-        // Check if NaN/Inf is entering or exiting the window
         let nan_entering = is_invalid(new_value);
         let nan_exiting = is_invalid(old_value);
 
@@ -193,13 +522,10 @@ pub fn wma<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
         }
 
         if has_nan {
-            // Window had NaN/Inf - check if it's clear now
             if nan_exiting && !nan_entering {
-                // The exiting value was NaN/Inf - check if window is now clean
                 has_nan = data[i - period + 1..=i].iter().any(|v| is_invalid(*v));
 
                 if !has_nan {
-                    // Window is now clean - recompute sums from scratch
                     weighted_sum = T::zero();
                     simple_sum = T::zero();
                     for (j, &val) in data[i - period + 1..=i].iter().enumerate() {
@@ -210,10 +536,6 @@ pub fn wma<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
                 }
             }
         } else {
-            // Normal rolling update (no NaN in window)
-            // Rolling formula:
-            // new_weighted_sum = weighted_sum - simple_sum + new_value * period
-            // new_simple_sum = simple_sum - old_value + new_value
             weighted_sum = weighted_sum - simple_sum + new_value * period_t;
             simple_sum = simple_sum - old_value + new_value;
         }
@@ -279,15 +601,37 @@ pub fn wma_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -
         });
     }
 
-    // Weight sum: n*(n+1)/2
+    // Optimized path for f64
+    if TypeId::of::<T>() == TypeId::of::<f64>() {
+        let data_f64: &[f64] =
+            unsafe { std::slice::from_raw_parts(data.as_ptr() as *const f64, data.len()) };
+        let output_f64: &mut [f64] =
+            unsafe { std::slice::from_raw_parts_mut(output.as_mut_ptr() as *mut f64, data.len()) };
+
+        wma_f64_optimistic(data_f64, period, output_f64);
+
+        return Ok(data.len() - period + 1);
+    }
+
+    // Optimized path for f32
+    if TypeId::of::<T>() == TypeId::of::<f32>() {
+        let data_f32: &[f32] =
+            unsafe { std::slice::from_raw_parts(data.as_ptr() as *const f32, data.len()) };
+        let output_f32: &mut [f32] =
+            unsafe { std::slice::from_raw_parts_mut(output.as_mut_ptr() as *mut f32, data.len()) };
+
+        wma_f32_optimistic(data_f32, period, output_f32);
+
+        return Ok(data.len() - period + 1);
+    }
+
+    // Generic fallback for other types
     let weight_sum = T::from_usize(period * (period + 1) / 2)?;
 
-    // Initialize lookback period with NaN
     for item in output.iter_mut().take(period - 1) {
         *item = T::nan();
     }
 
-    // Compute initial weighted sum
     let mut weighted_sum = T::zero();
     let mut simple_sum = T::zero();
     let mut has_nan = false;
@@ -301,14 +645,12 @@ pub fn wma_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -
         simple_sum = simple_sum + value;
     }
 
-    // Set first valid value
     if has_nan {
         output[period - 1] = T::nan();
     } else {
         output[period - 1] = weighted_sum / weight_sum;
     }
 
-    // Rolling update
     let period_t = T::from_usize(period)?;
 
     for i in period..data.len() {
