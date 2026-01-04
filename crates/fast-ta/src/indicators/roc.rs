@@ -207,9 +207,27 @@ pub fn roc_into<T: SeriesElement + 'static>(
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 pub fn roc<T: SeriesElement + 'static>(data: &[T], period: usize) -> Result<Vec<T>> {
-    let mut output = vec![T::nan(); data.len()];
-    roc_into(data, period, &mut output)?;
-    Ok(output)
+    use std::any::TypeId;
+
+    // Optimized allocation for f64/f32: avoid vec![T::nan(); n] initialization overhead
+    if TypeId::of::<T>() == TypeId::of::<f64>() {
+        let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
+        let mut output: Vec<f64> = Vec::with_capacity(data.len());
+        unsafe { output.set_len(data.len()); }
+        roc_into(data_f64, period, &mut output)?;
+        Ok(unsafe { std::mem::transmute(output) })
+    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
+        let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
+        let mut output: Vec<f32> = Vec::with_capacity(data.len());
+        unsafe { output.set_len(data.len()); }
+        roc_into(data_f32, period, &mut output)?;
+        Ok(unsafe { std::mem::transmute(output) })
+    } else {
+        // Generic fallback: safe initialization
+        let mut output = vec![T::nan(); data.len()];
+        roc_into(data, period, &mut output)?;
+        Ok(output)
+    }
 }
 
 // =============================================================================
@@ -325,9 +343,27 @@ pub fn rocp_into<T: SeriesElement + 'static>(
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 pub fn rocp<T: SeriesElement + 'static>(data: &[T], period: usize) -> Result<Vec<T>> {
-    let mut output = vec![T::nan(); data.len()];
-    rocp_into(data, period, &mut output)?;
-    Ok(output)
+    use std::any::TypeId;
+
+    // Optimized allocation for f64/f32: avoid vec![T::nan(); n] initialization overhead
+    if TypeId::of::<T>() == TypeId::of::<f64>() {
+        let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
+        let mut output: Vec<f64> = Vec::with_capacity(data.len());
+        unsafe { output.set_len(data.len()); }
+        rocp_into(data_f64, period, &mut output)?;
+        Ok(unsafe { std::mem::transmute(output) })
+    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
+        let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
+        let mut output: Vec<f32> = Vec::with_capacity(data.len());
+        unsafe { output.set_len(data.len()); }
+        rocp_into(data_f32, period, &mut output)?;
+        Ok(unsafe { std::mem::transmute(output) })
+    } else {
+        // Generic fallback: safe initialization
+        let mut output = vec![T::nan(); data.len()];
+        rocp_into(data, period, &mut output)?;
+        Ok(output)
+    }
 }
 
 // =============================================================================
@@ -443,9 +479,27 @@ pub fn rocr_into<T: SeriesElement + 'static>(
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 pub fn rocr<T: SeriesElement + 'static>(data: &[T], period: usize) -> Result<Vec<T>> {
-    let mut output = vec![T::nan(); data.len()];
-    rocr_into(data, period, &mut output)?;
-    Ok(output)
+    use std::any::TypeId;
+
+    // Optimized allocation for f64/f32: avoid vec![T::nan(); n] initialization overhead
+    if TypeId::of::<T>() == TypeId::of::<f64>() {
+        let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
+        let mut output: Vec<f64> = Vec::with_capacity(data.len());
+        unsafe { output.set_len(data.len()); }
+        rocr_into(data_f64, period, &mut output)?;
+        Ok(unsafe { std::mem::transmute(output) })
+    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
+        let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
+        let mut output: Vec<f32> = Vec::with_capacity(data.len());
+        unsafe { output.set_len(data.len()); }
+        rocr_into(data_f32, period, &mut output)?;
+        Ok(unsafe { std::mem::transmute(output) })
+    } else {
+        // Generic fallback: safe initialization
+        let mut output = vec![T::nan(); data.len()];
+        rocr_into(data, period, &mut output)?;
+        Ok(output)
+    }
 }
 
 // =============================================================================
@@ -562,9 +616,27 @@ pub fn rocr100_into<T: SeriesElement + 'static>(
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 pub fn rocr100<T: SeriesElement + 'static>(data: &[T], period: usize) -> Result<Vec<T>> {
-    let mut output = vec![T::nan(); data.len()];
-    rocr100_into(data, period, &mut output)?;
-    Ok(output)
+    use std::any::TypeId;
+
+    // Optimized allocation for f64/f32: avoid vec![T::nan(); n] initialization overhead
+    if TypeId::of::<T>() == TypeId::of::<f64>() {
+        let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
+        let mut output: Vec<f64> = Vec::with_capacity(data.len());
+        unsafe { output.set_len(data.len()); }
+        rocr100_into(data_f64, period, &mut output)?;
+        Ok(unsafe { std::mem::transmute(output) })
+    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
+        let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
+        let mut output: Vec<f32> = Vec::with_capacity(data.len());
+        unsafe { output.set_len(data.len()); }
+        rocr100_into(data_f32, period, &mut output)?;
+        Ok(unsafe { std::mem::transmute(output) })
+    } else {
+        // Generic fallback: safe initialization
+        let mut output = vec![T::nan(); data.len()];
+        rocr100_into(data, period, &mut output)?;
+        Ok(output)
+    }
 }
 
 #[cfg(test)]
