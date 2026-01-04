@@ -106,28 +106,313 @@ fn sma_f64_prefix_simd(data: &[f64], period: usize, output: &mut [f64]) {
     }
 }
 
-/// Check if all values in a slice are finite using SIMD.
+/// Optimized f64 SMA kernel with unchecked rolling sum (no validation).
+/// Fast path for clean data - single pass, minimal memory traffic.
 #[inline]
-fn all_finite_f64(data: &[f64]) -> bool {
-    let chunks = data.len() / LANES;
-    let remainder = data.len() % LANES;
+fn sma_f64_unchecked(data: &[f64], period: usize, output: &mut [f64]) {
+    let n = data.len();
+    let inv_period = 1.0 / period as f64;
 
-    for i in 0..chunks {
-        let offset = i * LANES;
-        let chunk = f64x4::from_slice(&data[offset..offset + LANES]);
-        if !chunk.is_finite().all() {
-            return false;
-        }
+    // Fill lookback with NaN
+    output[..period - 1].fill(f64::NAN);
+
+    // Compute initial sum
+    let mut sum = 0.0;
+    for i in 0..period {
+        sum += unsafe { *data.get_unchecked(i) };
     }
 
-    let tail_start = chunks * LANES;
-    for &value in &data[tail_start..tail_start + remainder] {
-        if !value.is_finite() {
-            return false;
-        }
+    // First output
+    unsafe { *output.get_unchecked_mut(period - 1) = sum * inv_period; }
+
+    // Rolling sum: no checks, just subtract old + add new
+    for i in period..n {
+        sum += unsafe { *data.get_unchecked(i) - *data.get_unchecked(i - period) };
+        unsafe { *output.get_unchecked_mut(i) = sum * inv_period; }
+    }
+}
+
+/// Optimized f32 SMA kernel with unchecked rolling sum (no validation).
+/// Uses f64 accumulator for better accuracy.
+#[inline]
+fn sma_f32_unchecked(data: &[f32], period: usize, output: &mut [f32]) {
+    let n = data.len();
+    let inv_period = 1.0 / period as f64;
+
+    // Fill lookback with NaN
+    output[..period - 1].fill(f32::NAN);
+
+    // Compute initial sum (use f64 for accuracy)
+    let mut sum = 0.0f64;
+    for i in 0..period {
+        sum += unsafe { *data.get_unchecked(i) as f64 };
     }
 
-    true
+    // First output
+    unsafe { *output.get_unchecked_mut(period - 1) = (sum * inv_period) as f32; }
+
+    // Rolling sum
+    for i in period..n {
+        sum += unsafe { *data.get_unchecked(i) as f64 - *data.get_unchecked(i - period) as f64 };
+        unsafe { *output.get_unchecked_mut(i) = (sum * inv_period) as f32; }
+    }
+}
+
+/// f64 SMA with ring buffer for invalid tracking (1 finiteness check per step).
+#[inline]
+fn sma_f64_with_tracking(data: &[f64], period: usize, output: &mut [f64]) {
+    let n = data.len();
+    let inv_period = 1.0 / period as f64;
+
+    // Fill lookback
+    output[..period - 1].fill(f64::NAN);
+
+    // Ring buffers for sanitized values and invalid flags
+    let mut buf = vec![0.0f64; period];
+    let mut inv = vec![0u8; period];
+
+    // Initialize first window
+    let mut sum = 0.0;
+    let mut invalid_count = 0usize;
+
+    for i in 0..period {
+        let val = data[i];
+        let is_invalid = !val.is_finite();
+
+        buf[i] = if is_invalid { 0.0 } else { val };
+        inv[i] = is_invalid as u8;
+
+        sum += buf[i];
+        invalid_count += inv[i] as usize;
+    }
+
+    // First output
+    if invalid_count == 0 {
+        output[period - 1] = sum * inv_period;
+    } else {
+        output[period - 1] = f64::NAN;
+    }
+
+    // Rolling window with ring buffer
+    for i in period..n {
+        let idx = i % period;
+
+        // Evict old value
+        sum -= buf[idx];
+        invalid_count -= inv[idx] as usize;
+
+        // Insert new value (single finiteness check)
+        let val = data[i];
+        let is_invalid = !val.is_finite();
+
+        buf[idx] = if is_invalid { 0.0 } else { val };
+        inv[idx] = is_invalid as u8;
+
+        sum += buf[idx];
+        invalid_count += inv[idx] as usize;
+
+        // Output
+        if invalid_count == 0 {
+            output[i] = sum * inv_period;
+        } else {
+            output[i] = f64::NAN;
+        }
+    }
+}
+
+/// f32 SMA with ring buffer for invalid tracking.
+#[inline]
+fn sma_f32_with_tracking(data: &[f32], period: usize, output: &mut [f32]) {
+    let n = data.len();
+    let inv_period = 1.0 / period as f64;
+
+    output[..period - 1].fill(f32::NAN);
+
+    let mut buf = vec![0.0f64; period];
+    let mut inv = vec![0u8; period];
+
+    let mut sum = 0.0f64;
+    let mut invalid_count = 0usize;
+
+    for i in 0..period {
+        let val = data[i];
+        let is_invalid = !val.is_finite();
+
+        buf[i] = if is_invalid { 0.0 } else { val as f64 };
+        inv[i] = is_invalid as u8;
+
+        sum += buf[i];
+        invalid_count += inv[i] as usize;
+    }
+
+    if invalid_count == 0 {
+        output[period - 1] = (sum * inv_period) as f32;
+    } else {
+        output[period - 1] = f32::NAN;
+    }
+
+    for i in period..n {
+        let idx = i % period;
+
+        sum -= buf[idx];
+        invalid_count -= inv[idx] as usize;
+
+        let val = data[i];
+        let is_invalid = !val.is_finite();
+
+        buf[idx] = if is_invalid { 0.0 } else { val as f64 };
+        inv[idx] = is_invalid as u8;
+
+        sum += buf[idx];
+        invalid_count += inv[idx] as usize;
+
+        if invalid_count == 0 {
+            output[i] = (sum * inv_period) as f32;
+        } else {
+            output[i] = f32::NAN;
+        }
+    }
+}
+
+/// f64 SMA with optimistic fast path that bails to tracking on first invalid.
+#[inline]
+fn sma_f64_optimistic(data: &[f64], period: usize, output: &mut [f64]) {
+    let n = data.len();
+    let inv_period = 1.0 / period as f64;
+
+    output[..period - 1].fill(f64::NAN);
+
+    // Compute initial sum - check for invalids
+    let mut sum = 0.0;
+    let mut has_invalid = false;
+
+    for i in 0..period {
+        let val = unsafe { *data.get_unchecked(i) };
+        if !val.is_finite() {
+            has_invalid = true;
+            break;
+        }
+        sum += val;
+    }
+
+    if has_invalid {
+        // Start with tracking from beginning
+        sma_f64_with_tracking(data, period, output);
+        return;
+    }
+
+    // First output
+    unsafe { *output.get_unchecked_mut(period - 1) = sum * inv_period; }
+
+    // Optimistic fast path - no old value check needed
+    // (old values guaranteed finite until we hit invalid new value)
+    for i in period..n {
+        let new_val = unsafe { *data.get_unchecked(i) };
+
+        if new_val.is_finite() {
+            sum += new_val - unsafe { *data.get_unchecked(i - period) };
+            unsafe { *output.get_unchecked_mut(i) = sum * inv_period; }
+        } else {
+            // Hit invalid - switch to tracking for remainder
+            sma_f64_with_tracking_from(data, period, output, i, sum);
+            return;
+        }
+    }
+}
+
+/// Continue SMA with tracking from a specific index.
+#[inline]
+fn sma_f64_with_tracking_from(
+    data: &[f64],
+    period: usize,
+    output: &mut [f64],
+    start_i: usize,
+    mut sum: f64,
+) {
+    let n = data.len();
+    let inv_period = 1.0 / period as f64;
+
+    // Allocate ring buffers
+    let mut buf = vec![0.0f64; period];
+    let mut inv = vec![0u8; period];
+
+    // Populate ring with the valid window before start_i
+    let mut invalid_count = 0usize;
+    for j in 0..period {
+        let idx_in_data = start_i - period + j;
+        let val = data[idx_in_data];
+        let is_invalid = !val.is_finite();
+
+        buf[j] = if is_invalid { 0.0 } else { val };
+        inv[j] = is_invalid as u8;
+        invalid_count += inv[j] as usize;
+    }
+
+    // Recompute sum from sanitized buffer
+    sum = buf.iter().sum();
+
+    // Process from start_i onward with tracking
+    for i in start_i..n {
+        let idx = i % period;
+
+        sum -= buf[idx];
+        invalid_count -= inv[idx] as usize;
+
+        let val = data[i];
+        let is_invalid = !val.is_finite();
+
+        buf[idx] = if is_invalid { 0.0 } else { val };
+        inv[idx] = is_invalid as u8;
+
+        sum += buf[idx];
+        invalid_count += inv[idx] as usize;
+
+        if invalid_count == 0 {
+            output[i] = sum * inv_period;
+        } else {
+            output[i] = f64::NAN;
+        }
+    }
+}
+
+/// f32 SMA with optimistic fast path.
+#[inline]
+fn sma_f32_optimistic(data: &[f32], period: usize, output: &mut [f32]) {
+    let n = data.len();
+    let inv_period = 1.0 / period as f64;
+
+    output[..period - 1].fill(f32::NAN);
+
+    let mut sum = 0.0f64;
+    let mut has_invalid = false;
+
+    for i in 0..period {
+        let val = unsafe { *data.get_unchecked(i) };
+        if !val.is_finite() {
+            has_invalid = true;
+            break;
+        }
+        sum += val as f64;
+    }
+
+    if has_invalid {
+        sma_f32_with_tracking(data, period, output);
+        return;
+    }
+
+    unsafe { *output.get_unchecked_mut(period - 1) = (sum * inv_period) as f32; }
+
+    for i in period..n {
+        let new_val = unsafe { *data.get_unchecked(i) };
+
+        if new_val.is_finite() {
+            sum += new_val as f64 - unsafe { *data.get_unchecked(i - period) as f64 };
+            unsafe { *output.get_unchecked_mut(i) = (sum * inv_period) as f32; }
+        } else {
+            sma_f32_with_tracking(data, period, output);
+            return;
+        }
+    }
 }
 
 /// SIMD-optimized SMA for f64 - single pass with adaptive fast path.
@@ -348,29 +633,43 @@ pub fn sma<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
     // Validate inputs
     crate::traits::validate_indicator_input(data, period, "sma")?;
 
-    let mut result = vec![T::nan(); data.len()];
+    let n = data.len();
 
-    // Use SIMD-optimized path for f64
+    // Optimized path for f64: uninitialized allocation + unchecked rolling sum
     if TypeId::of::<T>() == TypeId::of::<f64>() {
-        // SAFETY: We've verified T is f64, so these pointer casts are valid
+        // SAFETY: We've verified T is f64
         let data_f64: &[f64] =
-            unsafe { std::slice::from_raw_parts(data.as_ptr() as *const f64, data.len()) };
-        let result_f64: &mut [f64] =
-            unsafe { std::slice::from_raw_parts_mut(result.as_mut_ptr() as *mut f64, result.len()) };
+            unsafe { std::slice::from_raw_parts(data.as_ptr() as *const f64, n) };
 
-        // Use prefix-sum SIMD when all data is finite (common case)
-        // This approach vectorizes the output computation with no loop-carried dependencies
-        if all_finite_f64(data_f64) {
-            sma_f64_prefix_simd(data_f64, period, result_f64);
-        } else {
-            // Fall back to tracking-based approach for data with NaN/Inf
-            sma_f64_optimized(data_f64, period, result_f64);
-        }
+        // Allocate uninitialized (kernel writes all elements)
+        let mut result_vec = Vec::<f64>::with_capacity(n);
+        unsafe { result_vec.set_len(n); }
+        let result_f64 = result_vec.as_mut_slice();
 
-        return Ok(result);
+        // Use optimistic fast path (unchecked until first invalid)
+        // Fastest for clean data, safe for data with NaN/Inf
+        sma_f64_optimistic(data_f64, period, result_f64);
+
+        // SAFETY: We've verified T is f64, transmute back
+        return Ok(unsafe { std::mem::transmute(result_vec) });
     }
 
-    // Generic fallback for f32 and other types
+    // Optimized path for f32: uninitialized allocation + f64 accumulator
+    if TypeId::of::<T>() == TypeId::of::<f32>() {
+        let data_f32: &[f32] =
+            unsafe { std::slice::from_raw_parts(data.as_ptr() as *const f32, n) };
+
+        let mut result_vec = Vec::<f32>::with_capacity(n);
+        unsafe { result_vec.set_len(n); }
+        let result_f32 = result_vec.as_mut_slice();
+
+        sma_f32_optimistic(data_f32, period, result_f32);
+
+        return Ok(unsafe { std::mem::transmute(result_vec) });
+    }
+
+    // Generic fallback for other types (still uses initialized vec)
+    let mut result = vec![T::nan(); n];
     sma_generic(data, period, &mut result)?;
     Ok(result)
 }
@@ -476,25 +775,31 @@ pub fn sma_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -
         });
     }
 
-    // Use SIMD-optimized path for f64
+    // Optimized path for f64: unchecked rolling sum
     if TypeId::of::<T>() == TypeId::of::<f64>() {
-        // SAFETY: We've verified T is f64, so these pointer casts are valid
         let data_f64: &[f64] =
             unsafe { std::slice::from_raw_parts(data.as_ptr() as *const f64, data.len()) };
         let output_f64: &mut [f64] =
-            unsafe { std::slice::from_raw_parts_mut(output.as_mut_ptr() as *mut f64, output.len()) };
+            unsafe { std::slice::from_raw_parts_mut(output.as_mut_ptr() as *mut f64, data.len()) };
 
-        // Use prefix-sum SIMD when all data is finite (common case)
-        if all_finite_f64(data_f64) {
-            sma_f64_prefix_simd(data_f64, period, output_f64);
-        } else {
-            sma_f64_optimized(data_f64, period, output_f64);
-        }
+        sma_f64_optimistic(data_f64, period, output_f64);
 
         return Ok(data.len() - period + 1);
     }
 
-    // Generic fallback for f32 and other types
+    // Optimized path for f32
+    if TypeId::of::<T>() == TypeId::of::<f32>() {
+        let data_f32: &[f32] =
+            unsafe { std::slice::from_raw_parts(data.as_ptr() as *const f32, data.len()) };
+        let output_f32: &mut [f32] =
+            unsafe { std::slice::from_raw_parts_mut(output.as_mut_ptr() as *mut f32, data.len()) };
+
+        sma_f32_optimistic(data_f32, period, output_f32);
+
+        return Ok(data.len() - period + 1);
+    }
+
+    // Generic fallback for other types
     sma_generic_into(data, period, output)
 }
 
