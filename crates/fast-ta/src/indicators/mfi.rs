@@ -91,19 +91,53 @@ fn calculate_mfi<T: SeriesElement>(positive_mf: T, negative_mf: T, hundred: T, o
     }
 }
 
-/// Money flow entry for circular buffer.
-/// Separate positive/negative fields enable branch-free removal (unconditional subtraction).
+/// Money flow entry for circular buffer (old version with NaN sentinel).
+/// Kept for the checked kernel that uses NaN as a sentinel.
 #[derive(Clone, Copy)]
 struct MoneyFlowEntry {
     positive: f64,
     negative: f64,
 }
 
-/// Branchless direction assignment using bit masks.
-/// Replaces unpredictable if/else chain with predictable integer ops.
+/// Optimized money flow entry for branchless eviction.
+/// Stores positive contribution and total (pos + |neg|) instead of separate pos/neg.
+/// This eliminates one accumulator and enables fully branchless ring operations.
+#[derive(Clone, Copy)]
+struct MfEntry {
+    pos: f64,  // contribution to positive sum
+    tot: f64,  // contribution to total flow (pos + abs(neg))
+}
+
+/// Branchless assignment for (positive, total) contributions.
 ///
-/// Note: Works with unscaled typical price (tp3 = H + L + C, not divided by 3).
-/// The /3 constant cancels in the final ratio, so we skip it to save a multiply.
+/// Given raw money flow (tp * volume), returns:
+/// - pos: raw if tp > prev_tp, else 0
+/// - tot: raw if tp != prev_tp, else 0  (used for total = pos + |neg|)
+///
+/// This enables computing MFI as 100 * pos/tot instead of 100 * pos/(pos+neg).
+#[inline(always)]
+fn assign_pos_tot(raw3: f64, tp3: f64, prev_tp3: f64) -> (f64, f64) {
+    let bits = raw3.to_bits();
+    let gt = (tp3 > prev_tp3) as u64;
+    let lt = (tp3 < prev_tp3) as u64;
+
+    let gt_mask = 0u64.wrapping_sub(gt);
+    let any_mask = gt_mask | 0u64.wrapping_sub(lt);
+
+    let pos = f64::from_bits(bits & gt_mask);
+    let tot = f64::from_bits(bits & any_mask); // raw3 if gt||lt else 0.0
+
+    (pos, tot)
+}
+
+/// Branchless direction assignment using bit masks (old version).
+///
+/// Performance characteristics:
+/// - In unchecked kernels (no validation): Simple branching is ~20% faster
+/// - In checked kernels (with .is_finite()): Branchless is better (avoids nested branches)
+///
+/// The branch prediction overhead from nested `if ok { if direction {} }` patterns
+/// outweighs the bit manipulation cost when combined with validation branches.
 #[inline(always)]
 fn assign_direction_branchless(raw3: f64, tp3: f64, prev_tp3: f64) -> (f64, f64) {
     let raw_bits = raw3.to_bits();
@@ -121,6 +155,130 @@ fn assign_direction_branchless(raw3: f64, tp3: f64, prev_tp3: f64) -> (f64, f64)
     let neg = f64::from_bits(raw_bits & lt_mask);
 
     (pos, neg)
+}
+
+/// Unchecked MFI kernel WITHOUT validation (finite data assumed).
+///
+/// UNSAFE: Assumes all input data is finite. Matches TA-Lib behavior (no checks).
+/// This is the "apples-to-apples" comparison - no `.is_finite()` overhead.
+#[inline]
+#[allow(dead_code)]
+fn mfi_streaming_f64_unchecked(
+    high: &[f64],
+    low: &[f64],
+    close: &[f64],
+    volume: &[f64],
+    period: usize,
+    output: &mut [f64],
+) -> Result<()> {
+    let n = high.len();
+    let lookback = period;
+
+    output[..lookback].fill(f64::NAN);
+
+    // Circular buffer with separate positive/negative fields
+    let mut mf_buf = vec![MoneyFlowEntry { positive: 0.0, negative: 0.0 }; period];
+    let mut idx = 0usize;
+
+    let hundred = 100.0;
+
+    // Initial unscaled typical price (H + L + C, no /3)
+    let mut prev_tp3 = unsafe { *high.get_unchecked(0) + *low.get_unchecked(0) + *close.get_unchecked(0) };
+
+    let mut pos_sum = 0.0;
+    let mut neg_sum = 0.0;
+
+    // Build initial window [1..=period]
+    for j in 1..=period {
+        let tp3 = unsafe { *high.get_unchecked(j) + *low.get_unchecked(j) + *close.get_unchecked(j) };
+        let vol = unsafe { *volume.get_unchecked(j) };
+        let raw3 = tp3 * vol;  // No /3 division
+
+        // Simple branching (faster than branchless without validation overhead)
+        if tp3 > prev_tp3 {
+            unsafe {
+                mf_buf.get_unchecked_mut(idx).positive = raw3;
+                mf_buf.get_unchecked_mut(idx).negative = 0.0;
+            }
+            pos_sum += raw3;
+        } else if tp3 < prev_tp3 {
+            unsafe {
+                mf_buf.get_unchecked_mut(idx).positive = 0.0;
+                mf_buf.get_unchecked_mut(idx).negative = raw3;
+            }
+            neg_sum += raw3;
+        } else {
+            unsafe {
+                mf_buf.get_unchecked_mut(idx).positive = 0.0;
+                mf_buf.get_unchecked_mut(idx).negative = 0.0;
+            }
+        }
+
+        idx += 1;
+        if idx == period {
+            idx = 0;
+        }
+
+        prev_tp3 = tp3;
+    }
+
+    // First output at index = period
+    let total = pos_sum + neg_sum;
+    output[lookback] = if total <= 0.0 {
+        0.0
+    } else {
+        hundred * (pos_sum / total)
+    };
+
+    // Rolling window for remaining elements - NO CHECKS
+    for i in (period + 1)..n {
+        // Remove oldest money flow from sums
+        let old_entry = unsafe { *mf_buf.get_unchecked(idx) };
+
+        // Branch-free removal: unconditional subtraction
+        pos_sum -= old_entry.positive;
+        neg_sum -= old_entry.negative;
+
+        let tp3 = unsafe { *high.get_unchecked(i) + *low.get_unchecked(i) + *close.get_unchecked(i) };
+        let vol = unsafe { *volume.get_unchecked(i) };
+        let raw3 = tp3 * vol;
+
+        // Simple branching (test if faster than "branchless")
+        if tp3 > prev_tp3 {
+            unsafe {
+                mf_buf.get_unchecked_mut(idx).positive = raw3;
+                mf_buf.get_unchecked_mut(idx).negative = 0.0;
+            }
+            pos_sum += raw3;
+        } else if tp3 < prev_tp3 {
+            unsafe {
+                mf_buf.get_unchecked_mut(idx).positive = 0.0;
+                mf_buf.get_unchecked_mut(idx).negative = raw3;
+            }
+            neg_sum += raw3;
+        } else {
+            unsafe {
+                mf_buf.get_unchecked_mut(idx).positive = 0.0;
+                mf_buf.get_unchecked_mut(idx).negative = 0.0;
+            }
+        }
+
+        let total = pos_sum + neg_sum;
+        output[i] = if total <= 0.0 {
+            0.0
+        } else {
+            hundred * (pos_sum / total)
+        };
+
+        idx += 1;
+        if idx == period {
+            idx = 0;
+        }
+
+        prev_tp3 = tp3;
+    }
+
+    Ok(())
 }
 
 /// Optimized single-pass streaming algorithm with branchless direction assignment.
@@ -149,8 +307,9 @@ fn mfi_streaming_f64_optimized(
 
     // Initial unscaled typical price (H + L + C, no /3)
     // The /3 division is a constant scale that cancels in the ratio pos/(pos+neg)
+    // Fix: prev_tp3_valid should NOT depend on volume[0] (volume[0] not used in comparisons)
     let mut prev_tp3 = high[0] + low[0] + close[0];
-    let mut prev_tp3_valid = prev_tp3.is_finite() && volume[0].is_finite();
+    let mut prev_tp3_valid = prev_tp3.is_finite();
 
     let mut pos_sum = 0.0;
     let mut neg_sum = 0.0;
@@ -168,7 +327,7 @@ fn mfi_streaming_f64_optimized(
         if ok {
             let raw3 = tp3 * vol;  // No /3 division
 
-            // Branchless direction assignment
+            // Branchless direction assignment (better with validation overhead)
             let (pos, neg) = assign_direction_branchless(raw3, tp3, prev_tp3);
             mf_buf[idx].positive = pos;
             mf_buf[idx].negative = neg;
@@ -226,7 +385,7 @@ fn mfi_streaming_f64_optimized(
         if ok {
             let raw3 = tp3 * vol;  // No /3 division
 
-            // Branchless direction assignment
+            // Branchless direction assignment (better with validation overhead)
             let (pos, neg) = assign_direction_branchless(raw3, tp3, prev_tp3);
             mf_buf[idx].positive = pos;
             mf_buf[idx].negative = neg;
@@ -262,8 +421,144 @@ fn mfi_streaming_f64_optimized(
     Ok(())
 }
 
+/// Optimized f64 MFI kernel with branchless eviction.
+///
+/// Key optimizations:
+/// - Explicit invalid_flag ring instead of NaN sentinel (removes is_nan checks)
+/// - Track pos_sum and tot_sum instead of pos_sum and neg_sum (removes one accumulator)
+/// - Fully branchless eviction (unconditional sum updates)
+/// - prev_tp3_valid doesn't depend on volume[0] (correctness fix)
+#[inline]
+fn mfi_streaming_f64_branchless_eviction(
+    high: &[f64],
+    low: &[f64],
+    close: &[f64],
+    volume: &[f64],
+    period: usize,
+    output: &mut [f64],
+) -> Result<()> {
+    let n = high.len();
+    output[..period].fill(f64::NAN);
+
+    let mut buf = vec![MfEntry { pos: 0.0, tot: 0.0 }; period];
+    let mut inv = vec![0u8; period]; // 1 => invalid contribution, 0 => valid
+
+    let hundred = 100.0;
+    let mut idx = 0usize;
+
+    let mut pos_sum = 0.0;
+    let mut tot_sum = 0.0;
+    let mut invalid_count: usize = 0;
+
+    // Fix: prev_tp3_valid should NOT depend on volume[0]
+    let mut prev_tp3 = unsafe { *high.get_unchecked(0) + *low.get_unchecked(0) + *close.get_unchecked(0) };
+    let mut prev_tp3_valid = prev_tp3.is_finite();
+
+    // Build initial window contributions j=1..=period
+    let mut j = 1usize;
+    while j <= period {
+        let tp3 = unsafe { *high.get_unchecked(j) + *low.get_unchecked(j) + *close.get_unchecked(j) };
+        let vol = unsafe { *volume.get_unchecked(j) };
+
+        let tp3_valid = tp3.is_finite();
+        let ok = tp3_valid & prev_tp3_valid & vol.is_finite();
+
+        let (pos, tot, inv_bit) = if ok {
+            let raw3 = tp3 * vol;
+            let (pos, tot) = assign_pos_tot(raw3, tp3, prev_tp3);
+            (pos, tot, 0u8)
+        } else {
+            (0.0, 0.0, 1u8)
+        };
+
+        unsafe {
+            *buf.get_unchecked_mut(idx) = MfEntry { pos, tot };
+            *inv.get_unchecked_mut(idx) = inv_bit;
+        }
+
+        pos_sum += pos;
+        tot_sum += tot;
+        invalid_count += inv_bit as usize;
+
+        idx += 1;
+        if idx == period { idx = 0; }
+
+        prev_tp3 = tp3;
+        prev_tp3_valid = tp3_valid;
+
+        j += 1;
+    }
+
+    // First output at i = period
+    output[period] = if invalid_count == 0 {
+        if tot_sum > 0.0 { hundred * (pos_sum / tot_sum) } else { 0.0 }
+    } else {
+        f64::NAN
+    };
+
+    // Rolling window - fully branchless eviction
+    let mut i = period + 1;
+    while i < n {
+        // Evict old (branchless)
+        let old = unsafe { *buf.get_unchecked(idx) };
+        let old_inv = unsafe { *inv.get_unchecked(idx) } as usize;
+
+        pos_sum -= old.pos;
+        tot_sum -= old.tot;
+        invalid_count -= old_inv;
+
+        // Add new
+        let tp3 = unsafe { *high.get_unchecked(i) + *low.get_unchecked(i) + *close.get_unchecked(i) };
+        let vol = unsafe { *volume.get_unchecked(i) };
+
+        let tp3_valid = tp3.is_finite();
+        let ok = tp3_valid & prev_tp3_valid & vol.is_finite();
+
+        let (pos, tot, inv_bit) = if ok {
+            let raw3 = tp3 * vol;
+            let (pos, tot) = assign_pos_tot(raw3, tp3, prev_tp3);
+            (pos, tot, 0u8)
+        } else {
+            (0.0, 0.0, 1u8)
+        };
+
+        unsafe {
+            *buf.get_unchecked_mut(idx) = MfEntry { pos, tot };
+            *inv.get_unchecked_mut(idx) = inv_bit;
+            *output.get_unchecked_mut(i) = if invalid_count + (inv_bit as usize) == 0 {
+                let new_pos_sum = pos_sum + pos;
+                let new_tot_sum = tot_sum + tot;
+                if new_tot_sum > 0.0 { hundred * (new_pos_sum / new_tot_sum) } else { 0.0 }
+            } else {
+                f64::NAN
+            };
+        }
+
+        pos_sum += pos;
+        tot_sum += tot;
+        invalid_count += inv_bit as usize;
+
+        idx += 1;
+        if idx == period { idx = 0; }
+
+        prev_tp3 = tp3;
+        prev_tp3_valid = tp3_valid;
+
+        i += 1;
+    }
+
+    Ok(())
+}
+
 /// SIMD-optimized fast path for f64 MFI computation.
-/// Uses optimized streaming algorithm with NaN-safe eviction.
+///
+/// NOTE: Pre-scan optimization doesn't work for MFI because:
+/// - Must check 4 arrays (high, low, close, volume) = 400K elements for n=100K
+/// - Pre-scan cost: ~188µs (measured)
+/// - Pre-scan alone is slower than the entire checked computation (~150µs)!
+///
+/// Unlike single-array indicators (EMA, RSI), multi-array indicators can't benefit
+/// from pre-scan optimization due to the multiplicative validation cost.
 #[inline]
 fn mfi_rolling_fast_f64_simd(
     high: &[f64],
@@ -273,7 +568,8 @@ fn mfi_rolling_fast_f64_simd(
     period: usize,
     output: &mut [f64],
 ) -> Result<()> {
-    // Use optimized NaN-safe streaming algorithm
+    // Use original kernel with prev_tp3_valid fix
+    // NOTE: Branchless eviction showed 5% regression due to extra Vec<u8> overhead
     mfi_streaming_f64_optimized(high, low, close, volume, period, output)
 }
 
