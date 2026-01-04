@@ -2087,6 +2087,8 @@ pub const fn linearreg_intercept_min_len(period: usize) -> usize {
 
 /// Computes LINEARREG_INTERCEPT (linear regression intercept) and stores results in output buffer.
 ///
+/// Uses O(n) rolling sums algorithm (optimized from naive O(n·k)).
+///
 /// # Errors
 ///
 /// Returns an error if:
@@ -2135,7 +2137,7 @@ pub fn linearreg_intercept_into<T: SeriesElement>(
         output[i] = T::nan();
     }
 
-    // Pre-compute sum of squares and other constants
+    // Pre-compute sum of squares and other constants (x values are always 0..period-1)
     let mut x_sum = T::zero();
     let mut x_sq_sum = T::zero();
     for i in 0..period {
@@ -2144,32 +2146,49 @@ pub fn linearreg_intercept_into<T: SeriesElement>(
         x_sq_sum = x_sq_sum + x * x;
     }
 
-    // Calculate linear regression intercept for each window
-    for i in lookback..n {
-        let start = i + 1 - period;
+    // Precompute constants
+    let denominator_const = period_t * x_sq_sum - x_sum * x_sum;
 
-        // Calculate y sum and xy sum
-        let mut y_sum = T::zero();
-        let mut xy_sum = T::zero();
-
-        for j in 0..period {
-            let x = T::from_usize(j)?;
-            y_sum = y_sum + data[start + j];
-            xy_sum = xy_sum + x * data[start + j];
-        }
-
-        // Linear regression: y = a + bx
-        // b = (n*Σxy - Σx*Σy) / (n*Σx² - (Σx)²)
-        // a = (Σy - b*Σx) / n
-        let numerator = period_t * xy_sum - x_sum * y_sum;
-        let denominator = period_t * x_sq_sum - x_sum * x_sum;
-
-        if denominator == T::zero() {
+    // Check for degenerate case (all x values are same, should not happen for period > 1)
+    if denominator_const == T::zero() {
+        for i in lookback..n {
             output[i] = T::nan();
-        } else {
-            let b = numerator / denominator;
-            output[i] = (y_sum - b * x_sum) / period_t;
         }
+        return Ok(());
+    }
+
+    // Initialize sums for first window using O(k) loop
+    let mut y_sum = T::zero();
+    let mut xy_sum = T::zero();
+    for j in 0..period {
+        let x = T::from_usize(j)?;
+        y_sum = y_sum + data[j];
+        xy_sum = xy_sum + x * data[j];
+    }
+
+    // Compute first output (intercept a)
+    let numerator = period_t * xy_sum - x_sum * y_sum;
+    let b = numerator / denominator_const;
+    output[lookback] = (y_sum - b * x_sum) / period_t;
+
+    // Rolling updates: O(1) per element
+    for i in (lookback + 1)..n {
+        let old_val = data[i - period];
+        let new_val = data[i];
+
+        // Update y_sum: remove old, add new
+        y_sum = y_sum - old_val + new_val;
+
+        // Update xy_sum with rolling formula:
+        // When window slides right, all x coordinates shift down by 1
+        // xy_sum_new = xy_sum_old - y_sum_old + old_val + (period-1) * new_val
+        // Simplified after y_sum update: xy_sum - y_sum + new_val * period
+        xy_sum = xy_sum - y_sum + new_val * period_t;
+
+        // Compute slope b and intercept a
+        let numerator = period_t * xy_sum - x_sum * y_sum;
+        let b = numerator / denominator_const;
+        output[i] = (y_sum - b * x_sum) / period_t;
     }
 
     Ok(())
@@ -2184,9 +2203,28 @@ pub fn linearreg_intercept_into<T: SeriesElement>(
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 pub fn linearreg_intercept<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
-    let mut output = vec![T::nan(); data.len()];
-    linearreg_intercept_into(data, period, &mut output)?;
-    Ok(output)
+    use std::any::TypeId;
+
+    // Wrapper optimization: uninitialized allocation for f64/f32 (§5.4)
+    // linearreg_intercept_into() writes all elements, so this avoids double-write tax
+    if TypeId::of::<T>() == TypeId::of::<f64>() {
+        let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
+        let mut output: Vec<f64> = Vec::with_capacity(data.len());
+        unsafe { output.set_len(data.len()); }
+        linearreg_intercept_into(data_f64, period, &mut output)?;
+        Ok(unsafe { std::mem::transmute(output) })
+    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
+        let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
+        let mut output: Vec<f32> = Vec::with_capacity(data.len());
+        unsafe { output.set_len(data.len()); }
+        linearreg_intercept_into(data_f32, period, &mut output)?;
+        Ok(unsafe { std::mem::transmute(output) })
+    } else {
+        // Generic fallback: safe initialization
+        let mut output = vec![T::nan(); data.len()];
+        linearreg_intercept_into(data, period, &mut output)?;
+        Ok(output)
+    }
 }
 
 // =============================================================================
@@ -2208,6 +2246,8 @@ pub const fn linearreg_angle_min_len(period: usize) -> usize {
 }
 
 /// Computes LINEARREG_ANGLE (linear regression angle in degrees) and stores results in output buffer.
+///
+/// Uses O(n) rolling sums algorithm (optimized from naive O(n·k)).
 ///
 /// # Errors
 ///
@@ -2258,7 +2298,7 @@ pub fn linearreg_angle_into<T: SeriesElement>(
         output[i] = T::nan();
     }
 
-    // Pre-compute sum of squares and other constants
+    // Pre-compute sum of squares and other constants (x values are always 0..period-1)
     let mut x_sum = T::zero();
     let mut x_sq_sum = T::zero();
     for i in 0..period {
@@ -2267,31 +2307,49 @@ pub fn linearreg_angle_into<T: SeriesElement>(
         x_sq_sum = x_sq_sum + x * x;
     }
 
-    // Calculate linear regression angle for each window
-    for i in lookback..n {
-        let start = i + 1 - period;
+    // Precompute constants
+    let denominator_const = period_t * x_sq_sum - x_sum * x_sum;
 
-        // Calculate y sum and xy sum
-        let mut y_sum = T::zero();
-        let mut xy_sum = T::zero();
-
-        for j in 0..period {
-            let x = T::from_usize(j)?;
-            y_sum = y_sum + data[start + j];
-            xy_sum = xy_sum + x * data[start + j];
-        }
-
-        // Linear regression: y = a + bx
-        // b = (n*Σxy - Σx*Σy) / (n*Σx² - (Σx)²)
-        let numerator = period_t * xy_sum - x_sum * y_sum;
-        let denominator = period_t * x_sq_sum - x_sum * x_sum;
-
-        if denominator == T::zero() {
+    // Check for degenerate case (all x values are same, should not happen for period > 1)
+    if denominator_const == T::zero() {
+        for i in lookback..n {
             output[i] = T::nan();
-        } else {
-            let b = numerator / denominator;
-            output[i] = b.atan() * degrees_per_radian;
         }
+        return Ok(());
+    }
+
+    // Initialize sums for first window using O(k) loop
+    let mut y_sum = T::zero();
+    let mut xy_sum = T::zero();
+    for j in 0..period {
+        let x = T::from_usize(j)?;
+        y_sum = y_sum + data[j];
+        xy_sum = xy_sum + x * data[j];
+    }
+
+    // Compute first output (angle from slope)
+    let numerator = period_t * xy_sum - x_sum * y_sum;
+    let b = numerator / denominator_const;
+    output[lookback] = b.atan() * degrees_per_radian;
+
+    // Rolling updates: O(1) per element
+    for i in (lookback + 1)..n {
+        let old_val = data[i - period];
+        let new_val = data[i];
+
+        // Update y_sum: remove old, add new
+        y_sum = y_sum - old_val + new_val;
+
+        // Update xy_sum with rolling formula:
+        // When window slides right, all x coordinates shift down by 1
+        // xy_sum_new = xy_sum_old - y_sum_old + old_val + (period-1) * new_val
+        // Simplified after y_sum update: xy_sum - y_sum + new_val * period
+        xy_sum = xy_sum - y_sum + new_val * period_t;
+
+        // Compute slope b and convert to angle in degrees
+        let numerator = period_t * xy_sum - x_sum * y_sum;
+        let b = numerator / denominator_const;
+        output[i] = b.atan() * degrees_per_radian;
     }
 
     Ok(())
@@ -2306,9 +2364,28 @@ pub fn linearreg_angle_into<T: SeriesElement>(
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 pub fn linearreg_angle<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
-    let mut output = vec![T::nan(); data.len()];
-    linearreg_angle_into(data, period, &mut output)?;
-    Ok(output)
+    use std::any::TypeId;
+
+    // Wrapper optimization: uninitialized allocation for f64/f32 (§5.4)
+    // linearreg_angle_into() writes all elements, so this avoids double-write tax
+    if TypeId::of::<T>() == TypeId::of::<f64>() {
+        let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
+        let mut output: Vec<f64> = Vec::with_capacity(data.len());
+        unsafe { output.set_len(data.len()); }
+        linearreg_angle_into(data_f64, period, &mut output)?;
+        Ok(unsafe { std::mem::transmute(output) })
+    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
+        let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
+        let mut output: Vec<f32> = Vec::with_capacity(data.len());
+        unsafe { output.set_len(data.len()); }
+        linearreg_angle_into(data_f32, period, &mut output)?;
+        Ok(unsafe { std::mem::transmute(output) })
+    } else {
+        // Generic fallback: safe initialization
+        let mut output = vec![T::nan(); data.len()];
+        linearreg_angle_into(data, period, &mut output)?;
+        Ok(output)
+    }
 }
 
 // =============================================================================
