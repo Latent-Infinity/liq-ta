@@ -427,7 +427,7 @@ fn compute_adx_core<T: SeriesElement>(
 ) -> Result<()> {
     let n = high.len();
     let period_t = T::from_usize(period)?;
-    let period_minus_one_t = T::from_usize(period - 1)?;
+    let alpha = T::one() / period_t; // Wilder smoothing factor (1/period) for difference form
     let hundred = T::hundred();
 
     // Step 1: Calculate initial sum of TR, +DM, -DM for the first period
@@ -510,11 +510,11 @@ fn compute_adx_core<T: SeriesElement>(
             continue;
         }
 
-        // Wilder smoothing: smoothed = (prev * (period-1) + current) / period
-        // Correct formula prevents value accumulation bug
-        smoothed_tr = (smoothed_tr * period_minus_one_t + tr) / period_t;
-        smoothed_plus_dm = (smoothed_plus_dm * period_minus_one_t + plus_dm) / period_t;
-        smoothed_minus_dm = (smoothed_minus_dm * period_minus_one_t + minus_dm) / period_t;
+        // Wilder smoothing using difference form (section 5.3)
+        // Reduces critical path latency by eliminating divisions
+        smoothed_tr = (tr - smoothed_tr).mul_add(alpha, smoothed_tr);
+        smoothed_plus_dm = (plus_dm - smoothed_plus_dm).mul_add(alpha, smoothed_plus_dm);
+        smoothed_minus_dm = (minus_dm - smoothed_minus_dm).mul_add(alpha, smoothed_minus_dm);
 
         // Calculate current +DI and -DI
         let plus_di = if smoothed_tr > T::zero() {
@@ -569,10 +569,10 @@ fn compute_adx_core<T: SeriesElement>(
             continue;
         }
 
-        // Wilder smoothing for TR, +DM, -DM
-        smoothed_tr = (smoothed_tr * period_minus_one_t + tr) / period_t;
-        smoothed_plus_dm = (smoothed_plus_dm * period_minus_one_t + plus_dm) / period_t;
-        smoothed_minus_dm = (smoothed_minus_dm * period_minus_one_t + minus_dm) / period_t;
+        // Wilder smoothing using difference form (section 5.3)
+        smoothed_tr = (tr - smoothed_tr).mul_add(alpha, smoothed_tr);
+        smoothed_plus_dm = (plus_dm - smoothed_plus_dm).mul_add(alpha, smoothed_plus_dm);
+        smoothed_minus_dm = (minus_dm - smoothed_minus_dm).mul_add(alpha, smoothed_minus_dm);
 
         // Calculate current +DI and -DI
         let plus_di = if smoothed_tr > T::zero() {
@@ -598,8 +598,8 @@ fn compute_adx_core<T: SeriesElement>(
             T::zero()
         };
 
-        // Wilder smoothing for ADX
-        let adx_val = (prev_adx * period_minus_one_t + dx) / period_t;
+        // Wilder smoothing for ADX using difference form (section 5.3)
+        let adx_val = (dx - prev_adx).mul_add(alpha, prev_adx);
         adx_out[i] = adx_val;
         prev_adx = adx_val;
     }

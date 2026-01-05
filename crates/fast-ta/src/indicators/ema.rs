@@ -485,10 +485,11 @@ fn ema_core_f64_unchecked(data: &[f64], period: usize, alpha: f64, output: &mut 
     }
 }
 
-/// f64-specialized EMA kernel using portable formula (no mul_add).
+/// f64-specialized EMA kernel using difference form for minimal critical path latency.
 ///
-/// Uses `ema = ema*beta + x*alpha` which has better ILP than difference form
-/// on targets without FMA (the multiply operations are independent).
+/// Uses `ema = (x - ema).mul_add(alpha, ema)` which reduces critical path
+/// from ~7-9 cycles (standard form) to ~5-6 cycles (difference form).
+/// See optimization-approaches.md section 5.3 for analysis.
 #[inline]
 fn ema_core_f64(data: &[f64], period: usize, alpha: f64, output: &mut [f64]) {
     let n = data.len();
@@ -501,9 +502,6 @@ fn ema_core_f64(data: &[f64], period: usize, alpha: f64, output: &mut [f64]) {
 
     // Always initialize NaN prefix (fixes UB)
     output[..period - 1].fill(f64::NAN);
-
-    // Compute beta = 1 - alpha once (portable form needs both)
-    let beta = 1.0 - alpha;
 
     // Compute SMA seed
     let mut sum = 0.0_f64;
@@ -520,7 +518,7 @@ fn ema_core_f64(data: &[f64], period: usize, alpha: f64, output: &mut [f64]) {
     let mut ema = sum / (period as f64);
     output[period - 1] = ema;
 
-    // Hot loop: portable form with cold branch for rare invalid values
+    // Hot loop: difference form for minimal critical path latency
     let mut i = period;
     while i < n {
         let x = unsafe { *data.get_unchecked(i) };
@@ -532,15 +530,15 @@ fn ema_core_f64(data: &[f64], period: usize, alpha: f64, output: &mut [f64]) {
             return;
         }
 
-        // Hot path: portable form (better ILP without FMA)
-        // ema*beta and x*alpha can execute in parallel
-        ema = ema * beta + x * alpha;
+        // Hot path: difference form (section 5.3)
+        // Critical path: SUB(x - ema) → FMA((x-ema)*alpha + ema) = ~5-6 cycles
+        ema = (x - ema).mul_add(alpha, ema);
         unsafe { *output.get_unchecked_mut(i) = ema; }
         i += 1;
     }
 }
 
-/// f32-specialized EMA kernel using portable formula (no mul_add).
+/// f32-specialized EMA kernel using difference form for minimal critical path latency.
 #[inline]
 fn ema_core_f32(data: &[f32], period: usize, alpha: f32, output: &mut [f32]) {
     let n = data.len();
@@ -551,8 +549,6 @@ fn ema_core_f32(data: &[f32], period: usize, alpha: f32, output: &mut [f32]) {
     }
 
     output[..period - 1].fill(f32::NAN);
-
-    let beta = 1.0 - alpha;
 
     let mut sum = 0.0_f32;
     for i in 0..period {
@@ -577,7 +573,8 @@ fn ema_core_f32(data: &[f32], period: usize, alpha: f32, output: &mut [f32]) {
             return;
         }
 
-        ema = ema * beta + x * alpha;
+        // Hot path: difference form (section 5.3)
+        ema = (x - ema).mul_add(alpha, ema);
         unsafe { *output.get_unchecked_mut(i) = ema; }
         i += 1;
     }

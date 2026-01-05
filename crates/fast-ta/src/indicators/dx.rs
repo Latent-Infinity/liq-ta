@@ -273,6 +273,7 @@ pub fn dx_into<T: SeriesElement>(
 
     let period_t = T::from_usize(period)?;
     let hundred = T::hundred();
+    let alpha = T::one() / period_t; // Wilder smoothing factor (1/period) for difference form
 
     // Fill lookback with NaN using efficient slice.fill()
     output[..period].fill(T::nan());
@@ -333,11 +334,12 @@ pub fn dx_into<T: SeriesElement>(
         let (plus_dm, minus_dm) =
             compute_directional_movement(high[i], high[i - 1], low[i], low[i - 1]);
 
-        // Wilder smoothing: smoothed = prev - prev/period + current
+        // Wilder smoothing using difference form (section 5.3)
+        // Reduces critical path latency compared to standard form
         // IEEE 754: NaN propagates through arithmetic operations
-        smoothed_tr = smoothed_tr - smoothed_tr / period_t + tr;
-        smoothed_plus_dm = smoothed_plus_dm - smoothed_plus_dm / period_t + plus_dm;
-        smoothed_minus_dm = smoothed_minus_dm - smoothed_minus_dm / period_t + minus_dm;
+        smoothed_tr = (tr - smoothed_tr).mul_add(alpha, smoothed_tr);
+        smoothed_plus_dm = (plus_dm - smoothed_plus_dm).mul_add(alpha, smoothed_plus_dm);
+        smoothed_minus_dm = (minus_dm - smoothed_minus_dm).mul_add(alpha, smoothed_minus_dm);
 
         // Compute DI values with explicit NaN handling
         let plus_di = if smoothed_tr.is_finite() && smoothed_tr > T::zero() {
@@ -463,6 +465,7 @@ pub fn plus_dm_into<T: SeriesElement>(
     }
 
     let period_t = T::from_usize(period)?;
+    let alpha = T::one() / period_t; // Wilder smoothing factor for difference form
 
     // Fill lookback with NaN using efficient slice.fill()
     output[..period].fill(T::nan());
@@ -508,9 +511,9 @@ pub fn plus_dm_into<T: SeriesElement>(
             T::nan()
         };
 
-        // Wilder smoothing: smoothed = prev - prev/period + current
+        // Wilder smoothing using difference form (section 5.3)
         // IEEE 754: if smoothed_plus_dm is NaN or plus_dm is NaN, result is NaN
-        smoothed_plus_dm = smoothed_plus_dm - smoothed_plus_dm / period_t + plus_dm;
+        smoothed_plus_dm = (plus_dm - smoothed_plus_dm).mul_add(alpha, smoothed_plus_dm);
         output[i] = smoothed_plus_dm;
     }
 
@@ -585,6 +588,7 @@ pub fn minus_dm_into<T: SeriesElement>(
     }
 
     let period_t = T::from_usize(period)?;
+    let alpha = T::one() / period_t; // Wilder smoothing factor for difference form
 
     // Fill lookback with NaN using efficient slice.fill()
     output[..period].fill(T::nan());
@@ -630,9 +634,9 @@ pub fn minus_dm_into<T: SeriesElement>(
             T::nan()
         };
 
-        // Wilder smoothing: smoothed = prev - prev/period + current
+        // Wilder smoothing using difference form (section 5.3)
         // IEEE 754: if smoothed_minus_dm is NaN or minus_dm is NaN, result is NaN
-        smoothed_minus_dm = smoothed_minus_dm - smoothed_minus_dm / period_t + minus_dm;
+        smoothed_minus_dm = (minus_dm - smoothed_minus_dm).mul_add(alpha, smoothed_minus_dm);
         output[i] = smoothed_minus_dm;
     }
 
