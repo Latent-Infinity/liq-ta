@@ -710,9 +710,28 @@ pub fn stddev_into<T: SeriesElement + 'static>(
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 pub fn stddev<T: SeriesElement + 'static>(data: &[T], period: usize) -> Result<Vec<T>> {
-    let mut output = vec![T::nan(); data.len()];
-    stddev_into(data, period, &mut output)?;
-    Ok(output)
+    use std::any::TypeId;
+
+    // Wrapper optimization: uninitialized allocation for f64/f32 (§5.4)
+    // stddev_into() writes all elements (via var_into()), so this avoids double-write tax
+    if TypeId::of::<T>() == TypeId::of::<f64>() {
+        let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
+        let mut output: Vec<f64> = Vec::with_capacity(data.len());
+        unsafe { output.set_len(data.len()); }
+        stddev_into(data_f64, period, &mut output)?;
+        Ok(unsafe { std::mem::transmute(output) })
+    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
+        let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
+        let mut output: Vec<f32> = Vec::with_capacity(data.len());
+        unsafe { output.set_len(data.len()); }
+        stddev_into(data_f32, period, &mut output)?;
+        Ok(unsafe { std::mem::transmute(output) })
+    } else {
+        // Generic fallback: safe initialization
+        let mut output = vec![T::nan(); data.len()];
+        stddev_into(data, period, &mut output)?;
+        Ok(output)
+    }
 }
 
 // =============================================================================
@@ -1192,27 +1211,41 @@ pub fn zscore_into<T: SeriesElement>(
         output[i] = T::nan();
     }
 
-    // Calculate z-score for each window
-    for i in lookback..n {
-        let start = i + 1 - period;
+    // Initialize rolling sums for the first window
+    let mut sum = T::zero();
+    let mut sum_sq = T::zero();
+    for j in 0..period {
+        let val = data[j];
+        sum = sum + val;
+        sum_sq = sum_sq + val * val;
+    }
 
-        // Calculate mean
-        let mut sum = T::zero();
-        for j in start..=i {
-            sum = sum + data[j];
-        }
+    // Calculate z-score for the first valid position
+    let mean = sum / period_t;
+    let variance = (sum_sq / period_t) - (mean * mean);
+
+    if variance == T::zero() {
+        output[lookback] = T::nan();
+    } else {
+        let stddev = variance.sqrt();
+        output[lookback] = (data[lookback] - mean) / stddev;
+    }
+
+    // Rolling updates for remaining positions
+    for i in (lookback + 1)..n {
+        let old_val = data[i - period];
+        let new_val = data[i];
+
+        // Update rolling sums
+        sum = sum - old_val + new_val;
+        sum_sq = sum_sq - (old_val * old_val) + (new_val * new_val);
+
+        // Calculate mean and variance
         let mean = sum / period_t;
-
-        // Calculate variance
-        let mut var_sum = T::zero();
-        for j in start..=i {
-            let diff = data[j] - mean;
-            var_sum = var_sum + diff * diff;
-        }
-        let variance = var_sum / period_t;
+        let variance = (sum_sq / period_t) - (mean * mean);
 
         if variance == T::zero() {
-            output[i] = T::nan(); // Undefined for zero variance
+            output[i] = T::nan();
         } else {
             let stddev = variance.sqrt();
             output[i] = (data[i] - mean) / stddev;
@@ -1230,10 +1263,26 @@ pub fn zscore_into<T: SeriesElement>(
 /// - The input data is empty (`Error::EmptyInput`)
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
-pub fn zscore<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
-    let mut output = vec![T::nan(); data.len()];
-    zscore_into(data, period, &mut output)?;
-    Ok(output)
+pub fn zscore<T: SeriesElement + 'static>(data: &[T], period: usize) -> Result<Vec<T>> {
+    use std::any::TypeId;
+
+    if TypeId::of::<T>() == TypeId::of::<f64>() {
+        let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
+        let mut output: Vec<f64> = Vec::with_capacity(data.len());
+        unsafe { output.set_len(data.len()); }
+        zscore_into(data_f64, period, &mut output)?;
+        Ok(unsafe { std::mem::transmute(output) })
+    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
+        let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
+        let mut output: Vec<f32> = Vec::with_capacity(data.len());
+        unsafe { output.set_len(data.len()); }
+        zscore_into(data_f32, period, &mut output)?;
+        Ok(unsafe { std::mem::transmute(output) })
+    } else {
+        let mut output = vec![T::nan(); data.len()];
+        zscore_into(data, period, &mut output)?;
+        Ok(output)
+    }
 }
 
 // =============================================================================

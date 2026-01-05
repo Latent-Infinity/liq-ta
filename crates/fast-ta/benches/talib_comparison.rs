@@ -33,7 +33,8 @@ type OhlcvData = (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>);
 use ta_lib_sys::{
     MAType, AD, ADX, APO, AROON, ATR, BBANDS, BOP, CCI, CMO, DEMA, DX, EMA, KAMA, LINEARREG,
     LINEARREG_ANGLE, LINEARREG_INTERCEPT, LINEARREG_SLOPE, MACD, MFI, MIDPOINT, MIDPRICE, MOM, OBV,
-    ROC, RSI, SMA, STOCH, STOCHF, T3, TEMA, TRANGE, TRIMA, TRIX, TSF, ULTOSC, VAR, WILLR, WMA,
+    ROC, RSI, SMA, STDDEV, STOCH, STOCHF, T3, TEMA, TRANGE, TRIMA, TRIX, TSF, ULTOSC, VAR, WILLR,
+    WMA,
 };
 
 // fast-ta indicators
@@ -61,7 +62,7 @@ use fast_ta::indicators::{
     rsi::rsi,
     sma::sma,
     stochastic::{stochastic, stochastic_fast},
-    statistics::{linearreg, linearreg_angle, linearreg_intercept, linearreg_slope, tsf, var},
+    statistics::{linearreg, linearreg_angle, linearreg_intercept, linearreg_slope, stddev, tsf, var, zscore},
     t3::t3,
     tema::tema,
     trima::trima,
@@ -1493,6 +1494,57 @@ fn bench_var(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_stddev(c: &mut Criterion) {
+    let mut group = c.benchmark_group("stddev");
+    let period: i32 = 14;
+
+    for &size in SIZES {
+        let data = generate_close_prices(size);
+        group.throughput(Throughput::Elements(size as u64));
+
+        group.bench_with_input(BenchmarkId::new("fast-ta", size), &data, |b, data| {
+            b.iter(|| stddev(black_box(data), black_box(period as usize)));
+        });
+
+        group.bench_with_input(BenchmarkId::new("ta-lib", size), &data, |b, data| {
+            b.iter(|| {
+                let mut out_begin: i32 = 0;
+                let mut out_nb_element: i32 = 0;
+                let mut output = vec![0.0f64; data.len()];
+                unsafe {
+                    STDDEV(
+                        0,
+                        (data.len() - 1) as i32,
+                        data.as_ptr(),
+                        period,
+                        1.0, // nbdev parameter for TA-Lib
+                        &mut out_begin,
+                        &mut out_nb_element,
+                        output.as_mut_ptr(),
+                    );
+                }
+                black_box(output)
+            });
+        });
+    }
+    group.finish();
+}
+
+fn bench_zscore(c: &mut Criterion) {
+    let mut group = c.benchmark_group("zscore");
+    let period: i32 = 14;
+
+    for &size in SIZES {
+        let data = generate_close_prices(size);
+        group.throughput(Throughput::Elements(size as u64));
+
+        group.bench_with_input(BenchmarkId::new("fast-ta", size), &data, |b, data| {
+            b.iter(|| zscore(black_box(data), black_box(period as usize)));
+        });
+    }
+    group.finish();
+}
+
 fn bench_linearreg(c: &mut Criterion) {
     let mut group = c.benchmark_group("linearreg");
     let period: i32 = 14;
@@ -1892,6 +1944,8 @@ criterion_group!(
     bench_linearreg_slope,
     bench_linearreg_intercept,
     bench_linearreg_angle,
+    bench_stddev,
+    bench_zscore,
     bench_tsf,
 );
 
