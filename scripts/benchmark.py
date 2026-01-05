@@ -57,14 +57,19 @@ class BenchmarkRunner:
         indicator: str,
         baseline: str,
         show_output: bool = False,
+        size: int = 100000,
     ) -> bool:
         """Run a single benchmark with Criterion."""
+        # Filter to specific size to reduce benchmark time
+        # Pattern: "indicator/impl/size" or "indicator/impl_p{period}/size"
+        filter_pattern = f"{indicator}/.*/{size}"
+
         cmd = [
             "cargo",
             "bench",
             "--bench",
             "talib_comparison",
-            indicator,
+            filter_pattern,
             "--",
             "--save-baseline",
             baseline,
@@ -76,36 +81,67 @@ class BenchmarkRunner:
                 cwd=self.project_root,
                 capture_output=not show_output,
                 text=True,
-                timeout=300,  # 5 minute timeout per benchmark
+                timeout=900,  # 15 minute timeout for multi-period benchmarks (4 sizes × 5 periods × 2 impls = 40 runs)
             )
             return result.returncode == 0
         except subprocess.TimeoutExpired:
             console.print(f"[red]Timeout running {indicator}[/red]")
             return False
 
-    def get_median_time(
+    def get_period_times(
         self, indicator: str, impl: str, size: int, baseline: str
-    ) -> Optional[float]:
-        """Extract median time from Criterion JSON estimates."""
-        # Check all possible directory structures
-        possible_paths = [
-            # Structure 1: indicator/impl/size/baseline/estimates.json
-            self.results_dir / indicator / impl / str(size) / baseline / "estimates.json",
-            # Structure 2: indicator/impl_p{period}/size/baseline/estimates.json (with periods)
-            # We'll skip this for now as it requires period info
-        ]
+    ) -> Dict[str, float]:
+        """Extract median times for all periods from Criterion JSON estimates.
 
-        for path in possible_paths:
-            if path.exists():
-                try:
-                    with open(path) as f:
-                        data = json.load(f)
-                        # Return median in microseconds
-                        return data["median"]["point_estimate"] / 1000.0
-                except (json.JSONDecodeError, KeyError, FileNotFoundError):
-                    continue
+        Returns a dict mapping period names (e.g., 'p5', 'p21', 'overall') to times in µs.
+        For single-period benchmarks, returns {'overall': time}.
+        For multi-period benchmarks, returns {'p5': time, 'p21': time, ..., 'overall': median}.
+        """
+        import re
 
-        return None
+        # Structure 1: Multi-period indicator/impl_p{period}/size/baseline/estimates.json
+        # Check this FIRST to prefer multi-period results when both exist
+        period_times = {}
+        indicator_dir = self.results_dir / indicator
+
+        if indicator_dir.exists():
+            # Find all impl_p{period} directories
+            pattern = re.compile(rf"^{re.escape(impl)}_p(\d+)$")
+
+            for dir_path in indicator_dir.iterdir():
+                if dir_path.is_dir():
+                    match = pattern.match(dir_path.name)
+                    if match:
+                        period = match.group(1)
+                        estimates_path = dir_path / str(size) / baseline / "estimates.json"
+                        if estimates_path.exists():
+                            try:
+                                with open(estimates_path) as f:
+                                    data = json.load(f)
+                                    time_us = data["median"]["point_estimate"] / 1000.0
+                                    period_times[f"p{period}"] = time_us
+                            except (json.JSONDecodeError, KeyError, FileNotFoundError):
+                                continue
+
+            if period_times:
+                # Add overall median
+                period_times["overall"] = statistics.median(period_times.values())
+                return period_times
+
+        # Structure 2: Single-period indicator/impl/size/baseline/estimates.json
+        # Only use this if no multi-period results exist
+        single_period_path = self.results_dir / indicator / impl / str(size) / baseline / "estimates.json"
+
+        if single_period_path.exists():
+            try:
+                with open(single_period_path) as f:
+                    data = json.load(f)
+                    time_us = data["median"]["point_estimate"] / 1000.0
+                    return {"overall": time_us}
+            except (json.JSONDecodeError, KeyError, FileNotFoundError):
+                pass
+
+        return {}
 
     def detect_latest_baseline(self, indicator: str = "stochastic") -> Optional[str]:
         """Auto-detect the most recent baseline for an indicator."""
@@ -140,8 +176,17 @@ class BenchmarkRunner:
 
     def collect_results(
         self, indicators: List[str], baseline: str, size: int = 100000
-    ) -> Dict[str, Dict[str, float]]:
-        """Collect benchmark results for specified indicators."""
+    ) -> Dict[str, Dict[str, Dict[str, float]]]:
+        """Collect benchmark results for specified indicators.
+
+        Returns structure:
+        {
+            "indicator_name": {
+                "fast-ta": {"p5": 123.4, "p21": 125.6, ..., "overall": 124.5},
+                "ta-lib": {"p5": 200.1, "p21": 202.3, ..., "overall": 201.2}
+            }
+        }
+        """
         # Auto-detect baseline if requested
         if baseline == "auto":
             detected = self.detect_latest_baseline(indicators[0] if indicators else "stochastic")
@@ -155,8 +200,8 @@ class BenchmarkRunner:
         results = {}
 
         for indicator in indicators:
-            fast_ta = self.get_median_time(indicator, "fast-ta", size, baseline)
-            ta_lib = self.get_median_time(indicator, "ta-lib", size, baseline)
+            fast_ta = self.get_period_times(indicator, "fast-ta", size, baseline)
+            ta_lib = self.get_period_times(indicator, "ta-lib", size, baseline)
 
             if fast_ta and ta_lib:
                 results[indicator] = {
@@ -180,10 +225,19 @@ def format_time(us: float) -> str:
 
 
 def create_comparison_table(
-    results: Dict[str, Dict[str, float]],
+    results: Dict[str, Dict[str, Dict[str, float]]],
     sort_by: str = "ratio"
 ) -> Table:
-    """Create a rich table comparing fast-ta vs ta-lib."""
+    """Create a rich table comparing fast-ta vs ta-lib with per-period analysis."""
+
+    # Determine which periods are present
+    all_periods = set()
+    for indicator_data in results.values():
+        for impl_data in indicator_data.values():
+            all_periods.update(k for k in impl_data.keys() if k != "overall")
+
+    # Sort periods numerically
+    periods = sorted(all_periods, key=lambda p: int(p[1:]) if p[1:].isdigit() else 0)
 
     table = Table(
         title="Fast-TA vs TA-Lib Benchmark Comparison (100k elements)",
@@ -192,74 +246,121 @@ def create_comparison_table(
         header_style="bold cyan",
     )
 
-    table.add_column("Indicator", style="bright_white", width=18)
-    table.add_column("Fast-TA", justify="right", style="blue", width=12)
-    table.add_column("TA-Lib", justify="right", style="magenta", width=12)
-    table.add_column("Ratio", justify="right", width=8)
-    table.add_column("Gap", justify="right", width=10)
-    table.add_column("Status", width=20)
+    table.add_column("Indicator", style="bright_white")
+
+    # Add columns for each period
+    for period in periods:
+        table.add_column(period.upper(), justify="right")
+
+    table.add_column("Overall", justify="right")
+    table.add_column("Analysis")
 
     # Compute statistics
     comparisons = []
-    for indicator, times in results.items():
-        fast_ta = times["fast-ta"]
-        ta_lib = times["ta-lib"]
-        ratio = fast_ta / ta_lib
-        gap = fast_ta - ta_lib
+    for indicator, data in results.items():
+        fast_ta = data["fast-ta"]
+        ta_lib = data["ta-lib"]
+
+        # Calculate ratios for each period
+        period_ratios = {}
+        for period in periods:
+            if period in fast_ta and period in ta_lib:
+                period_ratios[period] = fast_ta[period] / ta_lib[period]
+
+        # Overall ratio
+        overall_ratio = fast_ta.get("overall", 0) / ta_lib.get("overall", 1)
+
+        # Analyze period-dependency
+        if period_ratios:
+            ratios_values = [v for v in period_ratios.values()]
+            min_ratio = min(ratios_values)
+            max_ratio = max(ratios_values)
+            ratio_range = max_ratio - min_ratio
+            ratio_variance = statistics.stdev(ratios_values) if len(ratios_values) > 1 else 0
+        else:
+            min_ratio = max_ratio = overall_ratio
+            ratio_range = 0
+            ratio_variance = 0
 
         comparisons.append({
             "indicator": indicator,
-            "fast_ta": fast_ta,
-            "ta_lib": ta_lib,
-            "ratio": ratio,
-            "gap": gap,
+            "period_ratios": period_ratios,
+            "overall_ratio": overall_ratio,
+            "min_ratio": min_ratio,
+            "max_ratio": max_ratio,
+            "ratio_range": ratio_range,
+            "ratio_variance": ratio_variance,
         })
 
     # Sort
     if sort_by == "ratio":
-        comparisons.sort(key=lambda x: x["ratio"], reverse=True)
-    elif sort_by == "gap":
-        comparisons.sort(key=lambda x: abs(x["gap"]), reverse=True)
+        comparisons.sort(key=lambda x: x["overall_ratio"], reverse=True)
     else:  # alphabetical
         comparisons.sort(key=lambda x: x["indicator"])
 
     # Add rows
     for comp in comparisons:
-        ratio = comp["ratio"]
-        gap = comp["gap"]
+        row_data = [comp["indicator"]]
 
-        # Color code status
-        if ratio < 0.98:
-            speedup = (1.0 / ratio - 1.0) * 100
-            status = Text(f"✓ {speedup:.1f}% faster", style="bold green")
-        elif ratio > 1.02:
-            slowdown = (ratio - 1.0) * 100
-            status = Text(f"✗ {slowdown:.1f}% slower", style="bold red")
+        # Add period ratio cells
+        for period in periods:
+            if period in comp["period_ratios"]:
+                ratio = comp["period_ratios"][period]
+                ratio_text = Text(f"{ratio:.2f}x")
+                if ratio < 0.98:
+                    ratio_text.stylize("bold green")
+                elif ratio > 1.02:
+                    ratio_text.stylize("bold red")
+                else:
+                    ratio_text.stylize("yellow")
+                row_data.append(ratio_text)
+            else:
+                row_data.append("")
+
+        # Overall ratio
+        overall_ratio = comp["overall_ratio"]
+        overall_text = Text(f"{overall_ratio:.2f}x")
+        if overall_ratio < 0.98:
+            overall_text.stylize("bold green")
+        elif overall_ratio > 1.02:
+            overall_text.stylize("bold red")
         else:
-            status = Text("≈ competitive", style="yellow")
+            overall_text.stylize("yellow")
+        row_data.append(overall_text)
 
-        # Format ratio with color
-        ratio_text = Text(f"{ratio:.2f}x")
-        if ratio < 1.0:
-            ratio_text.stylize("green")
-        elif ratio > 1.0:
-            ratio_text.stylize("red")
+        # Analysis with insights
+        analysis_parts = []
+
+        # Performance status
+        if overall_ratio < 0.98:
+            speedup = (1.0 / overall_ratio - 1.0) * 100
+            analysis_parts.append(Text(f"✓ {speedup:.0f}% faster", style="green"))
+        elif overall_ratio > 1.02:
+            slowdown = (overall_ratio - 1.0) * 100
+            analysis_parts.append(Text(f"✗ {slowdown:.0f}% slower", style="red"))
         else:
-            ratio_text.stylize("yellow")
+            analysis_parts.append(Text("≈ competitive", style="yellow"))
 
-        table.add_row(
-            comp["indicator"],
-            format_time(comp["fast_ta"]),
-            format_time(comp["ta_lib"]),
-            ratio_text,
-            format_time(abs(gap)),
-            status,
-        )
+        # Period dependency analysis
+        if comp["ratio_range"] > 0.3:
+            # Significant period-dependent behavior
+            analysis_parts.append(Text(" | ⚠ Period-dependent", style="yellow"))
+            if comp["min_ratio"] < 0.9 and comp["max_ratio"] > 1.1:
+                analysis_parts.append(Text(" (hybrid?)", style="dim"))
+
+        # Combine analysis parts
+        analysis_text = Text()
+        for part in analysis_parts:
+            analysis_text.append_text(part)
+
+        row_data.append(analysis_text)
+
+        table.add_row(*row_data)
 
     return table
 
 
-def print_summary(results: Dict[str, Dict[str, float]]):
+def print_summary(results: Dict[str, Dict[str, Dict[str, float]]]):
     """Print summary statistics."""
     total = len(results)
     if total == 0:
@@ -267,8 +368,10 @@ def print_summary(results: Dict[str, Dict[str, float]]):
         return
 
     comparisons = []
-    for times in results.values():
-        ratio = times["fast-ta"] / times["ta-lib"]
+    for data in results.values():
+        fast_ta = data["fast-ta"].get("overall", 0)
+        ta_lib = data["ta-lib"].get("overall", 1)
+        ratio = fast_ta / ta_lib
         comparisons.append(ratio)
 
     faster = sum(1 for r in comparisons if r < 0.98)
@@ -384,7 +487,7 @@ def run(
         for indicator in to_run:
             progress.update(task, description=f"Benchmarking {indicator}")
 
-            success = runner.run_benchmark(indicator, baseline, show_output)
+            success = runner.run_benchmark(indicator, baseline, show_output, size)
             if not success and not show_output:
                 console.print(f"[yellow]Warning: {indicator} failed[/yellow]")
 

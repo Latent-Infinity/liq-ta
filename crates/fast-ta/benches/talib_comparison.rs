@@ -174,247 +174,324 @@ fn bench_sma(c: &mut Criterion) {
 
 fn bench_ema(c: &mut Criterion) {
     let mut group = c.benchmark_group("ema");
-    let period: i32 = 20;
 
     for &size in SIZES {
         let data = generate_close_prices(size);
         group.throughput(Throughput::Elements(size as u64));
 
-        group.bench_with_input(BenchmarkId::new("fast-ta", size), &data, |b, data| {
-            b.iter(|| ema(black_box(data), black_box(period as usize)));
-        });
+        for &period in PERIODS {
+            let period_i32 = period as i32;
 
-        group.bench_with_input(BenchmarkId::new("ta-lib", size), &data, |b, data| {
-            b.iter(|| {
-                let mut out_begin: i32 = 0;
-                let mut out_nb_element: i32 = 0;
-                let mut output = vec![0.0f64; data.len()];
-                unsafe {
-                    EMA(
-                        0,
-                        (data.len() - 1) as i32,
-                        data.as_ptr(),
-                        period,
-                        &mut out_begin,
-                        &mut out_nb_element,
-                        output.as_mut_ptr(),
-                    );
-                }
-                black_box(output)
-            });
-        });
+            group.bench_with_input(
+                BenchmarkId::new(format!("fast-ta/p{}", period), size),
+                &data,
+                |b, data| {
+                    b.iter(|| ema(black_box(data), black_box(period)));
+                },
+            );
+
+            group.bench_with_input(
+                BenchmarkId::new(format!("ta-lib/p{}", period), size),
+                &data,
+                |b, data| {
+                    b.iter(|| {
+                        let mut out_begin: i32 = 0;
+                        let mut out_nb_element: i32 = 0;
+                        let mut output = vec![0.0f64; data.len()];
+                        unsafe {
+                            EMA(
+                                0,
+                                (data.len() - 1) as i32,
+                                data.as_ptr(),
+                                period_i32,
+                                &mut out_begin,
+                                &mut out_nb_element,
+                                output.as_mut_ptr(),
+                            );
+                        }
+                        black_box(output)
+                    });
+                },
+            );
+        }
     }
     group.finish();
 }
 
 fn bench_wma(c: &mut Criterion) {
     let mut group = c.benchmark_group("wma");
-    let period: i32 = 20;
 
     for &size in SIZES {
         let data = generate_close_prices(size);
         group.throughput(Throughput::Elements(size as u64));
 
-        group.bench_with_input(BenchmarkId::new("fast-ta", size), &data, |b, data| {
-            b.iter(|| wma(black_box(data), black_box(period as usize)));
-        });
+        for &period in PERIODS {
+            let period_i32 = period as i32;
 
-        group.bench_with_input(BenchmarkId::new("ta-lib", size), &data, |b, data| {
-            b.iter(|| {
-                let mut out_begin: i32 = 0;
-                let mut out_nb_element: i32 = 0;
-                let mut output = vec![0.0f64; data.len()];
-                unsafe {
-                    WMA(
-                        0,
-                        (data.len() - 1) as i32,
-                        data.as_ptr(),
-                        period,
-                        &mut out_begin,
-                        &mut out_nb_element,
-                        output.as_mut_ptr(),
-                    );
-                }
-                black_box(output)
-            });
-        });
+            group.bench_with_input(
+                BenchmarkId::new(format!("fast-ta/p{}", period), size),
+                &data,
+                |b, data| {
+                    b.iter(|| wma(black_box(data), black_box(period)));
+                },
+            );
+
+            group.bench_with_input(
+                BenchmarkId::new(format!("ta-lib/p{}", period), size),
+                &data,
+                |b, data| {
+                    b.iter(|| {
+                        let mut out_begin: i32 = 0;
+                        let mut out_nb_element: i32 = 0;
+                        let mut output = vec![0.0f64; data.len()];
+                        unsafe {
+                            WMA(
+                                0,
+                                (data.len() - 1) as i32,
+                                data.as_ptr(),
+                                period_i32,
+                                &mut out_begin,
+                                &mut out_nb_element,
+                                output.as_mut_ptr(),
+                            );
+                        }
+                        black_box(output)
+                    });
+                },
+            );
+        }
     }
     group.finish();
 }
 
 fn bench_dema(c: &mut Criterion) {
     let mut group = c.benchmark_group("dema");
-    let period: i32 = 20;
 
     for &size in SIZES {
         let data = generate_close_prices(size);
         group.throughput(Throughput::Elements(size as u64));
 
-        group.bench_with_input(BenchmarkId::new("fast-ta", size), &data, |b, data| {
-            b.iter(|| dema(black_box(data), black_box(period as usize)));
-        });
+        for &period in PERIODS {
+            let period_i32 = period as i32;
 
-        group.bench_with_input(BenchmarkId::new("ta-lib", size), &data, |b, data| {
-            b.iter(|| {
-                let mut out_begin: i32 = 0;
-                let mut out_nb_element: i32 = 0;
-                let mut output = vec![0.0f64; data.len()];
-                unsafe {
-                    DEMA(
-                        0,
-                        (data.len() - 1) as i32,
-                        data.as_ptr(),
-                        period,
-                        &mut out_begin,
-                        &mut out_nb_element,
-                        output.as_mut_ptr(),
-                    );
-                }
-                black_box(output)
-            });
-        });
+            group.bench_with_input(
+                BenchmarkId::new(format!("fast-ta/p{}", period), size),
+                &data,
+                |b, data| {
+                    b.iter(|| dema(black_box(data), black_box(period)));
+                },
+            );
+
+            group.bench_with_input(
+                BenchmarkId::new(format!("ta-lib/p{}", period), size),
+                &data,
+                |b, data| {
+                    b.iter(|| {
+                        let mut out_begin: i32 = 0;
+                        let mut out_nb_element: i32 = 0;
+                        let mut output = vec![0.0f64; data.len()];
+                        unsafe {
+                            DEMA(
+                                0,
+                                (data.len() - 1) as i32,
+                                data.as_ptr(),
+                                period_i32,
+                                &mut out_begin,
+                                &mut out_nb_element,
+                                output.as_mut_ptr(),
+                            );
+                        }
+                        black_box(output)
+                    });
+                },
+            );
+        }
     }
     group.finish();
 }
 
 fn bench_tema(c: &mut Criterion) {
     let mut group = c.benchmark_group("tema");
-    let period: i32 = 20;
 
     for &size in SIZES {
         let data = generate_close_prices(size);
         group.throughput(Throughput::Elements(size as u64));
 
-        group.bench_with_input(BenchmarkId::new("fast-ta", size), &data, |b, data| {
-            b.iter(|| tema(black_box(data), black_box(period as usize)));
-        });
+        for &period in PERIODS {
+            let period_i32 = period as i32;
 
-        group.bench_with_input(BenchmarkId::new("ta-lib", size), &data, |b, data| {
-            b.iter(|| {
-                let mut out_begin: i32 = 0;
-                let mut out_nb_element: i32 = 0;
-                let mut output = vec![0.0f64; data.len()];
-                unsafe {
-                    TEMA(
-                        0,
-                        (data.len() - 1) as i32,
-                        data.as_ptr(),
-                        period,
-                        &mut out_begin,
-                        &mut out_nb_element,
-                        output.as_mut_ptr(),
-                    );
-                }
-                black_box(output)
-            });
-        });
+            group.bench_with_input(
+                BenchmarkId::new(format!("fast-ta/p{}", period), size),
+                &data,
+                |b, data| {
+                    b.iter(|| tema(black_box(data), black_box(period)));
+                },
+            );
+
+            group.bench_with_input(
+                BenchmarkId::new(format!("ta-lib/p{}", period), size),
+                &data,
+                |b, data| {
+                    b.iter(|| {
+                        let mut out_begin: i32 = 0;
+                        let mut out_nb_element: i32 = 0;
+                        let mut output = vec![0.0f64; data.len()];
+                        unsafe {
+                            TEMA(
+                                0,
+                                (data.len() - 1) as i32,
+                                data.as_ptr(),
+                                period_i32,
+                                &mut out_begin,
+                                &mut out_nb_element,
+                                output.as_mut_ptr(),
+                            );
+                        }
+                        black_box(output)
+                    });
+                },
+            );
+        }
     }
     group.finish();
 }
 
 fn bench_trima(c: &mut Criterion) {
     let mut group = c.benchmark_group("trima");
-    let period: i32 = 20;
 
     for &size in SIZES {
         let data = generate_close_prices(size);
         group.throughput(Throughput::Elements(size as u64));
 
-        group.bench_with_input(BenchmarkId::new("fast-ta", size), &data, |b, data| {
-            b.iter(|| trima(black_box(data), black_box(period as usize)));
-        });
+        for &period in PERIODS {
+            let period_i32 = period as i32;
 
-        group.bench_with_input(BenchmarkId::new("ta-lib", size), &data, |b, data| {
-            b.iter(|| {
-                let mut out_begin: i32 = 0;
-                let mut out_nb_element: i32 = 0;
-                let mut output = vec![0.0f64; data.len()];
-                unsafe {
-                    TRIMA(
-                        0,
-                        (data.len() - 1) as i32,
-                        data.as_ptr(),
-                        period,
-                        &mut out_begin,
-                        &mut out_nb_element,
-                        output.as_mut_ptr(),
-                    );
-                }
-                black_box(output)
-            });
-        });
+            group.bench_with_input(
+                BenchmarkId::new(format!("fast-ta/p{}", period), size),
+                &data,
+                |b, data| {
+                    b.iter(|| trima(black_box(data), black_box(period)));
+                },
+            );
+
+            group.bench_with_input(
+                BenchmarkId::new(format!("ta-lib/p{}", period), size),
+                &data,
+                |b, data| {
+                    b.iter(|| {
+                        let mut out_begin: i32 = 0;
+                        let mut out_nb_element: i32 = 0;
+                        let mut output = vec![0.0f64; data.len()];
+                        unsafe {
+                            TRIMA(
+                                0,
+                                (data.len() - 1) as i32,
+                                data.as_ptr(),
+                                period_i32,
+                                &mut out_begin,
+                                &mut out_nb_element,
+                                output.as_mut_ptr(),
+                            );
+                        }
+                        black_box(output)
+                    });
+                },
+            );
+        }
     }
     group.finish();
 }
 
 fn bench_kama(c: &mut Criterion) {
     let mut group = c.benchmark_group("kama");
-    let period: i32 = 10;
 
     for &size in SIZES {
         let data = generate_close_prices(size);
         group.throughput(Throughput::Elements(size as u64));
 
-        group.bench_with_input(BenchmarkId::new("fast-ta", size), &data, |b, data| {
-            b.iter(|| kama(black_box(data), black_box(period as usize)));
-        });
+        for &period in PERIODS {
+            let period_i32 = period as i32;
 
-        group.bench_with_input(BenchmarkId::new("ta-lib", size), &data, |b, data| {
-            b.iter(|| {
-                let mut out_begin: i32 = 0;
-                let mut out_nb_element: i32 = 0;
-                let mut output = vec![0.0f64; data.len()];
-                unsafe {
-                    KAMA(
-                        0,
-                        (data.len() - 1) as i32,
-                        data.as_ptr(),
-                        period,
-                        &mut out_begin,
-                        &mut out_nb_element,
-                        output.as_mut_ptr(),
-                    );
-                }
-                black_box(output)
-            });
-        });
+            group.bench_with_input(
+                BenchmarkId::new(format!("fast-ta/p{}", period), size),
+                &data,
+                |b, data| {
+                    b.iter(|| kama(black_box(data), black_box(period)));
+                },
+            );
+
+            group.bench_with_input(
+                BenchmarkId::new(format!("ta-lib/p{}", period), size),
+                &data,
+                |b, data| {
+                    b.iter(|| {
+                        let mut out_begin: i32 = 0;
+                        let mut out_nb_element: i32 = 0;
+                        let mut output = vec![0.0f64; data.len()];
+                        unsafe {
+                            KAMA(
+                                0,
+                                (data.len() - 1) as i32,
+                                data.as_ptr(),
+                                period_i32,
+                                &mut out_begin,
+                                &mut out_nb_element,
+                                output.as_mut_ptr(),
+                            );
+                        }
+                        black_box(output)
+                    });
+                },
+            );
+        }
     }
     group.finish();
 }
 
 fn bench_t3(c: &mut Criterion) {
     let mut group = c.benchmark_group("t3");
-    let period: i32 = 5;
     let v_factor: f64 = 0.7;
 
     for &size in SIZES {
         let data = generate_close_prices(size);
         group.throughput(Throughput::Elements(size as u64));
 
-        group.bench_with_input(BenchmarkId::new("fast-ta", size), &data, |b, data| {
-            b.iter(|| t3(black_box(data), black_box(period as usize)));
-        });
+        for &period in PERIODS {
+            let period_i32 = period as i32;
 
-        group.bench_with_input(BenchmarkId::new("ta-lib", size), &data, |b, data| {
-            b.iter(|| {
-                let mut out_begin: i32 = 0;
-                let mut out_nb_element: i32 = 0;
-                let mut output = vec![0.0f64; data.len()];
-                unsafe {
-                    T3(
-                        0,
-                        (data.len() - 1) as i32,
-                        data.as_ptr(),
-                        period,
-                        v_factor,
-                        &mut out_begin,
-                        &mut out_nb_element,
-                        output.as_mut_ptr(),
-                    );
-                }
-                black_box(output)
-            });
-        });
+            group.bench_with_input(
+                BenchmarkId::new(format!("fast-ta/p{}", period), size),
+                &data,
+                |b, data| {
+                    b.iter(|| t3(black_box(data), black_box(period)));
+                },
+            );
+
+            group.bench_with_input(
+                BenchmarkId::new(format!("ta-lib/p{}", period), size),
+                &data,
+                |b, data| {
+                    b.iter(|| {
+                        let mut out_begin: i32 = 0;
+                        let mut out_nb_element: i32 = 0;
+                        let mut output = vec![0.0f64; data.len()];
+                        unsafe {
+                            T3(
+                                0,
+                                (data.len() - 1) as i32,
+                                data.as_ptr(),
+                                period_i32,
+                                v_factor,
+                                &mut out_begin,
+                                &mut out_nb_element,
+                                output.as_mut_ptr(),
+                            );
+                        }
+                        black_box(output)
+                    });
+                },
+            );
+        }
     }
     group.finish();
 }
@@ -425,35 +502,46 @@ fn bench_t3(c: &mut Criterion) {
 
 fn bench_rsi(c: &mut Criterion) {
     let mut group = c.benchmark_group("rsi");
-    let period: i32 = 14;
 
     for &size in SIZES {
         let data = generate_close_prices(size);
         group.throughput(Throughput::Elements(size as u64));
 
-        group.bench_with_input(BenchmarkId::new("fast-ta", size), &data, |b, data| {
-            b.iter(|| rsi(black_box(data), black_box(period as usize)));
-        });
+        for &period in PERIODS {
+            let period_i32 = period as i32;
 
-        group.bench_with_input(BenchmarkId::new("ta-lib", size), &data, |b, data| {
-            b.iter(|| {
-                let mut out_begin: i32 = 0;
-                let mut out_nb_element: i32 = 0;
-                let mut output = vec![0.0f64; data.len()];
-                unsafe {
-                    RSI(
-                        0,
-                        (data.len() - 1) as i32,
-                        data.as_ptr(),
-                        period,
-                        &mut out_begin,
-                        &mut out_nb_element,
-                        output.as_mut_ptr(),
-                    );
-                }
-                black_box(output)
-            });
-        });
+            group.bench_with_input(
+                BenchmarkId::new(format!("fast-ta/p{}", period), size),
+                &data,
+                |b, data| {
+                    b.iter(|| rsi(black_box(data), black_box(period)));
+                },
+            );
+
+            group.bench_with_input(
+                BenchmarkId::new(format!("ta-lib/p{}", period), size),
+                &data,
+                |b, data| {
+                    b.iter(|| {
+                        let mut out_begin: i32 = 0;
+                        let mut out_nb_element: i32 = 0;
+                        let mut output = vec![0.0f64; data.len()];
+                        unsafe {
+                            RSI(
+                                0,
+                                (data.len() - 1) as i32,
+                                data.as_ptr(),
+                                period_i32,
+                                &mut out_begin,
+                                &mut out_nb_element,
+                                output.as_mut_ptr(),
+                            );
+                        }
+                        black_box(output)
+                    });
+                },
+            );
+        }
     }
     group.finish();
 }
@@ -510,73 +598,96 @@ fn bench_macd(c: &mut Criterion) {
 
 fn bench_mom(c: &mut Criterion) {
     let mut group = c.benchmark_group("mom");
-    let period: i32 = 10;
 
     for &size in SIZES {
         let data = generate_close_prices(size);
         group.throughput(Throughput::Elements(size as u64));
 
-        // Pre-allocate output buffer outside the benchmark loop
-        let mut output = vec![0.0f64; size];
-        group.bench_with_input(BenchmarkId::new("fast-ta", size), &data, |b, data| {
-            b.iter(|| {
-                mom_into(black_box(data), black_box(period as usize), black_box(&mut output)).unwrap()
-            });
-        });
+        for &period in PERIODS {
+            let period_i32 = period as i32;
 
-        let mut output = vec![0.0f64; size];
-        group.bench_with_input(BenchmarkId::new("ta-lib", size), &data, |b, data| {
-            b.iter(|| {
-                let mut out_begin: i32 = 0;
-                let mut out_nb_element: i32 = 0;
-                unsafe {
-                    MOM(
-                        0,
-                        (data.len() - 1) as i32,
-                        data.as_ptr(),
-                        period,
-                        &mut out_begin,
-                        &mut out_nb_element,
-                        output.as_mut_ptr(),
-                    )
-                }
-            });
-        });
+            // Pre-allocate output buffer outside the benchmark loop
+            let mut output = vec![0.0f64; size];
+            group.bench_with_input(
+                BenchmarkId::new(format!("fast-ta/p{}", period), size),
+                &data,
+                |b, data| {
+                    b.iter(|| {
+                        mom_into(black_box(data), black_box(period), black_box(&mut output))
+                            .unwrap()
+                    });
+                },
+            );
+
+            let mut output = vec![0.0f64; size];
+            group.bench_with_input(
+                BenchmarkId::new(format!("ta-lib/p{}", period), size),
+                &data,
+                |b, data| {
+                    b.iter(|| {
+                        let mut out_begin: i32 = 0;
+                        let mut out_nb_element: i32 = 0;
+                        unsafe {
+                            MOM(
+                                0,
+                                (data.len() - 1) as i32,
+                                data.as_ptr(),
+                                period_i32,
+                                &mut out_begin,
+                                &mut out_nb_element,
+                                output.as_mut_ptr(),
+                            )
+                        }
+                    });
+                },
+            );
+        }
     }
     group.finish();
 }
 
 fn bench_roc(c: &mut Criterion) {
     let mut group = c.benchmark_group("roc");
-    let period: i32 = 10;
 
     for &size in SIZES {
         let data = generate_close_prices(size);
         group.throughput(Throughput::Elements(size as u64));
 
-        group.bench_with_input(BenchmarkId::new("fast-ta", size), &data, |b, data| {
-            b.iter(|| roc(black_box(data), black_box(period as usize)));
-        });
+        for &period in PERIODS {
+            let period_i32 = period as i32;
 
-        group.bench_with_input(BenchmarkId::new("ta-lib", size), &data, |b, data| {
-            b.iter(|| {
-                let mut out_begin: i32 = 0;
-                let mut out_nb_element: i32 = 0;
-                let mut output = vec![0.0f64; data.len()];
-                unsafe {
-                    ROC(
-                        0,
-                        (data.len() - 1) as i32,
-                        data.as_ptr(),
-                        period,
-                        &mut out_begin,
-                        &mut out_nb_element,
-                        output.as_mut_ptr(),
-                    );
-                }
-                black_box(output)
-            });
-        });
+            group.bench_with_input(
+                BenchmarkId::new(format!("fast-ta/p{}", period), size),
+                &data,
+                |b, data| {
+                    b.iter(|| roc(black_box(data), black_box(period)));
+                },
+            );
+
+            group.bench_with_input(
+                BenchmarkId::new(format!("ta-lib/p{}", period), size),
+                &data,
+                |b, data| {
+                    b.iter(|| {
+                        let mut out_begin: i32 = 0;
+                        let mut out_nb_element: i32 = 0;
+                        let mut output = vec![0.0f64; data.len()];
+                        unsafe {
+                            ROC(
+                                0,
+                                (data.len() - 1) as i32,
+                                data.as_ptr(),
+                                period_i32,
+                                &mut out_begin,
+                                &mut out_nb_element,
+                                output.as_mut_ptr(),
+                            );
+                        }
+                        black_box(output)
+                    });
+                },
+            );
+        }
     }
     group.finish();
 }
@@ -673,35 +784,46 @@ fn bench_apo(c: &mut Criterion) {
 
 fn bench_trix(c: &mut Criterion) {
     let mut group = c.benchmark_group("trix");
-    let period: i32 = 15;
 
     for &size in SIZES {
         let data = generate_close_prices(size);
         group.throughput(Throughput::Elements(size as u64));
 
-        group.bench_with_input(BenchmarkId::new("fast-ta", size), &data, |b, data| {
-            b.iter(|| trix(black_box(data), black_box(period as usize)));
-        });
+        for &period in PERIODS {
+            let period_i32 = period as i32;
 
-        group.bench_with_input(BenchmarkId::new("ta-lib", size), &data, |b, data| {
-            b.iter(|| {
-                let mut out_begin: i32 = 0;
-                let mut out_nb_element: i32 = 0;
-                let mut output = vec![0.0f64; data.len()];
-                unsafe {
-                    TRIX(
-                        0,
-                        (data.len() - 1) as i32,
-                        data.as_ptr(),
-                        period,
-                        &mut out_begin,
-                        &mut out_nb_element,
-                        output.as_mut_ptr(),
-                    );
-                }
-                black_box(output)
-            });
-        });
+            group.bench_with_input(
+                BenchmarkId::new(format!("fast-ta/p{}", period), size),
+                &data,
+                |b, data| {
+                    b.iter(|| trix(black_box(data), black_box(period)));
+                },
+            );
+
+            group.bench_with_input(
+                BenchmarkId::new(format!("ta-lib/p{}", period), size),
+                &data,
+                |b, data| {
+                    b.iter(|| {
+                        let mut out_begin: i32 = 0;
+                        let mut out_nb_element: i32 = 0;
+                        let mut output = vec![0.0f64; data.len()];
+                        unsafe {
+                            TRIX(
+                                0,
+                                (data.len() - 1) as i32,
+                                data.as_ptr(),
+                                period_i32,
+                                &mut out_begin,
+                                &mut out_nb_element,
+                                output.as_mut_ptr(),
+                            );
+                        }
+                        black_box(output)
+                    });
+                },
+            );
+        }
     }
     group.finish();
 }
@@ -712,104 +834,96 @@ fn bench_trix(c: &mut Criterion) {
 
 fn bench_adx(c: &mut Criterion) {
     let mut group = c.benchmark_group("adx");
-    let period: i32 = 14;
 
     for &size in SIZES {
         let (_, high, low, close, _) = generate_ohlcv(size);
         group.throughput(Throughput::Elements(size as u64));
 
-        group.bench_with_input(
-            BenchmarkId::new("fast-ta", size),
-            &(&high, &low, &close),
-            |b, (h, l, c)| {
-                b.iter(|| {
-                    adx(
-                        black_box(*h),
-                        black_box(*l),
-                        black_box(*c),
-                        black_box(period as usize),
-                    )
-                });
-            },
-        );
+        for &period in PERIODS {
+            let period_i32 = period as i32;
 
-        group.bench_with_input(
-            BenchmarkId::new("ta-lib", size),
-            &(&high, &low, &close),
-            |b, (h, l, c)| {
-                b.iter(|| {
-                    let mut out_begin: i32 = 0;
-                    let mut out_nb_element: i32 = 0;
-                    let mut output = vec![0.0f64; h.len()];
-                    unsafe {
-                        ADX(
-                            0,
-                            (h.len() - 1) as i32,
-                            h.as_ptr(),
-                            l.as_ptr(),
-                            c.as_ptr(),
-                            period,
-                            &mut out_begin,
-                            &mut out_nb_element,
-                            output.as_mut_ptr(),
-                        );
-                    }
-                    black_box(output)
-                });
-            },
-        );
+            group.bench_with_input(
+                BenchmarkId::new(format!("fast-ta/p{}", period), size),
+                &(&high, &low, &close),
+                |b, (h, l, c)| {
+                    b.iter(|| adx(black_box(*h), black_box(*l), black_box(*c), black_box(period)));
+                },
+            );
+
+            group.bench_with_input(
+                BenchmarkId::new(format!("ta-lib/p{}", period), size),
+                &(&high, &low, &close),
+                |b, (h, l, c)| {
+                    b.iter(|| {
+                        let mut out_begin: i32 = 0;
+                        let mut out_nb_element: i32 = 0;
+                        let mut output = vec![0.0f64; h.len()];
+                        unsafe {
+                            ADX(
+                                0,
+                                (h.len() - 1) as i32,
+                                h.as_ptr(),
+                                l.as_ptr(),
+                                c.as_ptr(),
+                                period_i32,
+                                &mut out_begin,
+                                &mut out_nb_element,
+                                output.as_mut_ptr(),
+                            );
+                        }
+                        black_box(output)
+                    });
+                },
+            );
+        }
     }
     group.finish();
 }
 
 fn bench_dx(c: &mut Criterion) {
     let mut group = c.benchmark_group("dx");
-    let period: i32 = 14;
 
     for &size in SIZES {
         let (_, high, low, close, _) = generate_ohlcv(size);
         group.throughput(Throughput::Elements(size as u64));
 
-        group.bench_with_input(
-            BenchmarkId::new("fast-ta", size),
-            &(&high, &low, &close),
-            |b, (h, l, c)| {
-                b.iter(|| {
-                    dx(
-                        black_box(*h),
-                        black_box(*l),
-                        black_box(*c),
-                        black_box(period as usize),
-                    )
-                });
-            },
-        );
+        for &period in PERIODS {
+            let period_i32 = period as i32;
 
-        group.bench_with_input(
-            BenchmarkId::new("ta-lib", size),
-            &(&high, &low, &close),
-            |b, (h, l, c)| {
-                b.iter(|| {
-                    let mut out_begin: i32 = 0;
-                    let mut out_nb_element: i32 = 0;
-                    let mut output = vec![0.0f64; h.len()];
-                    unsafe {
-                        DX(
-                            0,
-                            (h.len() - 1) as i32,
-                            h.as_ptr(),
-                            l.as_ptr(),
-                            c.as_ptr(),
-                            period,
-                            &mut out_begin,
-                            &mut out_nb_element,
-                            output.as_mut_ptr(),
-                        );
-                    }
-                    black_box(output)
-                });
-            },
-        );
+            group.bench_with_input(
+                BenchmarkId::new(format!("fast-ta/p{}", period), size),
+                &(&high, &low, &close),
+                |b, (h, l, c)| {
+                    b.iter(|| dx(black_box(*h), black_box(*l), black_box(*c), black_box(period)));
+                },
+            );
+
+            group.bench_with_input(
+                BenchmarkId::new(format!("ta-lib/p{}", period), size),
+                &(&high, &low, &close),
+                |b, (h, l, c)| {
+                    b.iter(|| {
+                        let mut out_begin: i32 = 0;
+                        let mut out_nb_element: i32 = 0;
+                        let mut output = vec![0.0f64; h.len()];
+                        unsafe {
+                            DX(
+                                0,
+                                (h.len() - 1) as i32,
+                                h.as_ptr(),
+                                l.as_ptr(),
+                                c.as_ptr(),
+                                period_i32,
+                                &mut out_begin,
+                                &mut out_nb_element,
+                                output.as_mut_ptr(),
+                            );
+                        }
+                        black_box(output)
+                    });
+                },
+            );
+        }
     }
     group.finish();
 }
@@ -917,52 +1031,48 @@ fn bench_cci(c: &mut Criterion) {
 
 fn bench_atr(c: &mut Criterion) {
     let mut group = c.benchmark_group("atr");
-    let period: i32 = 14;
 
     for &size in SIZES {
         let (_, high, low, close, _) = generate_ohlcv(size);
         group.throughput(Throughput::Elements(size as u64));
 
-        group.bench_with_input(
-            BenchmarkId::new("fast-ta", size),
-            &(&high, &low, &close),
-            |b, (h, l, c)| {
-                b.iter(|| {
-                    atr(
-                        black_box(*h),
-                        black_box(*l),
-                        black_box(*c),
-                        black_box(period as usize),
-                    )
-                });
-            },
-        );
+        for &period in PERIODS {
+            let period_i32 = period as i32;
 
-        group.bench_with_input(
-            BenchmarkId::new("ta-lib", size),
-            &(&high, &low, &close),
-            |b, (h, l, c)| {
-                b.iter(|| {
-                    let mut out_begin: i32 = 0;
-                    let mut out_nb_element: i32 = 0;
-                    let mut output = vec![0.0f64; h.len()];
-                    unsafe {
-                        ATR(
-                            0,
-                            (h.len() - 1) as i32,
-                            h.as_ptr(),
-                            l.as_ptr(),
-                            c.as_ptr(),
-                            period,
-                            &mut out_begin,
-                            &mut out_nb_element,
-                            output.as_mut_ptr(),
-                        );
-                    }
-                    black_box(output)
-                });
-            },
-        );
+            group.bench_with_input(
+                BenchmarkId::new(format!("fast-ta/p{}", period), size),
+                &(&high, &low, &close),
+                |b, (h, l, c)| {
+                    b.iter(|| atr(black_box(*h), black_box(*l), black_box(*c), black_box(period)));
+                },
+            );
+
+            group.bench_with_input(
+                BenchmarkId::new(format!("ta-lib/p{}", period), size),
+                &(&high, &low, &close),
+                |b, (h, l, c)| {
+                    b.iter(|| {
+                        let mut out_begin: i32 = 0;
+                        let mut out_nb_element: i32 = 0;
+                        let mut output = vec![0.0f64; h.len()];
+                        unsafe {
+                            ATR(
+                                0,
+                                (h.len() - 1) as i32,
+                                h.as_ptr(),
+                                l.as_ptr(),
+                                c.as_ptr(),
+                                period_i32,
+                                &mut out_begin,
+                                &mut out_nb_element,
+                                output.as_mut_ptr(),
+                            );
+                        }
+                        black_box(output)
+                    });
+                },
+            );
+        }
     }
     group.finish();
 }
@@ -1012,49 +1122,54 @@ fn bench_trange(c: &mut Criterion) {
 
 fn bench_bollinger(c: &mut Criterion) {
     let mut group = c.benchmark_group("bollinger");
-    let period: i32 = 20;
     let num_std: f64 = 2.0;
 
     for &size in SIZES {
         let data = generate_close_prices(size);
         group.throughput(Throughput::Elements(size as u64));
 
-        group.bench_with_input(BenchmarkId::new("fast-ta", size), &data, |b, data| {
-            b.iter(|| {
-                bollinger(
-                    black_box(data),
-                    black_box(period as usize),
-                    black_box(num_std),
-                )
-            });
-        });
+        for &period in PERIODS {
+            let period_i32 = period as i32;
 
-        group.bench_with_input(BenchmarkId::new("ta-lib", size), &data, |b, data| {
-            b.iter(|| {
-                let mut out_begin: i32 = 0;
-                let mut out_nb_element: i32 = 0;
-                let mut upper = vec![0.0f64; data.len()];
-                let mut middle = vec![0.0f64; data.len()];
-                let mut lower = vec![0.0f64; data.len()];
-                unsafe {
-                    BBANDS(
-                        0,
-                        (data.len() - 1) as i32,
-                        data.as_ptr(),
-                        period,
-                        num_std,
-                        num_std,
-                        MAType::MAType_SMA,
-                        &mut out_begin,
-                        &mut out_nb_element,
-                        upper.as_mut_ptr(),
-                        middle.as_mut_ptr(),
-                        lower.as_mut_ptr(),
-                    );
-                }
-                black_box((upper, middle, lower))
-            });
-        });
+            group.bench_with_input(
+                BenchmarkId::new(format!("fast-ta/p{}", period), size),
+                &data,
+                |b, data| {
+                    b.iter(|| bollinger(black_box(data), black_box(period), black_box(num_std)));
+                },
+            );
+
+            group.bench_with_input(
+                BenchmarkId::new(format!("ta-lib/p{}", period), size),
+                &data,
+                |b, data| {
+                    b.iter(|| {
+                        let mut out_begin: i32 = 0;
+                        let mut out_nb_element: i32 = 0;
+                        let mut upper = vec![0.0f64; data.len()];
+                        let mut middle = vec![0.0f64; data.len()];
+                        let mut lower = vec![0.0f64; data.len()];
+                        unsafe {
+                            BBANDS(
+                                0,
+                                (data.len() - 1) as i32,
+                                data.as_ptr(),
+                                period_i32,
+                                num_std,
+                                num_std,
+                                MAType::MAType_SMA,
+                                &mut out_begin,
+                                &mut out_nb_element,
+                                upper.as_mut_ptr(),
+                                middle.as_mut_ptr(),
+                                lower.as_mut_ptr(),
+                            );
+                        }
+                        black_box((upper, middle, lower))
+                    });
+                },
+            );
+        }
     }
     group.finish();
 }
@@ -1185,52 +1300,50 @@ fn bench_stochastic_fast(c: &mut Criterion) {
 
 fn bench_williams_r(c: &mut Criterion) {
     let mut group = c.benchmark_group("williams_r");
-    let period: i32 = 14;
 
     for &size in SIZES {
         let (_, high, low, close, _) = generate_ohlcv(size);
         group.throughput(Throughput::Elements(size as u64));
 
-        group.bench_with_input(
-            BenchmarkId::new("fast-ta", size),
-            &(&high, &low, &close),
-            |b, (h, l, c)| {
-                b.iter(|| {
-                    williams_r(
-                        black_box(*h),
-                        black_box(*l),
-                        black_box(*c),
-                        black_box(period as usize),
-                    )
-                });
-            },
-        );
+        for &period in PERIODS {
+            let period_i32 = period as i32;
 
-        group.bench_with_input(
-            BenchmarkId::new("ta-lib", size),
-            &(&high, &low, &close),
-            |b, (h, l, c)| {
-                b.iter(|| {
-                    let mut out_begin: i32 = 0;
-                    let mut out_nb_element: i32 = 0;
-                    let mut output = vec![0.0f64; h.len()];
-                    unsafe {
-                        WILLR(
-                            0,
-                            (h.len() - 1) as i32,
-                            h.as_ptr(),
-                            l.as_ptr(),
-                            c.as_ptr(),
-                            period,
-                            &mut out_begin,
-                            &mut out_nb_element,
-                            output.as_mut_ptr(),
-                        );
-                    }
-                    black_box(output)
-                });
-            },
-        );
+            group.bench_with_input(
+                BenchmarkId::new(format!("fast-ta/p{}", period), size),
+                &(&high, &low, &close),
+                |b, (h, l, c)| {
+                    b.iter(|| {
+                        williams_r(black_box(*h), black_box(*l), black_box(*c), black_box(period))
+                    });
+                },
+            );
+
+            group.bench_with_input(
+                BenchmarkId::new(format!("ta-lib/p{}", period), size),
+                &(&high, &low, &close),
+                |b, (h, l, c)| {
+                    b.iter(|| {
+                        let mut out_begin: i32 = 0;
+                        let mut out_nb_element: i32 = 0;
+                        let mut output = vec![0.0f64; h.len()];
+                        unsafe {
+                            WILLR(
+                                0,
+                                (h.len() - 1) as i32,
+                                h.as_ptr(),
+                                l.as_ptr(),
+                                c.as_ptr(),
+                                period_i32,
+                                &mut out_begin,
+                                &mut out_nb_element,
+                                output.as_mut_ptr(),
+                            );
+                        }
+                        black_box(output)
+                    });
+                },
+            );
+        }
     }
     group.finish();
 }
@@ -1496,334 +1609,440 @@ fn bench_var(c: &mut Criterion) {
 
 fn bench_stddev(c: &mut Criterion) {
     let mut group = c.benchmark_group("stddev");
-    let period: i32 = 14;
 
     for &size in SIZES {
         let data = generate_close_prices(size);
         group.throughput(Throughput::Elements(size as u64));
 
-        group.bench_with_input(BenchmarkId::new("fast-ta", size), &data, |b, data| {
-            b.iter(|| stddev(black_box(data), black_box(period as usize)));
-        });
+        for &period in PERIODS {
+            let period_i32 = period as i32;
 
-        group.bench_with_input(BenchmarkId::new("ta-lib", size), &data, |b, data| {
-            b.iter(|| {
-                let mut out_begin: i32 = 0;
-                let mut out_nb_element: i32 = 0;
-                let mut output = vec![0.0f64; data.len()];
-                unsafe {
-                    STDDEV(
-                        0,
-                        (data.len() - 1) as i32,
-                        data.as_ptr(),
-                        period,
-                        1.0, // nbdev parameter for TA-Lib
-                        &mut out_begin,
-                        &mut out_nb_element,
-                        output.as_mut_ptr(),
-                    );
-                }
-                black_box(output)
-            });
-        });
+            group.bench_with_input(
+                BenchmarkId::new(format!("fast-ta/p{}", period), size),
+                &data,
+                |b, data| {
+                    b.iter(|| stddev(black_box(data), black_box(period)));
+                },
+            );
+
+            group.bench_with_input(
+                BenchmarkId::new(format!("ta-lib/p{}", period), size),
+                &data,
+                |b, data| {
+                    b.iter(|| {
+                        let mut out_begin: i32 = 0;
+                        let mut out_nb_element: i32 = 0;
+                        let mut output = vec![0.0f64; data.len()];
+                        unsafe {
+                            STDDEV(
+                                0,
+                                (data.len() - 1) as i32,
+                                data.as_ptr(),
+                                period_i32,
+                                1.0, // nbdev parameter for TA-Lib
+                                &mut out_begin,
+                                &mut out_nb_element,
+                                output.as_mut_ptr(),
+                            );
+                        }
+                        black_box(output)
+                    });
+                },
+            );
+        }
     }
     group.finish();
 }
 
 fn bench_zscore(c: &mut Criterion) {
     let mut group = c.benchmark_group("zscore");
-    let period: i32 = 14;
 
     for &size in SIZES {
         let data = generate_close_prices(size);
         group.throughput(Throughput::Elements(size as u64));
 
-        group.bench_with_input(BenchmarkId::new("fast-ta", size), &data, |b, data| {
-            b.iter(|| zscore(black_box(data), black_box(period as usize)));
-        });
+        for &period in PERIODS {
+            group.bench_with_input(
+                BenchmarkId::new(format!("fast-ta/p{}", period), size),
+                &data,
+                |b, data| {
+                    b.iter(|| zscore(black_box(data), black_box(period)));
+                },
+            );
+        }
     }
     group.finish();
 }
 
 fn bench_sem(c: &mut Criterion) {
     let mut group = c.benchmark_group("sem");
-    let period: i32 = 14;
 
     for &size in SIZES {
         let data = generate_close_prices(size);
         group.throughput(Throughput::Elements(size as u64));
 
-        group.bench_with_input(BenchmarkId::new("fast-ta", size), &data, |b, data| {
-            b.iter(|| sem(black_box(data), black_box(period as usize)));
-        });
+        for &period in PERIODS {
+            group.bench_with_input(
+                BenchmarkId::new(format!("fast-ta/p{}", period), size),
+                &data,
+                |b, data| {
+                    b.iter(|| sem(black_box(data), black_box(period)));
+                },
+            );
+        }
     }
     group.finish();
 }
 
 fn bench_mad(c: &mut Criterion) {
     let mut group = c.benchmark_group("mad");
-    let period: i32 = 14;
 
     for &size in SIZES {
         let data = generate_close_prices(size);
         group.throughput(Throughput::Elements(size as u64));
 
-        group.bench_with_input(BenchmarkId::new("fast-ta", size), &data, |b, data| {
-            b.iter(|| mad(black_box(data), black_box(period as usize)));
-        });
+        for &period in PERIODS {
+            group.bench_with_input(
+                BenchmarkId::new(format!("fast-ta/p{}", period), size),
+                &data,
+                |b, data| {
+                    b.iter(|| mad(black_box(data), black_box(period)));
+                },
+            );
+        }
     }
     group.finish();
 }
 
 fn bench_skew(c: &mut Criterion) {
     let mut group = c.benchmark_group("skew");
-    let period: i32 = 14;
 
     for &size in SIZES {
         let data = generate_close_prices(size);
         group.throughput(Throughput::Elements(size as u64));
 
-        group.bench_with_input(BenchmarkId::new("fast-ta", size), &data, |b, data| {
-            b.iter(|| skew(black_box(data), black_box(period as usize)));
-        });
+        for &period in PERIODS {
+            group.bench_with_input(
+                BenchmarkId::new(format!("fast-ta/p{}", period), size),
+                &data,
+                |b, data| {
+                    b.iter(|| skew(black_box(data), black_box(period)));
+                },
+            );
+        }
     }
     group.finish();
 }
 
 fn bench_kurt(c: &mut Criterion) {
     let mut group = c.benchmark_group("kurt");
-    let period: i32 = 14;
 
     for &size in SIZES {
         let data = generate_close_prices(size);
         group.throughput(Throughput::Elements(size as u64));
 
-        group.bench_with_input(BenchmarkId::new("fast-ta", size), &data, |b, data| {
-            b.iter(|| kurt(black_box(data), black_box(period as usize)));
-        });
+        for &period in PERIODS {
+            group.bench_with_input(
+                BenchmarkId::new(format!("fast-ta/p{}", period), size),
+                &data,
+                |b, data| {
+                    b.iter(|| kurt(black_box(data), black_box(period)));
+                },
+            );
+        }
     }
     group.finish();
 }
 
 fn bench_cov(c: &mut Criterion) {
     let mut group = c.benchmark_group("cov");
-    let period: i32 = 14;
 
     for &size in SIZES {
         let data0 = generate_close_prices(size);
         let data1 = generate_close_prices(size);
         group.throughput(Throughput::Elements(size as u64));
 
-        group.bench_with_input(BenchmarkId::new("fast-ta", size), &(&data0, &data1), |b, (d0, d1)| {
-            b.iter(|| cov(black_box(d0), black_box(d1), black_box(period as usize)));
-        });
+        for &period in PERIODS {
+            group.bench_with_input(
+                BenchmarkId::new(format!("fast-ta/p{}", period), size),
+                &(&data0, &data1),
+                |b, (d0, d1)| {
+                    b.iter(|| cov(black_box(d0), black_box(d1), black_box(period)));
+                },
+            );
+        }
     }
     group.finish();
 }
 
 fn bench_correl(c: &mut Criterion) {
     let mut group = c.benchmark_group("correl");
-    let period: i32 = 14;
 
     for &size in SIZES {
         let data0 = generate_close_prices(size);
         let data1 = generate_close_prices(size);
         group.throughput(Throughput::Elements(size as u64));
 
-        group.bench_with_input(BenchmarkId::new("fast-ta", size), &(&data0, &data1), |b, (d0, d1)| {
-            b.iter(|| correl(black_box(d0), black_box(d1), black_box(period as usize)));
-        });
+        for &period in PERIODS {
+            group.bench_with_input(
+                BenchmarkId::new(format!("fast-ta/p{}", period), size),
+                &(&data0, &data1),
+                |b, (d0, d1)| {
+                    b.iter(|| correl(black_box(d0), black_box(d1), black_box(period)));
+                },
+            );
+        }
     }
     group.finish();
 }
 
 fn bench_beta(c: &mut Criterion) {
     let mut group = c.benchmark_group("beta");
-    let period: i32 = 14;
 
     for &size in SIZES {
         let data0 = generate_close_prices(size);
         let data1 = generate_close_prices(size);
         group.throughput(Throughput::Elements(size as u64));
 
-        group.bench_with_input(BenchmarkId::new("fast-ta", size), &(&data0, &data1), |b, (d0, d1)| {
-            b.iter(|| beta(black_box(d0), black_box(d1), black_box(period as usize)));
-        });
+        for &period in PERIODS {
+            group.bench_with_input(
+                BenchmarkId::new(format!("fast-ta/p{}", period), size),
+                &(&data0, &data1),
+                |b, (d0, d1)| {
+                    b.iter(|| beta(black_box(d0), black_box(d1), black_box(period)));
+                },
+            );
+        }
     }
     group.finish();
 }
 
 fn bench_linearreg(c: &mut Criterion) {
     let mut group = c.benchmark_group("linearreg");
-    let period: i32 = 14;
 
     for &size in SIZES {
         let data = generate_close_prices(size);
         group.throughput(Throughput::Elements(size as u64));
 
-        group.bench_with_input(BenchmarkId::new("fast-ta", size), &data, |b, data| {
-            b.iter(|| linearreg(black_box(data), black_box(period as usize)));
-        });
+        for &period in PERIODS {
+            let period_i32 = period as i32;
 
-        group.bench_with_input(BenchmarkId::new("ta-lib", size), &data, |b, data| {
-            b.iter(|| {
-                let mut out_begin: i32 = 0;
-                let mut out_nb_element: i32 = 0;
-                let mut output = vec![0.0f64; data.len()];
-                unsafe {
-                    LINEARREG(
-                        0,
-                        (data.len() - 1) as i32,
-                        data.as_ptr(),
-                        period,
-                        &mut out_begin,
-                        &mut out_nb_element,
-                        output.as_mut_ptr(),
-                    );
-                }
-                black_box(output)
-            });
-        });
+            group.bench_with_input(
+                BenchmarkId::new(format!("fast-ta/p{}", period), size),
+                &data,
+                |b, data| {
+                    b.iter(|| linearreg(black_box(data), black_box(period)));
+                },
+            );
+
+            group.bench_with_input(
+                BenchmarkId::new(format!("ta-lib/p{}", period), size),
+                &data,
+                |b, data| {
+                    b.iter(|| {
+                        let mut out_begin: i32 = 0;
+                        let mut out_nb_element: i32 = 0;
+                        let mut output = vec![0.0f64; data.len()];
+                        unsafe {
+                            LINEARREG(
+                                0,
+                                (data.len() - 1) as i32,
+                                data.as_ptr(),
+                                period_i32,
+                                &mut out_begin,
+                                &mut out_nb_element,
+                                output.as_mut_ptr(),
+                            );
+                        }
+                        black_box(output)
+                    });
+                },
+            );
+        }
     }
     group.finish();
 }
 
 fn bench_tsf(c: &mut Criterion) {
     let mut group = c.benchmark_group("tsf");
-    let period: i32 = 14;
 
     for &size in SIZES {
         let data = generate_close_prices(size);
         group.throughput(Throughput::Elements(size as u64));
 
-        group.bench_with_input(BenchmarkId::new("fast-ta", size), &data, |b, data| {
-            b.iter(|| tsf(black_box(data), black_box(period as usize)));
-        });
+        for &period in PERIODS {
+            let period_i32 = period as i32;
 
-        group.bench_with_input(BenchmarkId::new("ta-lib", size), &data, |b, data| {
-            b.iter(|| {
-                let mut out_begin: i32 = 0;
-                let mut out_nb_element: i32 = 0;
-                let mut output = vec![0.0f64; data.len()];
-                unsafe {
-                    TSF(
-                        0,
-                        (data.len() - 1) as i32,
-                        data.as_ptr(),
-                        period,
-                        &mut out_begin,
-                        &mut out_nb_element,
-                        output.as_mut_ptr(),
-                    );
-                }
-                black_box(output)
-            });
-        });
+            group.bench_with_input(
+                BenchmarkId::new(format!("fast-ta/p{}", period), size),
+                &data,
+                |b, data| {
+                    b.iter(|| tsf(black_box(data), black_box(period)));
+                },
+            );
+
+            group.bench_with_input(
+                BenchmarkId::new(format!("ta-lib/p{}", period), size),
+                &data,
+                |b, data| {
+                    b.iter(|| {
+                        let mut out_begin: i32 = 0;
+                        let mut out_nb_element: i32 = 0;
+                        let mut output = vec![0.0f64; data.len()];
+                        unsafe {
+                            TSF(
+                                0,
+                                (data.len() - 1) as i32,
+                                data.as_ptr(),
+                                period_i32,
+                                &mut out_begin,
+                                &mut out_nb_element,
+                                output.as_mut_ptr(),
+                            );
+                        }
+                        black_box(output)
+                    });
+                },
+            );
+        }
     }
     group.finish();
 }
 
 fn bench_linearreg_slope(c: &mut Criterion) {
     let mut group = c.benchmark_group("linearreg_slope");
-    let period: i32 = 14;
 
     for &size in SIZES {
         let data = generate_close_prices(size);
         group.throughput(Throughput::Elements(size as u64));
 
-        group.bench_with_input(BenchmarkId::new("fast-ta", size), &data, |b, data| {
-            b.iter(|| linearreg_slope(black_box(data), black_box(period as usize)));
-        });
+        for &period in PERIODS {
+            let period_i32 = period as i32;
 
-        group.bench_with_input(BenchmarkId::new("ta-lib", size), &data, |b, data| {
-            b.iter(|| {
-                let mut out_begin: i32 = 0;
-                let mut out_nb_element: i32 = 0;
-                let mut output = vec![0.0f64; data.len()];
-                unsafe {
-                    LINEARREG_SLOPE(
-                        0,
-                        (data.len() - 1) as i32,
-                        data.as_ptr(),
-                        period,
-                        &mut out_begin,
-                        &mut out_nb_element,
-                        output.as_mut_ptr(),
-                    );
-                }
-                black_box(output)
-            });
-        });
+            group.bench_with_input(
+                BenchmarkId::new(format!("fast-ta/p{}", period), size),
+                &data,
+                |b, data| {
+                    b.iter(|| linearreg_slope(black_box(data), black_box(period)));
+                },
+            );
+
+            group.bench_with_input(
+                BenchmarkId::new(format!("ta-lib/p{}", period), size),
+                &data,
+                |b, data| {
+                    b.iter(|| {
+                        let mut out_begin: i32 = 0;
+                        let mut out_nb_element: i32 = 0;
+                        let mut output = vec![0.0f64; data.len()];
+                        unsafe {
+                            LINEARREG_SLOPE(
+                                0,
+                                (data.len() - 1) as i32,
+                                data.as_ptr(),
+                                period_i32,
+                                &mut out_begin,
+                                &mut out_nb_element,
+                                output.as_mut_ptr(),
+                            );
+                        }
+                        black_box(output)
+                    });
+                },
+            );
+        }
     }
     group.finish();
 }
 
 fn bench_linearreg_intercept(c: &mut Criterion) {
     let mut group = c.benchmark_group("linearreg_intercept");
-    let period: i32 = 14;
 
     for &size in SIZES {
         let data = generate_close_prices(size);
         group.throughput(Throughput::Elements(size as u64));
 
-        group.bench_with_input(BenchmarkId::new("fast-ta", size), &data, |b, data| {
-            b.iter(|| linearreg_intercept(black_box(data), black_box(period as usize)));
-        });
+        for &period in PERIODS {
+            let period_i32 = period as i32;
 
-        group.bench_with_input(BenchmarkId::new("ta-lib", size), &data, |b, data| {
-            b.iter(|| {
-                let mut out_begin: i32 = 0;
-                let mut out_nb_element: i32 = 0;
-                let mut output = vec![0.0f64; data.len()];
-                unsafe {
-                    LINEARREG_INTERCEPT(
-                        0,
-                        (data.len() - 1) as i32,
-                        data.as_ptr(),
-                        period,
-                        &mut out_begin,
-                        &mut out_nb_element,
-                        output.as_mut_ptr(),
-                    );
-                }
-                black_box(output)
-            });
-        });
+            group.bench_with_input(
+                BenchmarkId::new(format!("fast-ta/p{}", period), size),
+                &data,
+                |b, data| {
+                    b.iter(|| linearreg_intercept(black_box(data), black_box(period)));
+                },
+            );
+
+            group.bench_with_input(
+                BenchmarkId::new(format!("ta-lib/p{}", period), size),
+                &data,
+                |b, data| {
+                    b.iter(|| {
+                        let mut out_begin: i32 = 0;
+                        let mut out_nb_element: i32 = 0;
+                        let mut output = vec![0.0f64; data.len()];
+                        unsafe {
+                            LINEARREG_INTERCEPT(
+                                0,
+                                (data.len() - 1) as i32,
+                                data.as_ptr(),
+                                period_i32,
+                                &mut out_begin,
+                                &mut out_nb_element,
+                                output.as_mut_ptr(),
+                            );
+                        }
+                        black_box(output)
+                    });
+                },
+            );
+        }
     }
     group.finish();
 }
 
 fn bench_linearreg_angle(c: &mut Criterion) {
     let mut group = c.benchmark_group("linearreg_angle");
-    let period: i32 = 14;
 
     for &size in SIZES {
         let data = generate_close_prices(size);
         group.throughput(Throughput::Elements(size as u64));
 
-        group.bench_with_input(BenchmarkId::new("fast-ta", size), &data, |b, data| {
-            b.iter(|| linearreg_angle(black_box(data), black_box(period as usize)));
-        });
+        for &period in PERIODS {
+            let period_i32 = period as i32;
 
-        group.bench_with_input(BenchmarkId::new("ta-lib", size), &data, |b, data| {
-            b.iter(|| {
-                let mut out_begin: i32 = 0;
-                let mut out_nb_element: i32 = 0;
-                let mut output = vec![0.0f64; data.len()];
-                unsafe {
-                    LINEARREG_ANGLE(
-                        0,
-                        (data.len() - 1) as i32,
-                        data.as_ptr(),
-                        period,
-                        &mut out_begin,
-                        &mut out_nb_element,
-                        output.as_mut_ptr(),
-                    );
-                }
-                black_box(output)
-            });
-        });
+            group.bench_with_input(
+                BenchmarkId::new(format!("fast-ta/p{}", period), size),
+                &data,
+                |b, data| {
+                    b.iter(|| linearreg_angle(black_box(data), black_box(period)));
+                },
+            );
+
+            group.bench_with_input(
+                BenchmarkId::new(format!("ta-lib/p{}", period), size),
+                &data,
+                |b, data| {
+                    b.iter(|| {
+                        let mut out_begin: i32 = 0;
+                        let mut out_nb_element: i32 = 0;
+                        let mut output = vec![0.0f64; data.len()];
+                        unsafe {
+                            LINEARREG_ANGLE(
+                                0,
+                                (data.len() - 1) as i32,
+                                data.as_ptr(),
+                                period_i32,
+                                &mut out_begin,
+                                &mut out_nb_element,
+                                output.as_mut_ptr(),
+                            );
+                        }
+                        black_box(output)
+                    });
+                },
+            );
+        }
     }
     group.finish();
 }
@@ -1834,79 +2053,93 @@ fn bench_linearreg_angle(c: &mut Criterion) {
 
 fn bench_midpoint(c: &mut Criterion) {
     let mut group = c.benchmark_group("midpoint");
-    let period: i32 = 14;
 
     for &size in SIZES {
         let data = generate_close_prices(size);
         group.throughput(Throughput::Elements(size as u64));
 
-        group.bench_with_input(BenchmarkId::new("fast-ta", size), &data, |b, data| {
-            b.iter(|| midpoint(black_box(data), black_box(period as usize)));
-        });
+        for &period in PERIODS {
+            let period_i32 = period as i32;
 
-        group.bench_with_input(BenchmarkId::new("ta-lib", size), &data, |b, data| {
-            b.iter(|| {
-                let mut out_begin: i32 = 0;
-                let mut out_nb_element: i32 = 0;
-                let mut output = vec![0.0f64; data.len()];
-                unsafe {
-                    MIDPOINT(
-                        0,
-                        (data.len() - 1) as i32,
-                        data.as_ptr(),
-                        period,
-                        &mut out_begin,
-                        &mut out_nb_element,
-                        output.as_mut_ptr(),
-                    );
-                }
-                black_box(output)
-            });
-        });
+            group.bench_with_input(
+                BenchmarkId::new(format!("fast-ta/p{}", period), size),
+                &data,
+                |b, data| {
+                    b.iter(|| midpoint(black_box(data), black_box(period)));
+                },
+            );
+
+            group.bench_with_input(
+                BenchmarkId::new(format!("ta-lib/p{}", period), size),
+                &data,
+                |b, data| {
+                    b.iter(|| {
+                        let mut out_begin: i32 = 0;
+                        let mut out_nb_element: i32 = 0;
+                        let mut output = vec![0.0f64; data.len()];
+                        unsafe {
+                            MIDPOINT(
+                                0,
+                                (data.len() - 1) as i32,
+                                data.as_ptr(),
+                                period_i32,
+                                &mut out_begin,
+                                &mut out_nb_element,
+                                output.as_mut_ptr(),
+                            );
+                        }
+                        black_box(output)
+                    });
+                },
+            );
+        }
     }
     group.finish();
 }
 
 fn bench_midprice(c: &mut Criterion) {
     let mut group = c.benchmark_group("midprice");
-    let period: i32 = 14;
 
     for &size in SIZES {
         let (_, high, low, _, _) = generate_ohlcv(size);
         group.throughput(Throughput::Elements(size as u64));
 
-        group.bench_with_input(
-            BenchmarkId::new("fast-ta", size),
-            &(&high, &low),
-            |b, (h, l)| {
-                b.iter(|| midprice(black_box(*h), black_box(*l), black_box(period as usize)));
-            },
-        );
+        for &period in PERIODS {
+            let period_i32 = period as i32;
 
-        group.bench_with_input(
-            BenchmarkId::new("ta-lib", size),
-            &(&high, &low),
-            |b, (h, l)| {
-                b.iter(|| {
-                    let mut out_begin: i32 = 0;
-                    let mut out_nb_element: i32 = 0;
-                    let mut output = vec![0.0f64; h.len()];
-                    unsafe {
-                        MIDPRICE(
-                            0,
-                            (h.len() - 1) as i32,
-                            h.as_ptr(),
-                            l.as_ptr(),
-                            period,
-                            &mut out_begin,
-                            &mut out_nb_element,
-                            output.as_mut_ptr(),
-                        );
-                    }
-                    black_box(output)
-                });
-            },
-        );
+            group.bench_with_input(
+                BenchmarkId::new(format!("fast-ta/p{}", period), size),
+                &(&high, &low),
+                |b, (h, l)| {
+                    b.iter(|| midprice(black_box(*h), black_box(*l), black_box(period)));
+                },
+            );
+
+            group.bench_with_input(
+                BenchmarkId::new(format!("ta-lib/p{}", period), size),
+                &(&high, &low),
+                |b, (h, l)| {
+                    b.iter(|| {
+                        let mut out_begin: i32 = 0;
+                        let mut out_nb_element: i32 = 0;
+                        let mut output = vec![0.0f64; h.len()];
+                        unsafe {
+                            MIDPRICE(
+                                0,
+                                (h.len() - 1) as i32,
+                                h.as_ptr(),
+                                l.as_ptr(),
+                                period_i32,
+                                &mut out_begin,
+                                &mut out_nb_element,
+                                output.as_mut_ptr(),
+                            );
+                        }
+                        black_box(output)
+                    });
+                },
+            );
+        }
     }
     group.finish();
 }
