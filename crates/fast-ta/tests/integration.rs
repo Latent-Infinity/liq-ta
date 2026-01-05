@@ -516,9 +516,9 @@ fn test_macd_fluent_api() {
 
     // Custom (10, 21, 7)
     let result = Macd::new()
-        .fast_period(10)
-        .slow_period(21)
-        .signal_period(7)
+        .with_fast_period(10)
+        .with_slow_period(21)
+        .with_signal_period(7)
         .compute(&prices)
         .unwrap();
 
@@ -530,11 +530,14 @@ fn test_macd_fluent_api() {
 
 #[test]
 fn test_macd_config_getters() {
-    let config = Macd::new().fast_period(10).slow_period(21).signal_period(7);
+    let config = Macd::new()
+        .with_fast_period(10)
+        .with_slow_period(21)
+        .with_signal_period(7);
 
-    assert_eq!(config.get_fast_period(), 10);
-    assert_eq!(config.get_slow_period(), 21);
-    assert_eq!(config.get_signal_period(), 7);
+    assert_eq!(config.fast_period(), 10);
+    assert_eq!(config.slow_period(), 21);
+    assert_eq!(config.signal_period(), 7);
     assert_eq!(config.line_lookback(), 20); // 21 - 1
     assert_eq!(config.signal_lookback(), 26); // 21 + 7 - 2 = 26
     assert_eq!(config.min_len(), 27); // 21 + 7 - 1 = 27
@@ -556,8 +559,8 @@ fn test_bollinger_fluent_api() {
 
     // Custom (10, 2.5)
     let result = Bollinger::new()
-        .period(10)
-        .std_dev(2.5)
+        .with_period(10)
+        .with_std_dev(2.5)
         .compute(&prices)
         .unwrap();
 
@@ -569,10 +572,10 @@ fn test_bollinger_fluent_api() {
 
 #[test]
 fn test_bollinger_config_getters() {
-    let config = Bollinger::new().period(10).std_dev(2.5);
+    let config = Bollinger::new().with_period(10).with_std_dev(2.5);
 
-    assert_eq!(config.get_period(), 10);
-    assert!((config.get_std_dev() - 2.5).abs() < 1e-10);
+    assert_eq!(config.period(), 10);
+    assert!((config.std_dev() - 2.5).abs() < 1e-10);
     assert_eq!(config.lookback(), 9); // 10 - 1
     assert_eq!(config.min_len(), 10);
 }
@@ -583,9 +586,9 @@ fn test_stochastic_default_compute() {
 
     // Default is now fast stochastic (k_slowing=1), test with slow (k_slowing=3)
     let result = Stochastic::new()
-        .k_period(5)
-        .d_period(3)
-        .k_slowing(3)
+        .with_k_period(5)
+        .with_d_period(3)
+        .with_k_slowing(3)
         .compute(&high, &low, &close)
         .unwrap();
 
@@ -630,11 +633,14 @@ fn test_stochastic_slow_constructor() {
 
 #[test]
 fn test_stochastic_config_getters() {
-    let config = Stochastic::new().k_period(14).d_period(5).k_slowing(3);
+    let config = Stochastic::new()
+        .with_k_period(14)
+        .with_d_period(5)
+        .with_k_slowing(3);
 
-    assert_eq!(config.get_k_period(), 14);
-    assert_eq!(config.get_d_period(), 5);
-    assert_eq!(config.get_k_slowing(), 3);
+    assert_eq!(config.k_period(), 14);
+    assert_eq!(config.d_period(), 5);
+    assert_eq!(config.k_slowing(), 3);
     assert_eq!(config.k_lookback(), 13); // 14 - 1
     assert_eq!(config.d_lookback(), 17); // 14 + 5 - 2
     assert_eq!(config.min_len(), 18); // 14 + 5 - 1
@@ -646,7 +652,10 @@ fn test_config_types_reusable() {
     let prices2: Vec<f64> = (0..50).map(|i| 200.0 - f64::from(i)).collect();
 
     // Same config can be reused for multiple computations
-    let macd_config = Macd::new().fast_period(5).slow_period(10).signal_period(3);
+    let macd_config = Macd::new()
+        .with_fast_period(5)
+        .with_slow_period(10)
+        .with_signal_period(3);
 
     let result1 = macd_config.compute(&prices1).unwrap();
     let result2 = macd_config.compute(&prices2).unwrap();
@@ -661,17 +670,17 @@ fn test_config_types_invalid_params_fail_fast() {
 
     // MACD with fast >= slow should error
     let result = Macd::new()
-        .fast_period(26)
-        .slow_period(12)
-        .signal_period(9)
+        .with_fast_period(26)
+        .with_slow_period(12)
+        .with_signal_period(9)
         .compute(&prices);
     assert!(result.is_err());
 
     // MACD with zero period should error
     let result = Macd::new()
-        .fast_period(0)
-        .slow_period(26)
-        .signal_period(9)
+        .with_fast_period(0)
+        .with_slow_period(26)
+        .with_signal_period(9)
         .compute(&prices);
     assert!(result.is_err());
 }

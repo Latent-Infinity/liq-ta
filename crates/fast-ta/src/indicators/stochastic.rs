@@ -1857,9 +1857,9 @@ fn compute_sma_of_series<T: SeriesElement + 'static>(
 ///
 /// // Slow stochastic with fluent API
 /// let result = Stochastic::new()
-///     .k_period(5)
-///     .d_period(3)
-///     .k_slowing(3)
+///     .with_k_period(5)
+///     .with_d_period(3)
+///     .with_k_slowing(3)
 ///     .compute(&high, &low, &close)
 ///     .unwrap();
 ///
@@ -1922,7 +1922,7 @@ impl Stochastic {
     ///
     /// Default: 14
     #[must_use]
-    pub const fn k_period(mut self, period: usize) -> Self {
+    pub const fn with_k_period(mut self, period: usize) -> Self {
         self.k_period = period;
         self
     }
@@ -1931,7 +1931,7 @@ impl Stochastic {
     ///
     /// Default: 3
     #[must_use]
-    pub const fn d_period(mut self, period: usize) -> Self {
+    pub const fn with_d_period(mut self, period: usize) -> Self {
         self.d_period = period;
         self
     }
@@ -1943,7 +1943,7 @@ impl Stochastic {
     ///
     /// Default: 1 (fast stochastic per PRD §5.2)
     #[must_use]
-    pub const fn k_slowing(mut self, period: usize) -> Self {
+    pub const fn with_k_slowing(mut self, period: usize) -> Self {
         self.k_slowing = period;
         self
     }
@@ -2008,19 +2008,19 @@ impl Stochastic {
 
     /// Returns the %K period.
     #[must_use]
-    pub const fn get_k_period(&self) -> usize {
+    pub const fn k_period(&self) -> usize {
         self.k_period
     }
 
     /// Returns the %D period.
     #[must_use]
-    pub const fn get_d_period(&self) -> usize {
+    pub const fn d_period(&self) -> usize {
         self.d_period
     }
 
     /// Returns the %K slowing (smoothing) period.
     #[must_use]
-    pub const fn get_k_slowing(&self) -> usize {
+    pub const fn k_slowing(&self) -> usize {
         self.k_slowing
     }
 

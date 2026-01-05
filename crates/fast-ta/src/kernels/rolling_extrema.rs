@@ -102,6 +102,8 @@ pub const fn rolling_extrema_min_len(period: usize) -> usize {
 pub struct MonotonicDeque<T> {
     /// The deque stores indices into the data array
     deque: VecDeque<usize>,
+    /// Tracks indices with invalid (NaN/Infinity) values for NaN propagation
+    invalid_indices: VecDeque<usize>,
     /// The window size
     period: usize,
     /// Phantom marker for the element type
@@ -126,6 +128,7 @@ impl<T: SeriesElement> MonotonicDeque<T> {
     pub fn new(period: usize) -> Self {
         Self {
             deque: VecDeque::with_capacity(period),
+            invalid_indices: VecDeque::with_capacity(period),
             period,
             _phantom: std::marker::PhantomData,
         }
@@ -155,6 +158,7 @@ impl<T: SeriesElement> MonotonicDeque<T> {
     #[inline]
     pub fn clear(&mut self) {
         self.deque.clear();
+        self.invalid_indices.clear();
     }
 
     /// Pushes a new value for computing rolling maximum.
@@ -174,8 +178,10 @@ impl<T: SeriesElement> MonotonicDeque<T> {
     pub fn push_max(&mut self, index: usize, data: &[T]) {
         let value = data[index];
 
-        // Handle invalid values: invalid inputs should not be considered as max
+        // Track invalid values for NaN propagation
         if is_invalid(value) {
+            self.invalid_indices.push_back(index);
+            self.remove_expired(index);
             return;
         }
 
@@ -213,8 +219,10 @@ impl<T: SeriesElement> MonotonicDeque<T> {
     pub fn push_min(&mut self, index: usize, data: &[T]) {
         let value = data[index];
 
-        // Handle invalid values: invalid inputs should not be considered as min
+        // Track invalid values for NaN propagation
         if is_invalid(value) {
+            self.invalid_indices.push_back(index);
+            self.remove_expired(index);
             return;
         }
 
@@ -241,9 +249,20 @@ impl<T: SeriesElement> MonotonicDeque<T> {
         // Only remove if we've seen at least `period` elements
         if current_index >= self.period {
             let window_start = current_index + 1 - self.period;
+
+            // Remove expired valid indices
             while let Some(&front_idx) = self.deque.front() {
                 if front_idx < window_start {
                     self.deque.pop_front();
+                } else {
+                    break;
+                }
+            }
+
+            // Remove expired invalid indices
+            while let Some(&front_idx) = self.invalid_indices.front() {
+                if front_idx < window_start {
+                    self.invalid_indices.pop_front();
                 } else {
                     break;
                 }
@@ -262,9 +281,20 @@ impl<T: SeriesElement> MonotonicDeque<T> {
 
     /// Returns the current extremum value from the data array.
     ///
-    /// Returns `NaN` if the deque is empty.
+    /// Returns `NaN` if the window contains any invalid (NaN/Infinity) values.
+    ///
+    /// This implements strict NaN propagation per PRD §4.3:
+    /// "NaN in window → Output NaN for that position"
+    ///
+    /// This ensures mathematical correctness and prevents silent data corruption.
     #[inline]
     pub fn get_extremum(&self, data: &[T]) -> T {
+        // Strict NaN propagation: if window contains ANY invalid value, return NaN
+        if !self.invalid_indices.is_empty() {
+            return T::nan();
+        }
+
+        // Return NaN if all values are invalid (deque is empty)
         self.front_index().map_or_else(T::nan, |idx| data[idx])
     }
 }

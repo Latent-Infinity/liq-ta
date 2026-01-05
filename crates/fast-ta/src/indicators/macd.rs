@@ -569,9 +569,9 @@ const fn validate_macd_inputs<T: SeriesElement>(
 ///
 /// // Or customize with fluent API
 /// let result = Macd::new()
-///     .fast_period(10)
-///     .slow_period(21)
-///     .signal_period(7)
+///     .with_fast_period(10)
+///     .with_slow_period(21)
+///     .with_signal_period(7)
 ///     .compute(&prices)
 ///     .unwrap();
 /// ```
@@ -604,7 +604,7 @@ impl Macd {
     ///
     /// Default: 12
     #[must_use]
-    pub const fn fast_period(mut self, period: usize) -> Self {
+    pub const fn with_fast_period(mut self, period: usize) -> Self {
         self.fast_period = period;
         self
     }
@@ -613,7 +613,7 @@ impl Macd {
     ///
     /// Default: 26
     #[must_use]
-    pub const fn slow_period(mut self, period: usize) -> Self {
+    pub const fn with_slow_period(mut self, period: usize) -> Self {
         self.slow_period = period;
         self
     }
@@ -622,7 +622,7 @@ impl Macd {
     ///
     /// Default: 9
     #[must_use]
-    pub const fn signal_period(mut self, period: usize) -> Self {
+    pub const fn with_signal_period(mut self, period: usize) -> Self {
         self.signal_period = period;
         self
     }
@@ -672,19 +672,19 @@ impl Macd {
 
     /// Returns the fast period.
     #[must_use]
-    pub const fn get_fast_period(&self) -> usize {
+    pub const fn fast_period(&self) -> usize {
         self.fast_period
     }
 
     /// Returns the slow period.
     #[must_use]
-    pub const fn get_slow_period(&self) -> usize {
+    pub const fn slow_period(&self) -> usize {
         self.slow_period
     }
 
     /// Returns the signal period.
     #[must_use]
-    pub const fn get_signal_period(&self) -> usize {
+    pub const fn signal_period(&self) -> usize {
         self.signal_period
     }
 

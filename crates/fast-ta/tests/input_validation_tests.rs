@@ -428,7 +428,7 @@ fn validation_zero_std_dev_bollinger() {
 #[test]
 fn validation_bollinger_config_zero_period() {
     let data = vec![20.0_f64, 21.0, 22.0, 21.5, 22.5];
-    let result = Bollinger::new().period(0).compute(&data);
+    let result = Bollinger::new().with_period(0).compute(&data);
     assert!(matches!(
         result,
         Err(Error::InvalidPeriod { period: 0, .. })
@@ -438,7 +438,7 @@ fn validation_bollinger_config_zero_period() {
 #[test]
 fn validation_bollinger_config_large_period() {
     let data = vec![20.0_f64, 21.0, 22.0];
-    let result = Bollinger::new().period(100).compute(&data);
+    let result = Bollinger::new().with_period(100).compute(&data);
     assert!(matches!(result, Err(Error::InsufficientData { .. })));
 }
 

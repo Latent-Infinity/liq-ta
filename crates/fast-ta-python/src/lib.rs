@@ -654,9 +654,9 @@ fn macd<'py>(
 )> {
     let input = data.as_slice()?;
     let config = fast_ta::indicators::Macd::new()
-        .fast_period(fast_period)
-        .slow_period(slow_period)
-        .signal_period(signal_period);
+        .with_fast_period(fast_period)
+        .with_slow_period(slow_period)
+        .with_signal_period(signal_period);
     let result = config.compute(input).map_err(to_py_err)?;
     Ok((
         PyArray1::from_vec(py, result.macd_line),
@@ -1615,8 +1615,8 @@ fn bollinger<'py>(
 )> {
     let input = data.as_slice()?;
     let config = fast_ta::indicators::Bollinger::new()
-        .period(period)
-        .std_dev(std_dev);
+        .with_period(period)
+        .with_std_dev(std_dev);
     let result = config.compute(input).map_err(to_py_err)?;
     Ok((
         PyArray1::from_vec(py, result.upper),

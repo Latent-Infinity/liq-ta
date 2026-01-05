@@ -124,15 +124,15 @@ let result = Macd::default().compute(&prices)?;
 
 // Custom parameters with fluent API
 let result = Macd::new()
-    .fast_period(10)
-    .slow_period(21)
-    .signal_period(7)
+    .with_fast_period(10)
+    .with_slow_period(21)
+    .with_signal_period(7)
     .compute(&prices)?;
 
 // Bollinger with custom std dev
 let bands = Bollinger::new()
-    .period(20)
-    .std_dev(2.5)
+    .with_period(20)
+    .with_std_dev(2.5)
     .compute(&prices)?;
 ```
 

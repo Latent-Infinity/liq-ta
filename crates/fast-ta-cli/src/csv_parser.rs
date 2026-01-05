@@ -73,7 +73,7 @@ pub struct ParsedCsv {
 impl ParsedCsv {
     /// Get a column by normalized name (e.g., "close", "high").
     #[must_use] 
-    pub fn get_column(&self, name: &str) -> Option<&Vec<f64>> {
+    pub fn column(&self, name: &str) -> Option<&Vec<f64>> {
         self.column_map
             .get(name)
             .and_then(|idx| self.columns.get(idx))
@@ -87,11 +87,11 @@ impl ParsedCsv {
 
     /// Get close prices, trying multiple common column names.
     #[must_use] 
-    pub fn get_close(&self) -> Option<&Vec<f64>> {
-        self.get_column("close")
-            .or_else(|| self.get_column("price"))
-            .or_else(|| self.get_column("adj close"))
-            .or_else(|| self.get_column("adjusted close"))
+    pub fn close(&self) -> Option<&Vec<f64>> {
+        self.column("close")
+            .or_else(|| self.column("price"))
+            .or_else(|| self.column("adj close"))
+            .or_else(|| self.column("adjusted close"))
     }
 
     /// Take ownership of close prices, trying multiple common column names.
@@ -366,7 +366,7 @@ mod tests {
         let cursor = Cursor::new(csv_data);
         let parsed = parse_csv_from_reader(cursor).unwrap();
 
-        let close = parsed.get_close().unwrap();
+        let close = parsed.close().unwrap();
         assert_eq!(close.len(), 5);
         assert!((close[0] - 44.0).abs() < 1e-10);
         assert!((close[1] - 44.5).abs() < 1e-10);
@@ -381,17 +381,17 @@ mod tests {
         let cursor = Cursor::new(csv_data);
         let parsed = parse_csv_from_reader(cursor).unwrap();
 
-        assert!(parsed.get_column("open").is_some());
-        assert!(parsed.get_column("high").is_some());
-        assert!(parsed.get_column("low").is_some());
-        assert!(parsed.get_close().is_some());
+        assert!(parsed.column("open").is_some());
+        assert!(parsed.column("high").is_some());
+        assert!(parsed.column("low").is_some());
+        assert!(parsed.close().is_some());
         assert!(parsed.dates.is_some());
 
         let dates = parsed.dates.as_ref().unwrap();
         assert_eq!(dates[0], "2024-01-01");
         assert_eq!(dates[1], "2024-01-02");
 
-        let close = parsed.get_close().unwrap();
+        let close = parsed.close().unwrap();
         assert!((close[0] - 44.5).abs() < 1e-10);
         assert!((close[1] - 45.0).abs() < 1e-10);
     }
@@ -404,7 +404,7 @@ mod tests {
         let cursor = Cursor::new(csv_data);
         let parsed = parse_csv_from_reader(cursor).unwrap();
 
-        let volume = parsed.get_column("volume").unwrap();
+        let volume = parsed.column("volume").unwrap();
         assert_eq!(volume.len(), 2);
         assert!((volume[0] - 1000000.0).abs() < 1e-10);
         assert!((volume[1] - 1100000.0).abs() < 1e-10);
@@ -417,10 +417,10 @@ mod tests {
         let parsed = parse_csv_from_reader(cursor).unwrap();
 
         // Headers should be case-insensitive
-        assert!(parsed.get_close().is_some());
-        assert!(parsed.get_column("high").is_some());
-        assert!(parsed.get_column("low").is_some());
-        assert!(parsed.get_column("open").is_some());
+        assert!(parsed.close().is_some());
+        assert!(parsed.column("high").is_some());
+        assert!(parsed.column("low").is_some());
+        assert!(parsed.column("open").is_some());
     }
 
     #[test]
@@ -429,7 +429,7 @@ mod tests {
         let cursor = Cursor::new(csv_data);
         let parsed = parse_csv_from_reader(cursor).unwrap();
 
-        let close = parsed.get_close().unwrap();
+        let close = parsed.close().unwrap();
         assert_eq!(close.len(), 3);
         assert!((close[0] - 44.0).abs() < 1e-10);
         assert!(close[1].is_nan()); // Empty cell becomes NaN
@@ -500,13 +500,13 @@ mod tests {
         let csv_data = "price\n44.0\n44.5\n";
         let cursor = Cursor::new(csv_data);
         let parsed = parse_csv_from_reader(cursor).unwrap();
-        assert!(parsed.get_close().is_some());
+        assert!(parsed.close().is_some());
 
         // Test 'adj close' column
         let csv_data = "adj close\n44.0\n44.5\n";
         let cursor = Cursor::new(csv_data);
         let parsed = parse_csv_from_reader(cursor).unwrap();
-        assert!(parsed.get_close().is_some());
+        assert!(parsed.close().is_some());
     }
 
     #[test]
@@ -573,7 +573,7 @@ mod tests {
         let cursor = Cursor::new(csv_data);
         let parsed = parse_csv_from_reader(cursor).unwrap();
         assert_eq!(parsed.row_count, 0);
-        let close = parsed.get_close().unwrap();
+        let close = parsed.close().unwrap();
         assert!(close.is_empty());
     }
 
@@ -582,7 +582,7 @@ mod tests {
         let csv_data = "close\n  44.0  \n 44.5\n43.5 \n";
         let cursor = Cursor::new(csv_data);
         let parsed = parse_csv_from_reader(cursor).unwrap();
-        let close = parsed.get_close().unwrap();
+        let close = parsed.close().unwrap();
         assert!((close[0] - 44.0).abs() < 1e-10);
         assert!((close[1] - 44.5).abs() < 1e-10);
         assert!((close[2] - 43.5).abs() < 1e-10);

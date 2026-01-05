@@ -118,11 +118,11 @@ fn run() -> Result<()> {
 }
 
 /// Get close prices from parsed CSV, optionally using a specific column.
-fn get_close_prices(parsed: &csv_parser::ParsedCsv, column: Option<&str>) -> Result<Vec<f64>> {
+fn close_prices(parsed: &csv_parser::ParsedCsv, column: Option<&str>) -> Result<Vec<f64>> {
     if let Some(col_name) = column {
         let normalized = col_name.trim().to_lowercase();
         parsed
-            .get_column(&normalized)
+            .column(&normalized)
             .cloned()
             .ok_or_else(|| CliError::CsvParseError {
                 message: format!("column '{col_name}' not found"),
@@ -130,7 +130,7 @@ fn get_close_prices(parsed: &csv_parser::ParsedCsv, column: Option<&str>) -> Res
             })
     } else {
         parsed
-            .get_close()
+            .close()
             .cloned()
             .ok_or_else(|| CliError::CsvParseError {
                 message: "no close price column found (expected 'close', 'price', or 'adj close')"
@@ -143,7 +143,7 @@ fn get_close_prices(parsed: &csv_parser::ParsedCsv, column: Option<&str>) -> Res
 /// Run SMA indicator.
 fn run_sma(input: &str, period: usize, column: Option<&str>, dest: &OutputDest) -> Result<()> {
     let parsed = parse_csv(input)?;
-    let close = get_close_prices(&parsed, column)?;
+    let close = close_prices(&parsed, column)?;
 
     let output = sma(&close, period)?;
     let lookback = period.saturating_sub(1);
@@ -155,7 +155,7 @@ fn run_sma(input: &str, period: usize, column: Option<&str>, dest: &OutputDest) 
 /// Run EMA indicator.
 fn run_ema(input: &str, period: usize, column: Option<&str>, dest: &OutputDest) -> Result<()> {
     let parsed = parse_csv(input)?;
-    let close = get_close_prices(&parsed, column)?;
+    let close = close_prices(&parsed, column)?;
 
     let output = ema(&close, period)?;
     let lookback = period.saturating_sub(1);
@@ -167,7 +167,7 @@ fn run_ema(input: &str, period: usize, column: Option<&str>, dest: &OutputDest) 
 /// Run RSI indicator.
 fn run_rsi(input: &str, period: usize, column: Option<&str>, dest: &OutputDest) -> Result<()> {
     let parsed = parse_csv(input)?;
-    let close = get_close_prices(&parsed, column)?;
+    let close = close_prices(&parsed, column)?;
 
     let output = rsi(&close, period)?;
     let lookback = period; // RSI has lookback equal to period
@@ -181,7 +181,7 @@ fn run_macd(input: &str, params: &str, column: Option<&str>, dest: &OutputDest) 
     let (fast, slow, signal) = parse_macd_params(params)?;
 
     let parsed = parse_csv(input)?;
-    let close = get_close_prices(&parsed, column)?;
+    let close = close_prices(&parsed, column)?;
 
     let result = macd(&close, fast, slow, signal)?;
 
@@ -202,7 +202,7 @@ fn run_bollinger(input: &str, params: &str, column: Option<&str>, dest: &OutputD
     let (period, std_dev) = parse_bollinger_params(params)?;
 
     let parsed = parse_csv(input)?;
-    let close = get_close_prices(&parsed, column)?;
+    let close = close_prices(&parsed, column)?;
 
     let result = bollinger(&close, period, std_dev)?;
     let lookback = period.saturating_sub(1);

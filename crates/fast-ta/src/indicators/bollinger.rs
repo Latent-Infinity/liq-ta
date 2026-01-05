@@ -838,8 +838,8 @@ fn compute_variance<T: Float>(sum_sq: T, sum: T, inv_period: T) -> T {
 ///
 /// // Or customize with fluent API
 /// let result = Bollinger::new()
-///     .period(10)
-///     .std_dev(2.5)
+///     .with_period(10)
+///     .with_std_dev(2.5)
 ///     .compute(&prices)
 ///     .unwrap();
 /// ```
@@ -870,7 +870,7 @@ impl Bollinger {
     ///
     /// Default: 20
     #[must_use]
-    pub const fn period(mut self, period: usize) -> Self {
+    pub const fn with_period(mut self, period: usize) -> Self {
         self.period = period;
         self
     }
@@ -879,7 +879,7 @@ impl Bollinger {
     ///
     /// Default: 2.0
     #[must_use]
-    pub const fn std_dev(mut self, std_dev: f64) -> Self {
+    pub const fn with_std_dev(mut self, std_dev: f64) -> Self {
         self.std_dev = std_dev;
         self
     }
@@ -919,13 +919,13 @@ impl Bollinger {
 
     /// Returns the period.
     #[must_use]
-    pub const fn get_period(&self) -> usize {
+    pub const fn period(&self) -> usize {
         self.period
     }
 
     /// Returns the standard deviation multiplier.
     #[must_use]
-    pub const fn get_std_dev(&self) -> f64 {
+    pub const fn std_dev(&self) -> f64 {
         self.std_dev
     }
 

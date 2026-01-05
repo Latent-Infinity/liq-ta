@@ -146,41 +146,51 @@ fn numeric_policy_nan_propagation_stochastic() {
 
 #[test]
 fn numeric_policy_nan_handling_rolling_extrema() {
-    // Note: Rolling extrema has a DIFFERENT NaN policy than other indicators.
-    // It skips NaN values and returns the max/min of non-NaN values in the window.
-    // This is intentional for use in Stochastic oscillator which needs to find
-    // extrema even when some values are missing.
+    // Per PRD §4.3: "NaN in window → Output NaN for that position"
+    // Rolling extrema follows strict NaN propagation like all other indicators
+    // This ensures mathematical correctness and prevents silent data corruption
 
-    let data = vec![1.0_f64, f64::NAN, 3.0, 4.0, 5.0];
+    let data = vec![1.0_f64, f64::NAN, 3.0, 4.0, 5.0, 6.0];
 
     let max_result = rolling_max(&data, 3).unwrap();
     let min_result = rolling_min(&data, 3).unwrap();
 
-    // Window [1, NaN, 3]: max should be 3, min should be 1 (NaN skipped)
+    // Window [1, NaN, 3]: contains NaN → output NaN
     assert!(
-        approx_eq(max_result[2], 3.0, EPSILON),
-        "Rolling max should skip NaN and return 3.0"
+        max_result[2].is_nan(),
+        "Rolling max should return NaN when window contains NaN"
     );
     assert!(
-        approx_eq(min_result[2], 1.0, EPSILON),
-        "Rolling min should skip NaN and return 1.0"
+        min_result[2].is_nan(),
+        "Rolling min should return NaN when window contains NaN"
     );
 
-    // Window [NaN, 3, 4]: max should be 4, min should be 3
+    // Window [NaN, 3, 4]: contains NaN → output NaN
     assert!(
-        approx_eq(max_result[3], 4.0, EPSILON),
-        "Rolling max should skip NaN and return 4.0"
+        max_result[3].is_nan(),
+        "Rolling max should return NaN when window contains NaN"
     );
     assert!(
-        approx_eq(min_result[3], 3.0, EPSILON),
-        "Rolling min should skip NaN and return 3.0"
+        min_result[3].is_nan(),
+        "Rolling min should return NaN when window contains NaN"
+    );
+
+    // Window [3, 4, 5]: no NaN → valid output
+    assert!(
+        approx_eq(max_result[4], 5.0, EPSILON),
+        "Rolling max should be valid when NaN leaves window"
+    );
+    assert!(
+        approx_eq(min_result[4], 3.0, EPSILON),
+        "Rolling min should be valid when NaN leaves window"
     );
 }
 
 #[test]
 fn numeric_policy_nan_all_nan_window_rolling_extrema() {
-    // When ALL values in window are NaN, result should be NaN
-    let data = vec![f64::NAN, f64::NAN, f64::NAN, 4.0, 5.0];
+    // Per PRD §4.3: "NaN in window → Output NaN for that position"
+    // Strict NaN propagation - if window contains ANY NaN, output is NaN
+    let data = vec![f64::NAN, f64::NAN, f64::NAN, 4.0, 5.0, 6.0];
 
     let max_result = rolling_max(&data, 3).unwrap();
 
@@ -190,9 +200,21 @@ fn numeric_policy_nan_all_nan_window_rolling_extrema() {
         "All-NaN window should produce NaN in rolling max"
     );
 
-    // Once valid values enter window, should produce valid result
+    // Window still contains NaN → should produce NaN
     assert!(
-        approx_eq(max_result[4], 5.0, EPSILON),
+        max_result[3].is_nan(),
+        "Window [NaN, NaN, 4.0] contains NaN → output NaN"
+    );
+
+    assert!(
+        max_result[4].is_nan(),
+        "Window [NaN, 4.0, 5.0] contains NaN → output NaN"
+    );
+
+    // Once NaN fully leaves window → should produce valid result
+    // Window [4.0, 5.0, 6.0] contains no NaN
+    assert!(
+        approx_eq(max_result[5], 6.0, EPSILON),
         "Rolling max should be valid after NaN leaves window"
     );
 }
