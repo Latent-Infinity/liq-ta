@@ -816,18 +816,43 @@ pub fn skew_into<T: SeriesElement>(
         output[i] = T::nan();
     }
 
-    // Calculate skewness for each window
-    for i in lookback..n {
-        let start = i + 1 - period;
+    // Initialize rolling sum for the first window
+    let mut sum = T::zero();
+    for j in 0..period {
+        sum = sum + data[j];
+    }
 
-        // Calculate mean
-        let mut sum = T::zero();
-        for j in start..=i {
-            sum = sum + data[j];
-        }
+    // Calculate skewness for the first valid position
+    let mean = sum / period_t;
+    let mut var_sum = T::zero();
+    let mut m3 = T::zero();
+    for j in 0..period {
+        let diff = data[j] - mean;
+        var_sum = var_sum + diff * diff;
+        m3 = m3 + diff * diff * diff;
+    }
+
+    let variance = var_sum / period_t;
+    if variance == T::zero() {
+        output[lookback] = T::nan();
+    } else {
+        let stddev = variance.sqrt();
+        let m3_norm = m3 / period_t;
+        output[lookback] = m3_norm / (stddev * stddev * stddev);
+    }
+
+    // Rolling updates for remaining positions
+    for i in (lookback + 1)..n {
+        let old_val = data[i - period];
+        let new_val = data[i];
+
+        // Update rolling sum for mean
+        sum = sum - old_val + new_val;
         let mean = sum / period_t;
 
-        // Calculate variance and third moment
+        // Calculate variance and third moment for current window
+        // Note: We must recalculate because mean has changed
+        let start = i + 1 - period;
         let mut var_sum = T::zero();
         let mut m3 = T::zero();
         for j in start..=i {
@@ -839,7 +864,7 @@ pub fn skew_into<T: SeriesElement>(
         // Calculate skewness
         let variance = var_sum / period_t;
         if variance == T::zero() {
-            output[i] = T::nan(); // Undefined for zero variance
+            output[i] = T::nan();
         } else {
             let stddev = variance.sqrt();
             let m3_norm = m3 / period_t;
@@ -858,10 +883,26 @@ pub fn skew_into<T: SeriesElement>(
 /// - The input data is empty (`Error::EmptyInput`)
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
-pub fn skew<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
-    let mut output = vec![T::nan(); data.len()];
-    skew_into(data, period, &mut output)?;
-    Ok(output)
+pub fn skew<T: SeriesElement + 'static>(data: &[T], period: usize) -> Result<Vec<T>> {
+    use std::any::TypeId;
+
+    if TypeId::of::<T>() == TypeId::of::<f64>() {
+        let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
+        let mut output: Vec<f64> = Vec::with_capacity(data.len());
+        unsafe { output.set_len(data.len()); }
+        skew_into(data_f64, period, &mut output)?;
+        Ok(unsafe { std::mem::transmute(output) })
+    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
+        let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
+        let mut output: Vec<f32> = Vec::with_capacity(data.len());
+        unsafe { output.set_len(data.len()); }
+        skew_into(data_f32, period, &mut output)?;
+        Ok(unsafe { std::mem::transmute(output) })
+    } else {
+        let mut output = vec![T::nan(); data.len()];
+        skew_into(data, period, &mut output)?;
+        Ok(output)
+    }
 }
 
 // =============================================================================
@@ -948,18 +989,43 @@ pub fn kurt_into<T: SeriesElement>(
         output[i] = T::nan();
     }
 
-    // Calculate kurtosis for each window
-    for i in lookback..n {
-        let start = i + 1 - period;
+    // Initialize rolling sum for the first window
+    let mut sum = T::zero();
+    for j in 0..period {
+        sum = sum + data[j];
+    }
 
-        // Calculate mean
-        let mut sum = T::zero();
-        for j in start..=i {
-            sum = sum + data[j];
-        }
+    // Calculate kurtosis for the first valid position
+    let mean = sum / period_t;
+    let mut var_sum = T::zero();
+    let mut m4 = T::zero();
+    for j in 0..period {
+        let diff = data[j] - mean;
+        var_sum = var_sum + diff * diff;
+        m4 = m4 + diff * diff * diff * diff;
+    }
+
+    let variance = var_sum / period_t;
+    if variance == T::zero() {
+        output[lookback] = T::nan();
+    } else {
+        let m4_norm = m4 / period_t;
+        let var_sq = variance * variance;
+        output[lookback] = m4_norm / var_sq - three;
+    }
+
+    // Rolling updates for remaining positions
+    for i in (lookback + 1)..n {
+        let old_val = data[i - period];
+        let new_val = data[i];
+
+        // Update rolling sum for mean
+        sum = sum - old_val + new_val;
         let mean = sum / period_t;
 
-        // Calculate variance and fourth moment
+        // Calculate variance and fourth moment for current window
+        // Note: We must recalculate because mean has changed
+        let start = i + 1 - period;
         let mut var_sum = T::zero();
         let mut m4 = T::zero();
         for j in start..=i {
@@ -971,7 +1037,7 @@ pub fn kurt_into<T: SeriesElement>(
         // Calculate kurtosis
         let variance = var_sum / period_t;
         if variance == T::zero() {
-            output[i] = T::nan(); // Undefined for zero variance
+            output[i] = T::nan();
         } else {
             let m4_norm = m4 / period_t;
             let var_sq = variance * variance;
@@ -990,10 +1056,26 @@ pub fn kurt_into<T: SeriesElement>(
 /// - The input data is empty (`Error::EmptyInput`)
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
-pub fn kurt<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
-    let mut output = vec![T::nan(); data.len()];
-    kurt_into(data, period, &mut output)?;
-    Ok(output)
+pub fn kurt<T: SeriesElement + 'static>(data: &[T], period: usize) -> Result<Vec<T>> {
+    use std::any::TypeId;
+
+    if TypeId::of::<T>() == TypeId::of::<f64>() {
+        let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
+        let mut output: Vec<f64> = Vec::with_capacity(data.len());
+        unsafe { output.set_len(data.len()); }
+        kurt_into(data_f64, period, &mut output)?;
+        Ok(unsafe { std::mem::transmute(output) })
+    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
+        let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
+        let mut output: Vec<f32> = Vec::with_capacity(data.len());
+        unsafe { output.set_len(data.len()); }
+        kurt_into(data_f32, period, &mut output)?;
+        Ok(unsafe { std::mem::transmute(output) })
+    } else {
+        let mut output = vec![T::nan(); data.len()];
+        kurt_into(data, period, &mut output)?;
+        Ok(output)
+    }
 }
 
 // =============================================================================
@@ -1365,25 +1447,40 @@ pub fn mad_into<T: SeriesElement>(
         output[i] = T::nan();
     }
 
-    // Calculate MAD for each window
-    for i in lookback..n {
-        let start = i + 1 - period;
+    // Initialize rolling sum for the first window
+    let mut sum = T::zero();
+    for j in 0..period {
+        sum = sum + data[j];
+    }
 
-        // Calculate mean
-        let mut sum = T::zero();
-        for j in start..=i {
-            sum = sum + data[j];
-        }
+    // Calculate MAD for the first valid position
+    let mean = sum / period_t;
+    let mut mad_sum = T::zero();
+    for j in 0..period {
+        let diff = (data[j] - mean).abs();
+        mad_sum = mad_sum + diff;
+    }
+    output[lookback] = mad_sum / period_t;
+
+    // Rolling updates for remaining positions
+    for i in (lookback + 1)..n {
+        let old_val = data[i - period];
+        let new_val = data[i];
+
+        // Update rolling sum for mean
+        sum = sum - old_val + new_val;
         let mean = sum / period_t;
 
-        // Calculate mean absolute deviation
-        let mut mad = T::zero();
+        // Calculate mean absolute deviation for current window
+        // Note: We must recalculate because mean has changed
+        let start = i + 1 - period;
+        let mut mad_sum = T::zero();
         for j in start..=i {
             let diff = (data[j] - mean).abs();
-            mad = mad + diff;
+            mad_sum = mad_sum + diff;
         }
 
-        output[i] = mad / period_t;
+        output[i] = mad_sum / period_t;
     }
 
     Ok(())
@@ -1397,10 +1494,26 @@ pub fn mad_into<T: SeriesElement>(
 /// - The input data is empty (`Error::EmptyInput`)
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
-pub fn mad<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
-    let mut output = vec![T::nan(); data.len()];
-    mad_into(data, period, &mut output)?;
-    Ok(output)
+pub fn mad<T: SeriesElement + 'static>(data: &[T], period: usize) -> Result<Vec<T>> {
+    use std::any::TypeId;
+
+    if TypeId::of::<T>() == TypeId::of::<f64>() {
+        let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
+        let mut output: Vec<f64> = Vec::with_capacity(data.len());
+        unsafe { output.set_len(data.len()); }
+        mad_into(data_f64, period, &mut output)?;
+        Ok(unsafe { std::mem::transmute(output) })
+    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
+        let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
+        let mut output: Vec<f32> = Vec::with_capacity(data.len());
+        unsafe { output.set_len(data.len()); }
+        mad_into(data_f32, period, &mut output)?;
+        Ok(unsafe { std::mem::transmute(output) })
+    } else {
+        let mut output = vec![T::nan(); data.len()];
+        mad_into(data, period, &mut output)?;
+        Ok(output)
+    }
 }
 
 // =============================================================================
@@ -1485,24 +1598,38 @@ pub fn sem_into<T: SeriesElement>(
         output[i] = T::nan();
     }
 
-    // Calculate SEM for each window
-    for i in lookback..n {
-        let start = i + 1 - period;
+    // Initialize rolling sums for the first window
+    let mut sum = T::zero();
+    let mut sum_sq = T::zero();
+    for j in 0..period {
+        let val = data[j];
+        sum = sum + val;
+        sum_sq = sum_sq + val * val;
+    }
 
-        // Calculate mean
-        let mut sum = T::zero();
-        for j in start..=i {
-            sum = sum + data[j];
-        }
+    // Calculate SEM for the first valid position
+    let mean = sum / period_t;
+    let variance = (sum_sq / period_t) - (mean * mean);
+
+    if variance == T::zero() {
+        output[lookback] = T::zero();
+    } else {
+        let stddev = variance.sqrt();
+        output[lookback] = stddev / period_sqrt;
+    }
+
+    // Rolling updates for remaining positions
+    for i in (lookback + 1)..n {
+        let old_val = data[i - period];
+        let new_val = data[i];
+
+        // Update rolling sums
+        sum = sum - old_val + new_val;
+        sum_sq = sum_sq - (old_val * old_val) + (new_val * new_val);
+
+        // Calculate mean and variance
         let mean = sum / period_t;
-
-        // Calculate variance
-        let mut var_sum = T::zero();
-        for j in start..=i {
-            let diff = data[j] - mean;
-            var_sum = var_sum + diff * diff;
-        }
-        let variance = var_sum / period_t;
+        let variance = (sum_sq / period_t) - (mean * mean);
 
         if variance == T::zero() {
             output[i] = T::zero();
@@ -1523,10 +1650,26 @@ pub fn sem_into<T: SeriesElement>(
 /// - The input data is empty (`Error::EmptyInput`)
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
-pub fn sem<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
-    let mut output = vec![T::nan(); data.len()];
-    sem_into(data, period, &mut output)?;
-    Ok(output)
+pub fn sem<T: SeriesElement + 'static>(data: &[T], period: usize) -> Result<Vec<T>> {
+    use std::any::TypeId;
+
+    if TypeId::of::<T>() == TypeId::of::<f64>() {
+        let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
+        let mut output: Vec<f64> = Vec::with_capacity(data.len());
+        unsafe { output.set_len(data.len()); }
+        sem_into(data_f64, period, &mut output)?;
+        Ok(unsafe { std::mem::transmute(output) })
+    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
+        let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
+        let mut output: Vec<f32> = Vec::with_capacity(data.len());
+        unsafe { output.set_len(data.len()); }
+        sem_into(data_f32, period, &mut output)?;
+        Ok(unsafe { std::mem::transmute(output) })
+    } else {
+        let mut output = vec![T::nan(); data.len()];
+        sem_into(data, period, &mut output)?;
+        Ok(output)
+    }
 }
 
 // =============================================================================

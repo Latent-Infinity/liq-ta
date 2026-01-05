@@ -62,7 +62,7 @@ use fast_ta::indicators::{
     rsi::rsi,
     sma::sma,
     stochastic::{stochastic, stochastic_fast},
-    statistics::{linearreg, linearreg_angle, linearreg_intercept, linearreg_slope, stddev, tsf, var, zscore},
+    statistics::{kurt, linearreg, linearreg_angle, linearreg_intercept, linearreg_slope, mad, sem, skew, stddev, tsf, var, zscore},
     t3::t3,
     tema::tema,
     trima::trima,
@@ -1545,6 +1545,66 @@ fn bench_zscore(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_sem(c: &mut Criterion) {
+    let mut group = c.benchmark_group("sem");
+    let period: i32 = 14;
+
+    for &size in SIZES {
+        let data = generate_close_prices(size);
+        group.throughput(Throughput::Elements(size as u64));
+
+        group.bench_with_input(BenchmarkId::new("fast-ta", size), &data, |b, data| {
+            b.iter(|| sem(black_box(data), black_box(period as usize)));
+        });
+    }
+    group.finish();
+}
+
+fn bench_mad(c: &mut Criterion) {
+    let mut group = c.benchmark_group("mad");
+    let period: i32 = 14;
+
+    for &size in SIZES {
+        let data = generate_close_prices(size);
+        group.throughput(Throughput::Elements(size as u64));
+
+        group.bench_with_input(BenchmarkId::new("fast-ta", size), &data, |b, data| {
+            b.iter(|| mad(black_box(data), black_box(period as usize)));
+        });
+    }
+    group.finish();
+}
+
+fn bench_skew(c: &mut Criterion) {
+    let mut group = c.benchmark_group("skew");
+    let period: i32 = 14;
+
+    for &size in SIZES {
+        let data = generate_close_prices(size);
+        group.throughput(Throughput::Elements(size as u64));
+
+        group.bench_with_input(BenchmarkId::new("fast-ta", size), &data, |b, data| {
+            b.iter(|| skew(black_box(data), black_box(period as usize)));
+        });
+    }
+    group.finish();
+}
+
+fn bench_kurt(c: &mut Criterion) {
+    let mut group = c.benchmark_group("kurt");
+    let period: i32 = 14;
+
+    for &size in SIZES {
+        let data = generate_close_prices(size);
+        group.throughput(Throughput::Elements(size as u64));
+
+        group.bench_with_input(BenchmarkId::new("fast-ta", size), &data, |b, data| {
+            b.iter(|| kurt(black_box(data), black_box(period as usize)));
+        });
+    }
+    group.finish();
+}
+
 fn bench_linearreg(c: &mut Criterion) {
     let mut group = c.benchmark_group("linearreg");
     let period: i32 = 14;
@@ -1946,6 +2006,10 @@ criterion_group!(
     bench_linearreg_angle,
     bench_stddev,
     bench_zscore,
+    bench_sem,
+    bench_mad,
+    bench_skew,
+    bench_kurt,
     bench_tsf,
 );
 
