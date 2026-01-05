@@ -62,7 +62,7 @@ use fast_ta::indicators::{
     rsi::rsi,
     sma::sma,
     stochastic::{stochastic, stochastic_fast},
-    statistics::{kurt, linearreg, linearreg_angle, linearreg_intercept, linearreg_slope, mad, sem, skew, stddev, tsf, var, zscore},
+    statistics::{beta, correl, cov, kurt, linearreg, linearreg_angle, linearreg_intercept, linearreg_slope, mad, sem, skew, stddev, tsf, var, zscore},
     t3::t3,
     tema::tema,
     trima::trima,
@@ -1605,6 +1605,54 @@ fn bench_kurt(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_cov(c: &mut Criterion) {
+    let mut group = c.benchmark_group("cov");
+    let period: i32 = 14;
+
+    for &size in SIZES {
+        let data0 = generate_close_prices(size);
+        let data1 = generate_close_prices(size);
+        group.throughput(Throughput::Elements(size as u64));
+
+        group.bench_with_input(BenchmarkId::new("fast-ta", size), &(&data0, &data1), |b, (d0, d1)| {
+            b.iter(|| cov(black_box(d0), black_box(d1), black_box(period as usize)));
+        });
+    }
+    group.finish();
+}
+
+fn bench_correl(c: &mut Criterion) {
+    let mut group = c.benchmark_group("correl");
+    let period: i32 = 14;
+
+    for &size in SIZES {
+        let data0 = generate_close_prices(size);
+        let data1 = generate_close_prices(size);
+        group.throughput(Throughput::Elements(size as u64));
+
+        group.bench_with_input(BenchmarkId::new("fast-ta", size), &(&data0, &data1), |b, (d0, d1)| {
+            b.iter(|| correl(black_box(d0), black_box(d1), black_box(period as usize)));
+        });
+    }
+    group.finish();
+}
+
+fn bench_beta(c: &mut Criterion) {
+    let mut group = c.benchmark_group("beta");
+    let period: i32 = 14;
+
+    for &size in SIZES {
+        let data0 = generate_close_prices(size);
+        let data1 = generate_close_prices(size);
+        group.throughput(Throughput::Elements(size as u64));
+
+        group.bench_with_input(BenchmarkId::new("fast-ta", size), &(&data0, &data1), |b, (d0, d1)| {
+            b.iter(|| beta(black_box(d0), black_box(d1), black_box(period as usize)));
+        });
+    }
+    group.finish();
+}
+
 fn bench_linearreg(c: &mut Criterion) {
     let mut group = c.benchmark_group("linearreg");
     let period: i32 = 14;
@@ -2010,6 +2058,9 @@ criterion_group!(
     bench_mad,
     bench_skew,
     bench_kurt,
+    bench_cov,
+    bench_correl,
+    bench_beta,
     bench_tsf,
 );
 

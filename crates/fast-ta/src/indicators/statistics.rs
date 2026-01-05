@@ -1168,29 +1168,42 @@ pub fn cov_into<T: SeriesElement>(
         output[i] = T::nan();
     }
 
-    // Calculate covariance for each window
-    for i in lookback..n {
-        let start = i + 1 - period;
+    // Initialize rolling sums for the first window
+    // Using formula: COV = E[XY] - E[X]E[Y]
+    let mut sum_x = T::zero();
+    let mut sum_y = T::zero();
+    let mut sum_xy = T::zero();
+    for j in 0..period {
+        let x = data0[j];
+        let y = data1[j];
+        sum_x = sum_x + x;
+        sum_y = sum_y + y;
+        sum_xy = sum_xy + x * y;
+    }
 
-        // Calculate means
-        let mut sum_x = T::zero();
-        let mut sum_y = T::zero();
-        for j in start..=i {
-            sum_x = sum_x + data0[j];
-            sum_y = sum_y + data1[j];
-        }
+    // Calculate covariance for the first valid position
+    let mean_x = sum_x / period_t;
+    let mean_y = sum_y / period_t;
+    let mean_xy = sum_xy / period_t;
+    output[lookback] = mean_xy - (mean_x * mean_y);
+
+    // Rolling updates for remaining positions
+    for i in (lookback + 1)..n {
+        let old_x = data0[i - period];
+        let old_y = data1[i - period];
+        let new_x = data0[i];
+        let new_y = data1[i];
+
+        // Update rolling sums
+        sum_x = sum_x - old_x + new_x;
+        sum_y = sum_y - old_y + new_y;
+        sum_xy = sum_xy - (old_x * old_y) + (new_x * new_y);
+
+        // Calculate covariance using formula: COV = E[XY] - E[X]E[Y]
         let mean_x = sum_x / period_t;
         let mean_y = sum_y / period_t;
-
-        // Calculate covariance
-        let mut cov = T::zero();
-        for j in start..=i {
-            let dx = data0[j] - mean_x;
-            let dy = data1[j] - mean_y;
-            cov = cov + dx * dy;
-        }
-
-        output[i] = cov / period_t;
+        let mean_xy = sum_xy / period_t;
+        output[i] = mean_xy - (mean_x * mean_y);
     }
 
     Ok(())
@@ -1205,10 +1218,28 @@ pub fn cov_into<T: SeriesElement>(
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - The arrays have different lengths (`Error::LengthMismatch`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
-pub fn cov<T: SeriesElement>(data0: &[T], data1: &[T], period: usize) -> Result<Vec<T>> {
-    let mut output = vec![T::nan(); data0.len()];
-    cov_into(data0, data1, period, &mut output)?;
-    Ok(output)
+pub fn cov<T: SeriesElement + 'static>(data0: &[T], data1: &[T], period: usize) -> Result<Vec<T>> {
+    use std::any::TypeId;
+
+    if TypeId::of::<T>() == TypeId::of::<f64>() {
+        let data0_f64: &[f64] = unsafe { std::mem::transmute(data0) };
+        let data1_f64: &[f64] = unsafe { std::mem::transmute(data1) };
+        let mut output: Vec<f64> = Vec::with_capacity(data0.len());
+        unsafe { output.set_len(data0.len()); }
+        cov_into(data0_f64, data1_f64, period, &mut output)?;
+        Ok(unsafe { std::mem::transmute(output) })
+    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
+        let data0_f32: &[f32] = unsafe { std::mem::transmute(data0) };
+        let data1_f32: &[f32] = unsafe { std::mem::transmute(data1) };
+        let mut output: Vec<f32> = Vec::with_capacity(data0.len());
+        unsafe { output.set_len(data0.len()); }
+        cov_into(data0_f32, data1_f32, period, &mut output)?;
+        Ok(unsafe { std::mem::transmute(output) })
+    } else {
+        let mut output = vec![T::nan(); data0.len()];
+        cov_into(data0, data1, period, &mut output)?;
+        Ok(output)
+    }
 }
 
 // =============================================================================
@@ -1751,35 +1782,74 @@ pub fn correl_into<T: SeriesElement>(
         output[i] = T::nan();
     }
 
-    // Pearson correlation: r = Σ((x-μx)(y-μy)) / sqrt(Σ(x-μx)² * Σ(y-μy)²)
-    for i in lookback..n {
-        let start = i + 1 - period;
+    // Pearson correlation using rolling statistics
+    // r = COV(X,Y) / (σX * σY)
+    // where COV = E[XY] - E[X]E[Y]
+    // and VAR = E[X²] - (E[X])²
 
-        // Calculate means
-        let mut sum_x = T::zero();
-        let mut sum_y = T::zero();
-        for j in start..=i {
-            sum_x = sum_x + data0[j];
-            sum_y = sum_y + data1[j];
-        }
+    // Initialize rolling sums for the first window
+    let mut sum_x = T::zero();
+    let mut sum_y = T::zero();
+    let mut sum_xx = T::zero();
+    let mut sum_yy = T::zero();
+    let mut sum_xy = T::zero();
+
+    for j in 0..period {
+        let x = data0[j];
+        let y = data1[j];
+        sum_x = sum_x + x;
+        sum_y = sum_y + y;
+        sum_xx = sum_xx + x * x;
+        sum_yy = sum_yy + y * y;
+        sum_xy = sum_xy + x * y;
+    }
+
+    // Calculate correlation for the first position
+    let mean_x = sum_x / period_t;
+    let mean_y = sum_y / period_t;
+    let mean_xx = sum_xx / period_t;
+    let mean_yy = sum_yy / period_t;
+    let mean_xy = sum_xy / period_t;
+
+    let var_x = mean_xx - (mean_x * mean_x);
+    let var_y = mean_yy - (mean_y * mean_y);
+    let cov = mean_xy - (mean_x * mean_y);
+
+    let denom = (var_x * var_y).sqrt();
+    if denom == T::zero() {
+        output[lookback] = T::zero();
+    } else {
+        output[lookback] = cov / denom;
+    }
+
+    // Rolling updates for remaining positions
+    for i in (lookback + 1)..n {
+        let old_x = data0[i - period];
+        let old_y = data1[i - period];
+        let new_x = data0[i];
+        let new_y = data1[i];
+
+        // Update rolling sums
+        sum_x = sum_x - old_x + new_x;
+        sum_y = sum_y - old_y + new_y;
+        sum_xx = sum_xx - (old_x * old_x) + (new_x * new_x);
+        sum_yy = sum_yy - (old_y * old_y) + (new_y * new_y);
+        sum_xy = sum_xy - (old_x * old_y) + (new_x * new_y);
+
+        // Calculate means and correlation
         let mean_x = sum_x / period_t;
         let mean_y = sum_y / period_t;
+        let mean_xx = sum_xx / period_t;
+        let mean_yy = sum_yy / period_t;
+        let mean_xy = sum_xy / period_t;
 
-        // Calculate covariance and variances
-        let mut cov = T::zero();
-        let mut var_x = T::zero();
-        let mut var_y = T::zero();
-        for j in start..=i {
-            let dx = data0[j] - mean_x;
-            let dy = data1[j] - mean_y;
-            cov = cov + dx * dy;
-            var_x = var_x + dx * dx;
-            var_y = var_y + dy * dy;
-        }
+        let var_x = mean_xx - (mean_x * mean_x);
+        let var_y = mean_yy - (mean_y * mean_y);
+        let cov = mean_xy - (mean_x * mean_y);
 
         let denom = (var_x * var_y).sqrt();
         if denom == T::zero() {
-            output[i] = T::zero(); // No variance = undefined correlation, return 0
+            output[i] = T::zero();
         } else {
             output[i] = cov / denom;
         }
@@ -1796,10 +1866,28 @@ pub fn correl_into<T: SeriesElement>(
 /// - The input data is empty (`Error::EmptyInput`)
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
-pub fn correl<T: SeriesElement>(data0: &[T], data1: &[T], period: usize) -> Result<Vec<T>> {
-    let mut output = vec![T::nan(); data0.len()];
-    correl_into(data0, data1, period, &mut output)?;
-    Ok(output)
+pub fn correl<T: SeriesElement + 'static>(data0: &[T], data1: &[T], period: usize) -> Result<Vec<T>> {
+    use std::any::TypeId;
+
+    if TypeId::of::<T>() == TypeId::of::<f64>() {
+        let data0_f64: &[f64] = unsafe { std::mem::transmute(data0) };
+        let data1_f64: &[f64] = unsafe { std::mem::transmute(data1) };
+        let mut output: Vec<f64> = Vec::with_capacity(data0.len());
+        unsafe { output.set_len(data0.len()); }
+        correl_into(data0_f64, data1_f64, period, &mut output)?;
+        Ok(unsafe { std::mem::transmute(output) })
+    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
+        let data0_f32: &[f32] = unsafe { std::mem::transmute(data0) };
+        let data1_f32: &[f32] = unsafe { std::mem::transmute(data1) };
+        let mut output: Vec<f32> = Vec::with_capacity(data0.len());
+        unsafe { output.set_len(data0.len()); }
+        correl_into(data0_f32, data1_f32, period, &mut output)?;
+        Ok(unsafe { std::mem::transmute(output) })
+    } else {
+        let mut output = vec![T::nan(); data0.len()];
+        correl_into(data0, data1, period, &mut output)?;
+        Ok(output)
+    }
 }
 
 // =============================================================================
@@ -1883,35 +1971,66 @@ pub fn beta_into<T: SeriesElement>(
         output[i] = T::nan();
     }
 
-    // Beta = Cov(asset, market) / Var(market)
-    for i in lookback..n {
-        let start = i + 1 - period;
+    // Beta = Cov(asset, market) / Var(market) using rolling statistics
+    // where COV = E[XY] - E[X]E[Y]
+    // and VAR = E[Y²] - (E[Y])²
 
-        // Calculate means
-        let mut sum_x = T::zero();
-        let mut sum_y = T::zero();
-        for j in start..=i {
-            sum_x = sum_x + data0[j];
-            sum_y = sum_y + data1[j];
-        }
+    // Initialize rolling sums for the first window
+    let mut sum_x = T::zero();
+    let mut sum_y = T::zero();
+    let mut sum_yy = T::zero();
+    let mut sum_xy = T::zero();
+
+    for j in 0..period {
+        let x = data0[j];
+        let y = data1[j];
+        sum_x = sum_x + x;
+        sum_y = sum_y + y;
+        sum_yy = sum_yy + y * y;
+        sum_xy = sum_xy + x * y;
+    }
+
+    // Calculate beta for the first position
+    let mean_x = sum_x / period_t;
+    let mean_y = sum_y / period_t;
+    let mean_yy = sum_yy / period_t;
+    let mean_xy = sum_xy / period_t;
+
+    let var_y = mean_yy - (mean_y * mean_y);
+    let cov = mean_xy - (mean_x * mean_y);
+
+    if var_y == T::zero() {
+        output[lookback] = T::zero();
+    } else {
+        output[lookback] = cov / var_y;
+    }
+
+    // Rolling updates for remaining positions
+    for i in (lookback + 1)..n {
+        let old_x = data0[i - period];
+        let old_y = data1[i - period];
+        let new_x = data0[i];
+        let new_y = data1[i];
+
+        // Update rolling sums
+        sum_x = sum_x - old_x + new_x;
+        sum_y = sum_y - old_y + new_y;
+        sum_yy = sum_yy - (old_y * old_y) + (new_y * new_y);
+        sum_xy = sum_xy - (old_x * old_y) + (new_x * new_y);
+
+        // Calculate means and beta
         let mean_x = sum_x / period_t;
         let mean_y = sum_y / period_t;
+        let mean_yy = sum_yy / period_t;
+        let mean_xy = sum_xy / period_t;
 
-        // Calculate covariance and market variance
-        let mut cov = T::zero();
-        let mut var_y = T::zero();
-        for j in start..=i {
-            let dx = data0[j] - mean_x;
-            let dy = data1[j] - mean_y;
-            cov = cov + dx * dy;
-            var_y = var_y + dy * dy;
-        }
+        let var_y = mean_yy - (mean_y * mean_y);
+        let cov = mean_xy - (mean_x * mean_y);
 
-        let market_var = var_y / period_t;
-        if market_var == T::zero() {
-            output[i] = T::zero(); // No variance = undefined beta, return 0
+        if var_y == T::zero() {
+            output[i] = T::zero();
         } else {
-            output[i] = cov / market_var;
+            output[i] = cov / var_y;
         }
     }
 
@@ -1926,14 +2045,32 @@ pub fn beta_into<T: SeriesElement>(
 /// - The input data is empty (`Error::EmptyInput`)
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
-pub fn beta<T: SeriesElement>(
+pub fn beta<T: SeriesElement + 'static>(
     data0: &[T],
     data1: &[T],
     period: usize,
 ) -> Result<Vec<T>> {
-    let mut output = vec![T::nan(); data0.len()];
-    beta_into(data0, data1, period, &mut output)?;
-    Ok(output)
+    use std::any::TypeId;
+
+    if TypeId::of::<T>() == TypeId::of::<f64>() {
+        let data0_f64: &[f64] = unsafe { std::mem::transmute(data0) };
+        let data1_f64: &[f64] = unsafe { std::mem::transmute(data1) };
+        let mut output: Vec<f64> = Vec::with_capacity(data0.len());
+        unsafe { output.set_len(data0.len()); }
+        beta_into(data0_f64, data1_f64, period, &mut output)?;
+        Ok(unsafe { std::mem::transmute(output) })
+    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
+        let data0_f32: &[f32] = unsafe { std::mem::transmute(data0) };
+        let data1_f32: &[f32] = unsafe { std::mem::transmute(data1) };
+        let mut output: Vec<f32> = Vec::with_capacity(data0.len());
+        unsafe { output.set_len(data0.len()); }
+        beta_into(data0_f32, data1_f32, period, &mut output)?;
+        Ok(unsafe { std::mem::transmute(output) })
+    } else {
+        let mut output = vec![T::nan(); data0.len()];
+        beta_into(data0, data1, period, &mut output)?;
+        Ok(output)
+    }
 }
 
 // =============================================================================
