@@ -377,8 +377,7 @@ pub fn ema_with_alpha_into<T: SeriesElement + 'static>(
 
         ema_core_f32(data_f32, period, alpha_f32, output_f32);
     } else {
-        // Generic fallback: initialize prefix then compute
-        output[..period - 1].fill(T::nan());
+        // Generic fallback: compute_ema_core handles NaN prefix fill
         compute_ema_core(data, period, alpha, output);
     }
 
@@ -450,10 +449,8 @@ fn handle_invalid_f32(output: &mut [f32], i: usize) {
 /// UNSAFE: Assumes all input data is finite. Use only when data is pre-validated.
 /// This matches TA-Lib's behavior (no per-element checks) and shows ~3% performance gain.
 ///
-/// Benchmarks show:
-/// - Checked kernel: ~135 µs (5% slower than TA-Lib)
-/// - Unchecked kernel: ~127 µs (1.8% slower than TA-Lib)
-/// - The 3% gap is the cost of our `.is_finite()` check
+/// Uses difference form like TA-Lib: ema = (x - ema) * alpha + ema
+/// This has lower critical path latency than standard form.
 #[inline]
 #[allow(dead_code)]
 fn ema_core_f64_unchecked(data: &[f64], period: usize, alpha: f64, output: &mut [f64]) {
@@ -465,7 +462,6 @@ fn ema_core_f64_unchecked(data: &[f64], period: usize, alpha: f64, output: &mut 
     }
 
     output[..period - 1].fill(f64::NAN);
-    let beta = 1.0 - alpha;
 
     let mut sum = 0.0_f64;
     for i in 0..period {
@@ -476,10 +472,11 @@ fn ema_core_f64_unchecked(data: &[f64], period: usize, alpha: f64, output: &mut 
     output[period - 1] = ema;
 
     // Hot loop: NO CHECKS - matches TA-Lib behavior
+    // Uses difference form for minimal critical path latency
     let mut i = period;
     while i < n {
         let x = unsafe { *data.get_unchecked(i) };
-        ema = ema * beta + x * alpha;
+        ema = (x - ema).mul_add(alpha, ema);
         unsafe { *output.get_unchecked_mut(i) = ema; }
         i += 1;
     }
