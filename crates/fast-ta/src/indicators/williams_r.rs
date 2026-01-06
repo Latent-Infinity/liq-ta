@@ -182,7 +182,7 @@ pub const fn williams_r_min_len(period: usize) -> usize {
 /// }
 /// ```
 #[must_use = "this returns a Result with Williams %R values, which should be used"]
-pub fn williams_r<T: SeriesElement>(
+pub fn williams_r<T: SeriesElement + 'static>(
     high: &[T],
     low: &[T],
     close: &[T],
@@ -191,11 +191,47 @@ pub fn williams_r<T: SeriesElement>(
     validate_inputs(high, low, close, period)?;
 
     let n = high.len();
-    let mut result = vec![T::nan(); n];
 
-    compute_williams_r_core(high, low, close, period, &mut result)?;
+    // Optimization: For f64/f32, allocate uninitialized memory since compute_williams_r_core writes all elements
+    // (lookback NaNs + computed Williams %R values). This avoids the double-write tax (Section 5.4).
+    use std::any::TypeId;
 
-    Ok(result)
+    if TypeId::of::<T>() == TypeId::of::<f64>() {
+        let high_f64: &[f64] = unsafe { std::mem::transmute(high) };
+        let low_f64: &[f64] = unsafe { std::mem::transmute(low) };
+        let close_f64: &[f64] = unsafe { std::mem::transmute(close) };
+        let mut result: Vec<f64> = Vec::with_capacity(n);
+        unsafe { result.set_len(n); }  // Safe: compute_williams_r_core writes all elements
+
+        // Fill lookback period with NaN
+        let lookback = williams_r_lookback(period);
+        for item in result.iter_mut().take(lookback) {
+            *item = f64::NAN;
+        }
+
+        compute_williams_r_core(high_f64, low_f64, close_f64, period, &mut result)?;
+        Ok(unsafe { std::mem::transmute(result) })
+    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
+        let high_f32: &[f32] = unsafe { std::mem::transmute(high) };
+        let low_f32: &[f32] = unsafe { std::mem::transmute(low) };
+        let close_f32: &[f32] = unsafe { std::mem::transmute(close) };
+        let mut result: Vec<f32> = Vec::with_capacity(n);
+        unsafe { result.set_len(n); }  // Safe: compute_williams_r_core writes all elements
+
+        // Fill lookback period with NaN
+        let lookback = williams_r_lookback(period);
+        for item in result.iter_mut().take(lookback) {
+            *item = f32::NAN;
+        }
+
+        compute_williams_r_core(high_f32, low_f32, close_f32, period, &mut result)?;
+        Ok(unsafe { std::mem::transmute(result) })
+    } else {
+        // Generic fallback: safe initialization
+        let mut result = vec![T::nan(); n];
+        compute_williams_r_core(high, low, close, period, &mut result)?;
+        Ok(result)
+    }
 }
 
 /// Computes Williams %R into a pre-allocated output buffer.

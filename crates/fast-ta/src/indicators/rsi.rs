@@ -188,17 +188,32 @@ pub fn rsi<T: SeriesElement + 'static>(data: &[T], period: usize) -> Result<Vec<
     // Validate inputs
     validate_rsi_inputs(data, period)?;
 
-    // Initialize result vector with NaN
-    let mut result = vec![T::nan(); data.len()];
+    // Optimization: For f64/f32, allocate uninitialized memory since compute_rsi_core writes all elements
+    // (lookback NaNs + computed RSI values). This avoids the double-write tax (Section 5.4).
+    use std::any::TypeId;
 
-    // Compute RSI values into the result vector
-    if use_f64_precision::<T>() {
-        compute_rsi_core_f64(data, period, &mut result)?;
+    if TypeId::of::<T>() == TypeId::of::<f64>() {
+        let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
+        let mut result: Vec<f64> = Vec::with_capacity(data.len());
+        unsafe { result.set_len(data.len()); }  // Safe: compute_rsi_core writes all elements
+        compute_rsi_core(data_f64, period, &mut result)?;
+        Ok(unsafe { std::mem::transmute(result) })
+    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
+        let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
+        let mut result: Vec<f32> = Vec::with_capacity(data.len());
+        unsafe { result.set_len(data.len()); }  // Safe: compute_rsi_core writes all elements
+        if use_f64_precision::<T>() {
+            compute_rsi_core_f64(data_f32, period, &mut result)?;
+        } else {
+            compute_rsi_core(data_f32, period, &mut result)?;
+        }
+        Ok(unsafe { std::mem::transmute(result) })
     } else {
+        // Generic fallback: safe initialization
+        let mut result = vec![T::nan(); data.len()];
         compute_rsi_core(data, period, &mut result)?;
+        Ok(result)
     }
-
-    Ok(result)
 }
 
 /// Computes the Relative Strength Index into a pre-allocated output buffer.
@@ -302,11 +317,18 @@ fn validate_rsi_inputs<T: SeriesElement>(data: &[T], period: usize) -> Result<()
 /// This function assumes all validation has been done and output is properly sized.
 /// It fills the output slice with RSI values starting at index `period`.
 fn compute_rsi_core<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -> Result<()> {
+    // Fill lookback period with NaN
+    for item in output.iter_mut().take(period) {
+        *item = T::nan();
+    }
+
     let period_t = T::from_usize(period)?;
-    let period_minus_one_t = T::from_usize(period - 1)?;
     let one = T::one();
     let hundred = T::from_f64(100.0)?;
     let zero = T::zero();
+
+    // Wilder's smoothing uses alpha = 1/period (Section 5.3)
+    let alpha = one / period_t;
 
     // Step 1: Calculate price changes and separate into gains and losses
     // We need to compute the first average gain/loss from the first `period` changes
@@ -372,9 +394,11 @@ fn compute_rsi_core<T: SeriesElement>(data: &[T], period: usize, output: &mut [T
             (zero, zero)
         };
 
-        // Wilder's smoothing: new_avg = (prev_avg * (period-1) + current_value) / period
-        avg_gain = (avg_gain * period_minus_one_t + gain) / period_t;
-        avg_loss = (avg_loss * period_minus_one_t + loss) / period_t;
+        // Wilder's smoothing using difference form (Section 5.3)
+        // Standard: avg = (avg * (period-1) + x) / period = (1 - alpha) * avg + alpha * x
+        // Difference: avg = (x - avg) * alpha + avg
+        avg_gain = (gain - avg_gain).mul_add(alpha, avg_gain);
+        avg_loss = (loss - avg_loss).mul_add(alpha, avg_loss);
 
         output[i] = compute_rsi_value(avg_gain, avg_loss, hundred, one);
     }
@@ -388,8 +412,15 @@ fn compute_rsi_core_f64<T: SeriesElement>(
     period: usize,
     output: &mut [T],
 ) -> Result<()> {
+    // Fill lookback period with NaN
+    for item in output.iter_mut().take(period) {
+        *item = T::nan();
+    }
+
     let period_f64 = period as f64;
-    let period_minus_one_f64 = (period - 1) as f64;
+
+    // Wilder's smoothing uses alpha = 1/period (Section 5.3)
+    let alpha = 1.0 / period_f64;
 
     // Step 1: Calculate initial sum of gains and losses for the first period
     let mut sum_gain: f64 = 0.0;
@@ -452,9 +483,9 @@ fn compute_rsi_core_f64<T: SeriesElement>(
             (0.0, 0.0)
         };
 
-        // Wilder's smoothing in f64
-        avg_gain = (avg_gain * period_minus_one_f64 + gain) / period_f64;
-        avg_loss = (avg_loss * period_minus_one_f64 + loss) / period_f64;
+        // Wilder's smoothing using difference form (Section 5.3)
+        avg_gain = (gain - avg_gain).mul_add(alpha, avg_gain);
+        avg_loss = (loss - avg_loss).mul_add(alpha, avg_loss);
 
         output[i] = T::from_f64(compute_rsi_value_f64(avg_gain, avg_loss))?;
     }

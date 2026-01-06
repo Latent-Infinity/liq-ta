@@ -202,25 +202,67 @@ pub fn adx<T: SeriesElement>(
     validate_adx_inputs(high, low, close, period)?;
 
     let n = high.len();
-    let mut adx_out = vec![T::nan(); n];
-    let mut plus_di = vec![T::nan(); n];
-    let mut minus_di = vec![T::nan(); n];
 
-    compute_adx_core(
-        high,
-        low,
-        close,
-        period,
-        &mut adx_out,
-        &mut plus_di,
-        &mut minus_di,
-    )?;
+    // Optimization: For f64/f32, allocate uninitialized memory (Section 5.4)
+    // Avoids double-write tax since compute_adx_core fills all elements (lookback NaNs + computed values)
+    use std::any::TypeId;
 
-    Ok(AdxOutput {
-        adx: adx_out,
-        plus_di,
-        minus_di,
-    })
+    if TypeId::of::<T>() == TypeId::of::<f64>() {
+        let high_f64: &[f64] = unsafe { std::mem::transmute(high) };
+        let low_f64: &[f64] = unsafe { std::mem::transmute(low) };
+        let close_f64: &[f64] = unsafe { std::mem::transmute(close) };
+
+        let mut adx_out: Vec<f64> = Vec::with_capacity(n);
+        let mut plus_di: Vec<f64> = Vec::with_capacity(n);
+        let mut minus_di: Vec<f64> = Vec::with_capacity(n);
+        unsafe {
+            adx_out.set_len(n);
+            plus_di.set_len(n);
+            minus_di.set_len(n);
+        }
+
+        compute_adx_core(high_f64, low_f64, close_f64, period, &mut adx_out, &mut plus_di, &mut minus_di)?;
+
+        Ok(AdxOutput {
+            adx: unsafe { std::mem::transmute(adx_out) },
+            plus_di: unsafe { std::mem::transmute(plus_di) },
+            minus_di: unsafe { std::mem::transmute(minus_di) },
+        })
+    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
+        let high_f32: &[f32] = unsafe { std::mem::transmute(high) };
+        let low_f32: &[f32] = unsafe { std::mem::transmute(low) };
+        let close_f32: &[f32] = unsafe { std::mem::transmute(close) };
+
+        let mut adx_out: Vec<f32> = Vec::with_capacity(n);
+        let mut plus_di: Vec<f32> = Vec::with_capacity(n);
+        let mut minus_di: Vec<f32> = Vec::with_capacity(n);
+        unsafe {
+            adx_out.set_len(n);
+            plus_di.set_len(n);
+            minus_di.set_len(n);
+        }
+
+        compute_adx_core(high_f32, low_f32, close_f32, period, &mut adx_out, &mut plus_di, &mut minus_di)?;
+
+        Ok(AdxOutput {
+            adx: unsafe { std::mem::transmute(adx_out) },
+            plus_di: unsafe { std::mem::transmute(plus_di) },
+            minus_di: unsafe { std::mem::transmute(minus_di) },
+        })
+    } else {
+        // Generic fallback: safe initialization
+        let mut adx_out = vec![T::nan(); n];
+        let mut plus_di = vec![T::nan(); n];
+        let mut minus_di = vec![T::nan(); n];
+
+        compute_adx_core(high, low, close, period, &mut adx_out, &mut plus_di, &mut minus_di)?;
+
+        Ok(AdxOutput {
+            adx: adx_out,
+            plus_di,
+            minus_di,
+        })
+    }
 }
 
 /// Computes ADX into pre-allocated output buffers.
@@ -426,6 +468,18 @@ fn compute_adx_core<T: SeriesElement>(
     minus_di_out: &mut [T],
 ) -> Result<()> {
     let n = high.len();
+
+    // Fill lookback periods with NaN
+    let adx_lb = adx_lookback(period);
+    for i in 0..adx_lb.min(n) {
+        adx_out[i] = T::nan();
+    }
+    let di_lb = di_lookback(period);
+    for i in 0..di_lb.min(n) {
+        plus_di_out[i] = T::nan();
+        minus_di_out[i] = T::nan();
+    }
+
     let period_t = T::from_usize(period)?;
     let alpha = T::one() / period_t; // Wilder smoothing factor (1/period) for difference form
     let hundred = T::hundred();

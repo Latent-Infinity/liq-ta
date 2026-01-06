@@ -390,11 +390,55 @@ pub fn stochastic_fast<T: SeriesElement>(
 
     if has_nan {
         // Slow path: proper NaN handling using cached extrema
-        let mut k = vec![T::nan(); n];
-        let mut d = vec![T::nan(); n];
-        compute_raw_k(high, low, close, k_period, &mut k)?;
-        compute_sma_of_series(&k, d_period, k_period - 1, &mut d)?;
-        Ok(StochasticOutput { k, d })
+        // Optimization: For f64/f32, allocate uninitialized memory (Section 5.4)
+        use std::any::TypeId;
+
+        if TypeId::of::<T>() == TypeId::of::<f64>() {
+            let high_f64: &[f64] = unsafe { std::mem::transmute(high) };
+            let low_f64: &[f64] = unsafe { std::mem::transmute(low) };
+            let close_f64: &[f64] = unsafe { std::mem::transmute(close) };
+
+            let mut k: Vec<f64> = Vec::with_capacity(n);
+            let mut d: Vec<f64> = Vec::with_capacity(n);
+            unsafe {
+                k.set_len(n);
+                d.set_len(n);
+            }
+
+            compute_raw_k(high_f64, low_f64, close_f64, k_period, &mut k)?;
+            compute_sma_of_series(&k, d_period, k_period - 1, &mut d)?;
+
+            Ok(StochasticOutput {
+                k: unsafe { std::mem::transmute(k) },
+                d: unsafe { std::mem::transmute(d) },
+            })
+        } else if TypeId::of::<T>() == TypeId::of::<f32>() {
+            let high_f32: &[f32] = unsafe { std::mem::transmute(high) };
+            let low_f32: &[f32] = unsafe { std::mem::transmute(low) };
+            let close_f32: &[f32] = unsafe { std::mem::transmute(close) };
+
+            let mut k: Vec<f32> = Vec::with_capacity(n);
+            let mut d: Vec<f32> = Vec::with_capacity(n);
+            unsafe {
+                k.set_len(n);
+                d.set_len(n);
+            }
+
+            compute_raw_k(high_f32, low_f32, close_f32, k_period, &mut k)?;
+            compute_sma_of_series(&k, d_period, k_period - 1, &mut d)?;
+
+            Ok(StochasticOutput {
+                k: unsafe { std::mem::transmute(k) },
+                d: unsafe { std::mem::transmute(d) },
+            })
+        } else {
+            // Generic fallback: safe initialization
+            let mut k = vec![T::nan(); n];
+            let mut d = vec![T::nan(); n];
+            compute_raw_k(high, low, close, k_period, &mut k)?;
+            compute_sma_of_series(&k, d_period, k_period - 1, &mut d)?;
+            Ok(StochasticOutput { k, d })
+        }
     } else {
         // Fast path: VHGW algorithm (always, no threshold)
         use std::any::TypeId;
@@ -741,14 +785,66 @@ pub fn stochastic_full<T: SeriesElement>(
 
     if has_nan {
         // Slow path: proper NaN handling
-        let mut k = vec![T::nan(); n];
-        let mut d = vec![T::nan(); n];
-        let mut raw_k = vec![T::nan(); n];
-        compute_raw_k(high, low, close, k_period, &mut raw_k)?;
-        compute_sma_of_series(&raw_k, slow_k_period, k_period - 1, &mut k)?;
-        let k_start_idx = k_period + slow_k_period - 2;
-        compute_sma_of_series(&k, d_period, k_start_idx, &mut d)?;
-        Ok(StochasticOutput { k, d })
+        // Optimization: For f64/f32, allocate uninitialized memory (Section 5.4)
+        use std::any::TypeId;
+
+        if TypeId::of::<T>() == TypeId::of::<f64>() {
+            let high_f64: &[f64] = unsafe { std::mem::transmute(high) };
+            let low_f64: &[f64] = unsafe { std::mem::transmute(low) };
+            let close_f64: &[f64] = unsafe { std::mem::transmute(close) };
+
+            let mut k: Vec<f64> = Vec::with_capacity(n);
+            let mut d: Vec<f64> = Vec::with_capacity(n);
+            let mut raw_k: Vec<f64> = Vec::with_capacity(n);
+            unsafe {
+                k.set_len(n);
+                d.set_len(n);
+                raw_k.set_len(n);
+            }
+
+            compute_raw_k(high_f64, low_f64, close_f64, k_period, &mut raw_k)?;
+            compute_sma_of_series(&raw_k, slow_k_period, k_period - 1, &mut k)?;
+            let k_start_idx = k_period + slow_k_period - 2;
+            compute_sma_of_series(&k, d_period, k_start_idx, &mut d)?;
+
+            Ok(StochasticOutput {
+                k: unsafe { std::mem::transmute(k) },
+                d: unsafe { std::mem::transmute(d) },
+            })
+        } else if TypeId::of::<T>() == TypeId::of::<f32>() {
+            let high_f32: &[f32] = unsafe { std::mem::transmute(high) };
+            let low_f32: &[f32] = unsafe { std::mem::transmute(low) };
+            let close_f32: &[f32] = unsafe { std::mem::transmute(close) };
+
+            let mut k: Vec<f32> = Vec::with_capacity(n);
+            let mut d: Vec<f32> = Vec::with_capacity(n);
+            let mut raw_k: Vec<f32> = Vec::with_capacity(n);
+            unsafe {
+                k.set_len(n);
+                d.set_len(n);
+                raw_k.set_len(n);
+            }
+
+            compute_raw_k(high_f32, low_f32, close_f32, k_period, &mut raw_k)?;
+            compute_sma_of_series(&raw_k, slow_k_period, k_period - 1, &mut k)?;
+            let k_start_idx = k_period + slow_k_period - 2;
+            compute_sma_of_series(&k, d_period, k_start_idx, &mut d)?;
+
+            Ok(StochasticOutput {
+                k: unsafe { std::mem::transmute(k) },
+                d: unsafe { std::mem::transmute(d) },
+            })
+        } else {
+            // Generic fallback: safe initialization
+            let mut k = vec![T::nan(); n];
+            let mut d = vec![T::nan(); n];
+            let mut raw_k = vec![T::nan(); n];
+            compute_raw_k(high, low, close, k_period, &mut raw_k)?;
+            compute_sma_of_series(&raw_k, slow_k_period, k_period - 1, &mut k)?;
+            let k_start_idx = k_period + slow_k_period - 2;
+            compute_sma_of_series(&k, d_period, k_start_idx, &mut d)?;
+            Ok(StochasticOutput { k, d })
+        }
     } else {
         // Fast path: VHGW algorithm (always, no threshold)
         use std::any::TypeId;

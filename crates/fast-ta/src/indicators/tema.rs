@@ -134,6 +134,11 @@ pub fn tema<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
     let min_len = tema_min_len(period);
     data.validate_min_length(min_len, "tema")?;
 
+    // Edge case fast path: period==1 degenerates to identity (Section 5.5)
+    if period == 1 {
+        return Ok(data.to_vec());
+    }
+
     // Calculate EMA of input
     let ema1 = ema(data, period)?;
 
@@ -142,11 +147,29 @@ pub fn tema<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
     let three = T::from_usize(3)?;
     let lookback = tema_lookback(period);
 
-    let mut result = vec![T::nan(); data.len()];
+    // Optimization: For f64/f32, allocate uninitialized memory since we write all elements
+    // (lookback NaNs + computed TEMA values). This avoids the double-write tax (Section 5.4).
+    use std::any::TypeId;
+    let mut result = if TypeId::of::<T>() == TypeId::of::<f64>() {
+        let mut v: Vec<T> = Vec::with_capacity(data.len());
+        unsafe { v.set_len(data.len()); } // Safe: we write all elements below
+        v
+    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
+        let mut v: Vec<T> = Vec::with_capacity(data.len());
+        unsafe { v.set_len(data.len()); } // Safe: we write all elements below
+        v
+    } else {
+        vec![T::nan(); data.len()]
+    };
 
-    // Compute EMA2 and EMA3 manually
+    // Fill lookback period with NaN
+    for item in result.iter_mut().take(lookback) {
+        *item = T::nan();
+    }
+
+    // Compute EMA2 and EMA3 manually using difference form (Section 5.3)
+    // Difference form reduces critical path latency from ~7-9 cycles to ~5-6 cycles
     let alpha = T::from_usize(2)? / T::from_usize(period + 1)?;
-    let one_minus_alpha = T::one() - alpha;
 
     // Seed EMA2 with the first valid EMA1 value
     let mut ema2 = ema1[ema1_lookback];
@@ -163,12 +186,13 @@ pub fn tema<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
                 ema2 = ema1[i];
                 ema3 = ema1[i];
             } else {
-                // Update EMA2
-                ema2 = alpha * ema1[i] + one_minus_alpha * ema2;
+                // Update EMA2 using difference form (Section 5.3)
+                ema2 = (ema1[i] - ema2).mul_add(alpha, ema2);
 
                 // Update EMA3 (only after EMA2 has been running for period-1 steps)
                 if i >= ema3_valid_from {
-                    ema3 = alpha * ema2 + one_minus_alpha * ema3;
+                    // Difference form (Section 5.3)
+                    ema3 = (ema2 - ema3).mul_add(alpha, ema3);
                 } else if i == ema3_valid_from - 1 {
                     // Seed EMA3 with current EMA2 value just before it becomes valid
                     ema3 = ema2;
@@ -240,8 +264,28 @@ pub fn tema_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) 
         });
     }
 
+    // Edge case fast path: period==1 degenerates to identity (Section 5.5)
+    if period == 1 {
+        output[..data.len()].copy_from_slice(data);
+        return Ok(data.len());
+    }
+
+    // Optimization: For f64/f32, allocate uninitialized memory for intermediate EMA1
+    // since ema_into writes all elements (lookback NaNs + computed values)
+    use std::any::TypeId;
+    let mut ema1 = if TypeId::of::<T>() == TypeId::of::<f64>() {
+        let mut v: Vec<T> = Vec::with_capacity(data.len());
+        unsafe { v.set_len(data.len()); } // Safe: ema_into writes all elements
+        v
+    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
+        let mut v: Vec<T> = Vec::with_capacity(data.len());
+        unsafe { v.set_len(data.len()); } // Safe: ema_into writes all elements
+        v
+    } else {
+        vec![T::nan(); data.len()]
+    };
+
     // Calculate EMA of input
-    let mut ema1 = vec![T::nan(); data.len()];
     ema_into(data, period, &mut ema1)?;
 
     // Calculate EMA2 and EMA3 manually
@@ -254,8 +298,8 @@ pub fn tema_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) 
         *item = T::nan();
     }
 
+    // Compute EMA2 and EMA3 manually using difference form (Section 5.3)
     let alpha = T::from_usize(2)? / T::from_usize(period + 1)?;
-    let one_minus_alpha = T::one() - alpha;
 
     let mut ema2 = ema1[ema1_lookback];
     let mut ema3 = ema2;
@@ -268,10 +312,12 @@ pub fn tema_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) 
                 ema2 = ema1[i];
                 ema3 = ema1[i];
             } else {
-                ema2 = alpha * ema1[i] + one_minus_alpha * ema2;
+                // Difference form (Section 5.3)
+                ema2 = (ema1[i] - ema2).mul_add(alpha, ema2);
 
                 if i >= ema2_valid_from + ema1_lookback {
-                    ema3 = alpha * ema2 + one_minus_alpha * ema3;
+                    // Difference form (Section 5.3)
+                    ema3 = (ema2 - ema3).mul_add(alpha, ema3);
                 } else if i == ema2_valid_from + ema1_lookback - 1 {
                     ema3 = ema2;
                 }

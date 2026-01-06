@@ -91,12 +91,29 @@ pub fn trix_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) 
         });
     }
 
+    // Edge case fast path: period==1 degenerates to simple ROC (Section 5.5)
+    if period == 1 {
+        output[0] = T::nan();
+        let hundred = T::from_f64(100.0)?;
+        for i in 1..n {
+            let curr = data[i];
+            let prev = data[i - 1];
+            if !prev.is_finite() || !curr.is_finite() {
+                output[i] = T::nan();
+            } else if prev != T::zero() {
+                output[i] = hundred * (curr - prev) / prev;
+            } else {
+                output[i] = T::zero();
+            }
+        }
+        return Ok(());
+    }
+
     let lookback = trix_lookback(period);
     let ema_lb = ema_lookback(period);
 
-    // Pre-compute constants
+    // Pre-compute constants - using difference form (Section 5.3)
     let alpha = T::from_f64(2.0 / (period as f64 + 1.0))?;
-    let one_minus_alpha = T::one() - alpha;
     let hundred = T::from_f64(100.0)?;
     let period_t = T::from_usize(period)?;
 
@@ -115,7 +132,8 @@ pub fn trix_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) 
     // We need `period` EMA1 values for EMA2's SMA: indices ema_lb through 2*ema_lb
     let mut ema2_sum = ema1;
     for i in (ema_lb + 1)..=(2 * ema_lb) {
-        ema1 = alpha * data[i] + one_minus_alpha * ema1;
+        // Difference form (Section 5.3)
+        ema1 = (data[i] - ema1).mul_add(alpha, ema1);
         ema2_sum = ema2_sum + ema1;
     }
     let mut ema2 = ema2_sum / period_t;
@@ -125,8 +143,9 @@ pub fn trix_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) 
     // We need `period` EMA2 values for EMA3's SMA: indices 2*ema_lb through 3*ema_lb
     let mut ema3_sum = ema2;
     for i in (2 * ema_lb + 1)..=(3 * ema_lb) {
-        ema1 = alpha * data[i] + one_minus_alpha * ema1;
-        ema2 = alpha * ema1 + one_minus_alpha * ema2;
+        // Difference form (Section 5.3)
+        ema1 = (data[i] - ema1).mul_add(alpha, ema1);
+        ema2 = (ema1 - ema2).mul_add(alpha, ema2);
         ema3_sum = ema3_sum + ema2;
     }
     let mut ema3 = ema3_sum / period_t;
@@ -136,10 +155,10 @@ pub fn trix_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) 
     // We need prev_ema3 (at index 3*ema_lb) for the ROC calculation
     let mut prev_ema3 = ema3;
 
-    // Process first TRIX value at lookback
-    ema1 = alpha * data[lookback] + one_minus_alpha * ema1;
-    ema2 = alpha * ema1 + one_minus_alpha * ema2;
-    ema3 = alpha * ema2 + one_minus_alpha * ema3;
+    // Process first TRIX value at lookback - using difference form (Section 5.3)
+    ema1 = (data[lookback] - ema1).mul_add(alpha, ema1);
+    ema2 = (ema1 - ema2).mul_add(alpha, ema2);
+    ema3 = (ema2 - ema3).mul_add(alpha, ema3);
 
     // For ROC: (curr - prev) / prev
     // Handle NaN propagation and zero-division appropriately
@@ -152,11 +171,11 @@ pub fn trix_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) 
     }
     prev_ema3 = ema3;
 
-    // Continue for rest of data
+    // Continue for rest of data - using difference form (Section 5.3)
     for i in (lookback + 1)..n {
-        ema1 = alpha * data[i] + one_minus_alpha * ema1;
-        ema2 = alpha * ema1 + one_minus_alpha * ema2;
-        ema3 = alpha * ema2 + one_minus_alpha * ema3;
+        ema1 = (data[i] - ema1).mul_add(alpha, ema1);
+        ema2 = (ema1 - ema2).mul_add(alpha, ema2);
+        ema3 = (ema2 - ema3).mul_add(alpha, ema3);
 
         if !prev_ema3.is_finite() || !ema3.is_finite() {
             output[i] = T::nan();
@@ -200,10 +219,29 @@ pub fn trix_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) 
 /// - The input data is empty (`Error::EmptyInput`)
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
-pub fn trix<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
-    let mut output = vec![T::nan(); data.len()];
-    trix_into(data, period, &mut output)?;
-    Ok(output)
+pub fn trix<T: SeriesElement + 'static>(data: &[T], period: usize) -> Result<Vec<T>> {
+    // Optimization: For f64/f32, allocate uninitialized memory since trix_into writes all elements
+    // (lookback NaNs + computed TRIX values). This avoids the double-write tax (Section 5.4).
+    use std::any::TypeId;
+
+    if TypeId::of::<T>() == TypeId::of::<f64>() {
+        let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
+        let mut output: Vec<f64> = Vec::with_capacity(data.len());
+        unsafe { output.set_len(data.len()); }  // Safe: trix_into writes all elements
+        trix_into(data_f64, period, &mut output)?;
+        Ok(unsafe { std::mem::transmute(output) })
+    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
+        let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
+        let mut output: Vec<f32> = Vec::with_capacity(data.len());
+        unsafe { output.set_len(data.len()); }  // Safe: trix_into writes all elements
+        trix_into(data_f32, period, &mut output)?;
+        Ok(unsafe { std::mem::transmute(output) })
+    } else {
+        // Generic fallback: safe initialization
+        let mut output = vec![T::nan(); data.len()];
+        trix_into(data, period, &mut output)?;
+        Ok(output)
+    }
 }
 
 #[cfg(test)]

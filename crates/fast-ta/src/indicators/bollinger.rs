@@ -258,23 +258,99 @@ pub fn bollinger<T: SeriesElement + 'static>(
         });
     }
 
-    // Initialize output vectors with NaN
-    let mut middle = vec![T::nan(); data.len()];
-    let mut upper = vec![T::nan(); data.len()];
-    let mut lower = vec![T::nan(); data.len()];
-
-    // Use f64 accumulator for f32 inputs in High precision mode
-    if use_f64_accumulator::<T>() {
-        bollinger_f64_accum(data, period, num_std_dev, &mut middle, &mut upper, &mut lower)?;
-    } else {
-        bollinger_native_accum(data, period, num_std_dev, &mut middle, &mut upper, &mut lower)?;
+    // Edge case fast path: period==1 means stddev=0, all bands equal input (Section 5.5)
+    if period == 1 {
+        let middle = data.to_vec();
+        let upper = data.to_vec();
+        let lower = data.to_vec();
+        return Ok(BollingerOutput {
+            middle,
+            upper,
+            lower,
+        });
     }
 
-    Ok(BollingerOutput {
-        middle,
-        upper,
-        lower,
-    })
+    // Optimization: For f64/f32, allocate uninitialized memory (Section 5.4)
+    // Avoids double-write tax since helpers fill all elements (lookback NaNs + computed values)
+    use std::any::TypeId;
+
+    if TypeId::of::<T>() == TypeId::of::<f64>() {
+        let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
+        let mut middle: Vec<f64> = Vec::with_capacity(data.len());
+        let mut upper: Vec<f64> = Vec::with_capacity(data.len());
+        let mut lower: Vec<f64> = Vec::with_capacity(data.len());
+        unsafe {
+            middle.set_len(data.len());
+            upper.set_len(data.len());
+            lower.set_len(data.len());
+        }
+
+        bollinger_native_accum(data_f64, period, num_std_dev.to_f64().unwrap_or(2.0), &mut middle, &mut upper, &mut lower)?;
+
+        Ok(BollingerOutput {
+            middle: unsafe { std::mem::transmute(middle) },
+            upper: unsafe { std::mem::transmute(upper) },
+            lower: unsafe { std::mem::transmute(lower) },
+        })
+    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
+        let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
+
+        // Use f64 accumulator for f32 inputs in High precision mode
+        if use_f64_accumulator::<T>() {
+            let mut middle: Vec<f32> = Vec::with_capacity(data.len());
+            let mut upper: Vec<f32> = Vec::with_capacity(data.len());
+            let mut lower: Vec<f32> = Vec::with_capacity(data.len());
+            unsafe {
+                middle.set_len(data.len());
+                upper.set_len(data.len());
+                lower.set_len(data.len());
+            }
+
+            let num_std_dev_f32 = num_std_dev.to_f64().unwrap_or(2.0) as f32;
+            bollinger_f64_accum(data_f32, period, num_std_dev_f32, &mut middle, &mut upper, &mut lower)?;
+
+            Ok(BollingerOutput {
+                middle: unsafe { std::mem::transmute(middle) },
+                upper: unsafe { std::mem::transmute(upper) },
+                lower: unsafe { std::mem::transmute(lower) },
+            })
+        } else {
+            let mut middle: Vec<f32> = Vec::with_capacity(data.len());
+            let mut upper: Vec<f32> = Vec::with_capacity(data.len());
+            let mut lower: Vec<f32> = Vec::with_capacity(data.len());
+            unsafe {
+                middle.set_len(data.len());
+                upper.set_len(data.len());
+                lower.set_len(data.len());
+            }
+
+            let num_std_dev_f32 = num_std_dev.to_f64().unwrap_or(2.0) as f32;
+            bollinger_native_accum(data_f32, period, num_std_dev_f32, &mut middle, &mut upper, &mut lower)?;
+
+            Ok(BollingerOutput {
+                middle: unsafe { std::mem::transmute(middle) },
+                upper: unsafe { std::mem::transmute(upper) },
+                lower: unsafe { std::mem::transmute(lower) },
+            })
+        }
+    } else {
+        // Generic fallback: safe initialization
+        let mut middle = vec![T::nan(); data.len()];
+        let mut upper = vec![T::nan(); data.len()];
+        let mut lower = vec![T::nan(); data.len()];
+
+        if use_f64_accumulator::<T>() {
+            bollinger_f64_accum(data, period, num_std_dev, &mut middle, &mut upper, &mut lower)?;
+        } else {
+            bollinger_native_accum(data, period, num_std_dev, &mut middle, &mut upper, &mut lower)?;
+        }
+
+        Ok(BollingerOutput {
+            middle,
+            upper,
+            lower,
+        })
+    }
 }
 
 /// Bollinger Bands using Welford f64 accumulator for improved precision.
@@ -290,6 +366,13 @@ fn bollinger_f64_accum<T: SeriesElement>(
     upper: &mut [T],
     lower: &mut [T],
 ) -> Result<()> {
+    // Fill lookback period with NaN
+    for i in 0..(period - 1) {
+        middle[i] = T::nan();
+        upper[i] = T::nan();
+        lower[i] = T::nan();
+    }
+
     let num_std_dev_f64 = num_std_dev.to_f64().unwrap_or(2.0);
 
     // Initialize Welford accumulator by pushing first window values
@@ -313,6 +396,10 @@ fn bollinger_f64_accum<T: SeriesElement>(
         middle[first_idx] = T::from_f64(mean)?;
         upper[first_idx] = T::from_f64(mean + num_std_dev_f64 * stddev)?;
         lower[first_idx] = T::from_f64(mean - num_std_dev_f64 * stddev)?;
+    } else {
+        middle[first_idx] = T::nan();
+        upper[first_idx] = T::nan();
+        lower[first_idx] = T::nan();
     }
 
     // Rolling calculation for remaining elements
@@ -363,6 +450,13 @@ fn bollinger_native_accum<T: SeriesElement + 'static>(
     upper: &mut [T],
     lower: &mut [T],
 ) -> Result<()> {
+    // Fill lookback period with NaN
+    for i in 0..(period - 1) {
+        middle[i] = T::nan();
+        upper[i] = T::nan();
+        lower[i] = T::nan();
+    }
+
     // Pre-compute reciprocal for efficient division
     let inv_period = T::one() / T::from_usize(period)?;
 
@@ -379,6 +473,10 @@ fn bollinger_native_accum<T: SeriesElement + 'static>(
         middle[first_idx] = mean;
         upper[first_idx] = mean + num_std_dev * stddev;
         lower[first_idx] = mean - num_std_dev * stddev;
+    } else {
+        middle[first_idx] = T::nan();
+        upper[first_idx] = T::nan();
+        lower[first_idx] = T::nan();
     }
 
     // Rolling calculation for remaining elements
@@ -638,11 +736,55 @@ pub fn rolling_stddev<T: SeriesElement + 'static>(data: &[T], period: usize) -> 
         });
     }
 
+    // Edge case fast path: period==1 means stddev=0 (Section 5.5)
+    if period == 1 {
+        return Ok(vec![T::zero(); data.len()]);
+    }
+
+    // Optimization: For f64/f32, allocate uninitialized memory (Section 5.4)
+    use std::any::TypeId;
+
+    if TypeId::of::<T>() == TypeId::of::<f64>() {
+        let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
+        let mut result: Vec<f64> = Vec::with_capacity(data.len());
+        unsafe { result.set_len(data.len()); }
+
+        // Fill lookback period with NaN
+        for item in result.iter_mut().take(period - 1) {
+            *item = f64::NAN;
+        }
+
+        rolling_stddev_compute(data_f64, period, &mut result)?;
+        Ok(unsafe { std::mem::transmute(result) })
+    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
+        let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
+        let mut result: Vec<f32> = Vec::with_capacity(data.len());
+        unsafe { result.set_len(data.len()); }
+
+        // Fill lookback period with NaN
+        for item in result.iter_mut().take(period - 1) {
+            *item = f32::NAN;
+        }
+
+        rolling_stddev_compute(data_f32, period, &mut result)?;
+        Ok(unsafe { std::mem::transmute(result) })
+    } else {
+        // Generic fallback: safe initialization
+        let mut result = vec![T::nan(); data.len()];
+        rolling_stddev_compute(data, period, &mut result)?;
+        Ok(result)
+    }
+}
+
+/// Core computation for rolling standard deviation.
+#[inline]
+fn rolling_stddev_compute<T: SeriesElement + 'static>(
+    data: &[T],
+    period: usize,
+    result: &mut [T],
+) -> Result<()> {
     // Pre-compute reciprocal for efficient division
     let inv_period = T::one() / T::from_usize(period)?;
-
-    // Initialize output vector with NaN
-    let mut result = vec![T::nan(); data.len()];
 
     // Compute initial sum and sum of squares using SIMD for f64
     let (mut sum, mut sum_sq, mut nan_count) = compute_initial_sums(data, period);
@@ -685,7 +827,7 @@ pub fn rolling_stddev<T: SeriesElement + 'static>(data: &[T], period: usize) -> 
         }
     }
 
-    Ok(result)
+    Ok(())
 }
 
 /// Computes the rolling standard deviation into a pre-allocated output buffer.

@@ -152,7 +152,15 @@ fn cci_core_native<T: SeriesElement>(
     let zero = T::zero();
 
     // Calculate typical prices
-    let mut tp = vec![zero; n];
+    // Optimization: Use uninitialized memory for f64/f32 (Section 5.4)
+    use std::any::TypeId;
+    let mut tp = if TypeId::of::<T>() == TypeId::of::<f64>() || TypeId::of::<T>() == TypeId::of::<f32>() {
+        let mut v: Vec<T> = Vec::with_capacity(n);
+        unsafe { v.set_len(n); }
+        v
+    } else {
+        vec![zero; n]
+    };
     let mut invalid_flags = vec![false; n];
     for i in 0..n {
         if is_invalid(high[i]) || is_invalid(low[i]) || is_invalid(close[i]) {
@@ -186,9 +194,11 @@ fn cci_core_native<T: SeriesElement>(
         let tp_sma = tp_sum * inv_period;
 
         // Calculate mean deviation for first window
+        // Optimization: Use slice iterator
+        let window = &tp[0..period];
         let mut deviation_sum = zero;
-        for j in 0..period {
-            let diff = tp[j] - tp_sma;
+        for &tp_val in window {
+            let diff = tp_val - tp_sma;
             deviation_sum = deviation_sum + diff.abs();
         }
         let mean_deviation = deviation_sum * inv_period;
@@ -226,10 +236,14 @@ fn cci_core_native<T: SeriesElement>(
 
         // Mean deviation still requires iterating over window
         // (unavoidable since deviations depend on current window's mean)
+        // Optimization: Use slice iterator for better auto-vectorization hints
         let start = i + 1 - period;
+        let window = &tp[start..=i];
         let mut deviation_sum = zero;
-        for j in start..=i {
-            let diff = tp[j] - tp_sma;
+
+        // Use iterator to allow compiler optimization
+        for &tp_val in window {
+            let diff = tp_val - tp_sma;
             deviation_sum = deviation_sum + diff.abs();
         }
         let mean_deviation = deviation_sum * inv_period;
@@ -259,7 +273,9 @@ fn cci_core_f64<T: SeriesElement>(
     let inv_constant = 1.0 / 0.015;
 
     // Calculate typical prices in f64
-    let mut tp = vec![0.0_f64; n];
+    // Optimization: Use uninitialized memory (Section 5.4)
+    let mut tp: Vec<f64> = Vec::with_capacity(n);
+    unsafe { tp.set_len(n); }
     let mut invalid_flags = vec![false; n];
     for i in 0..n {
         if is_invalid(high[i]) || is_invalid(low[i]) || is_invalid(close[i]) {
@@ -296,9 +312,11 @@ fn cci_core_f64<T: SeriesElement>(
         let tp_sma = tp_sum * inv_period;
 
         // Calculate mean deviation for first window in f64
+        // Optimization: Use slice iterator
+        let window = &tp[0..period];
         let mut deviation_sum: f64 = 0.0;
-        for j in 0..period {
-            let diff = tp[j] - tp_sma;
+        for &tp_val in window {
+            let diff = tp_val - tp_sma;
             deviation_sum += diff.abs();
         }
         let mean_deviation = deviation_sum * inv_period;
@@ -335,10 +353,14 @@ fn cci_core_f64<T: SeriesElement>(
         let tp_sma = tp_sum * inv_period;
 
         // Mean deviation in f64
+        // Optimization: Use slice iterator for better auto-vectorization
         let start = i + 1 - period;
+        let window = &tp[start..=i];
         let mut deviation_sum: f64 = 0.0;
-        for j in start..=i {
-            let diff = tp[j] - tp_sma;
+
+        // Use iterator to allow compiler optimization
+        for &tp_val in window {
+            let diff = tp_val - tp_sma;
             deviation_sum += diff.abs();
         }
         let mean_deviation = deviation_sum * inv_period;
@@ -395,9 +417,35 @@ pub fn cci<T: SeriesElement + 'static>(
     close: &[T],
     period: usize,
 ) -> Result<Vec<T>> {
-    let mut output = vec![T::zero(); high.len()];
-    cci_into(high, low, close, period, &mut output)?;
-    Ok(output)
+    // Optimization: For f64/f32, allocate uninitialized memory (Section 5.4)
+    use std::any::TypeId;
+
+    if TypeId::of::<T>() == TypeId::of::<f64>() {
+        let high_f64: &[f64] = unsafe { std::mem::transmute(high) };
+        let low_f64: &[f64] = unsafe { std::mem::transmute(low) };
+        let close_f64: &[f64] = unsafe { std::mem::transmute(close) };
+
+        let mut output: Vec<f64> = Vec::with_capacity(high.len());
+        unsafe { output.set_len(high.len()); }
+
+        cci_into(high_f64, low_f64, close_f64, period, &mut output)?;
+        Ok(unsafe { std::mem::transmute(output) })
+    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
+        let high_f32: &[f32] = unsafe { std::mem::transmute(high) };
+        let low_f32: &[f32] = unsafe { std::mem::transmute(low) };
+        let close_f32: &[f32] = unsafe { std::mem::transmute(close) };
+
+        let mut output: Vec<f32> = Vec::with_capacity(high.len());
+        unsafe { output.set_len(high.len()); }
+
+        cci_into(high_f32, low_f32, close_f32, period, &mut output)?;
+        Ok(unsafe { std::mem::transmute(output) })
+    } else {
+        // Generic fallback: safe initialization
+        let mut output = vec![T::zero(); high.len()];
+        cci_into(high, low, close, period, &mut output)?;
+        Ok(output)
+    }
 }
 
 #[cfg(test)]

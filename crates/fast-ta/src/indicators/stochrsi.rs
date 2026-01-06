@@ -154,7 +154,19 @@ pub fn stochrsi_into<T: SeriesElement + 'static>(
     }
 
     // Calculate raw StochRSI using O(n) rolling extrema
-    let mut raw_stochrsi = vec![T::nan(); n];
+    // Optimization: For f64/f32, allocate uninitialized memory (Section 5.4)
+    use std::any::TypeId;
+    let mut raw_stochrsi = if TypeId::of::<T>() == TypeId::of::<f64>() {
+        let mut v: Vec<T> = Vec::with_capacity(n);
+        unsafe { v.set_len(n); }
+        v
+    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
+        let mut v: Vec<T> = Vec::with_capacity(n);
+        unsafe { v.set_len(n); }
+        v
+    } else {
+        vec![T::nan(); n]
+    };
     let rsi_lb = rsi_lookback(rsi_period);
 
     // Use rolling_extrema kernel for O(n) min/max computation
@@ -250,18 +262,46 @@ pub fn stochrsi<T: SeriesElement + 'static>(
     k_period: usize,
     d_period: usize,
 ) -> Result<StochRsiOutput<T>> {
-    let mut fastk = vec![T::nan(); data.len()];
-    let mut fastd = vec![T::nan(); data.len()];
-    stochrsi_into(
-        data,
-        rsi_period,
-        stoch_period,
-        k_period,
-        d_period,
-        &mut fastk,
-        &mut fastd,
-    )?;
-    Ok(StochRsiOutput { fastk, fastd })
+    // Optimization: For f64/f32, allocate uninitialized memory (Section 5.4)
+    use std::any::TypeId;
+
+    if TypeId::of::<T>() == TypeId::of::<f64>() {
+        let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
+        let mut fastk: Vec<f64> = Vec::with_capacity(data.len());
+        let mut fastd: Vec<f64> = Vec::with_capacity(data.len());
+        unsafe {
+            fastk.set_len(data.len());
+            fastd.set_len(data.len());
+        }
+
+        stochrsi_into(data_f64, rsi_period, stoch_period, k_period, d_period, &mut fastk, &mut fastd)?;
+
+        Ok(StochRsiOutput {
+            fastk: unsafe { std::mem::transmute(fastk) },
+            fastd: unsafe { std::mem::transmute(fastd) },
+        })
+    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
+        let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
+        let mut fastk: Vec<f32> = Vec::with_capacity(data.len());
+        let mut fastd: Vec<f32> = Vec::with_capacity(data.len());
+        unsafe {
+            fastk.set_len(data.len());
+            fastd.set_len(data.len());
+        }
+
+        stochrsi_into(data_f32, rsi_period, stoch_period, k_period, d_period, &mut fastk, &mut fastd)?;
+
+        Ok(StochRsiOutput {
+            fastk: unsafe { std::mem::transmute(fastk) },
+            fastd: unsafe { std::mem::transmute(fastd) },
+        })
+    } else {
+        // Generic fallback: safe initialization
+        let mut fastk = vec![T::nan(); data.len()];
+        let mut fastd = vec![T::nan(); data.len()];
+        stochrsi_into(data, rsi_period, stoch_period, k_period, d_period, &mut fastk, &mut fastd)?;
+        Ok(StochRsiOutput { fastk, fastd })
+    }
 }
 
 /// Simple `StochRSI` with common defaults (rsi=14, stoch=14, k=1, d=3).
