@@ -1563,7 +1563,7 @@ mod tests {
     #[test]
     fn test_moments_f64_large() {
         let data: Vec<f64> = (1..=100).map(|x| x as f64).collect();
-        let (sum, sum_sq, sum_cb, sum_qd) = moments_f64(&data);
+        let (sum, sum_sq, sum_cb, _sum_qd) = moments_f64(&data);
         // Sum = n(n+1)/2 = 5050
         assert!((sum - 5050.0).abs() < 1e-6);
         // Sum of squares = n(n+1)(2n+1)/6 = 338350

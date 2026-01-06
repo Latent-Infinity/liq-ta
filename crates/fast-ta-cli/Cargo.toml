@@ -21,7 +21,3 @@ fast-ta = { path = "../fast-ta", version = "0.1.0" }
 clap = { workspace = true }
 csv = { workspace = true }
 thiserror = { workspace = true }
-
-[dev-dependencies]
-rand = { workspace = true }
-rand_chacha = { workspace = true }

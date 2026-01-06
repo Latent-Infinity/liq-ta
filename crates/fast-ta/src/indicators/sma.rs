@@ -45,7 +45,6 @@
 //! ```
 
 use crate::error::{Error, Result};
-use crate::kernels::simd;
 use crate::traits::SeriesElement;
 use std::any::TypeId;
 
@@ -205,7 +204,7 @@ fn sma_f64_optimistic(data: &[f64], period: usize, output: &mut [f64]) {
             unsafe { *output.get_unchecked_mut(i) = sum * inv_period; }
         } else {
             // Hit invalid - switch to tracking for remainder
-            sma_f64_with_tracking_from(data, period, output, i, sum);
+            sma_f64_with_tracking_from(data, period, output, i);
             return;
         }
     }
@@ -213,13 +212,7 @@ fn sma_f64_optimistic(data: &[f64], period: usize, output: &mut [f64]) {
 
 /// Continue SMA with tracking from a specific index.
 #[inline]
-fn sma_f64_with_tracking_from(
-    data: &[f64],
-    period: usize,
-    output: &mut [f64],
-    start_i: usize,
-    mut sum: f64,
-) {
+fn sma_f64_with_tracking_from(data: &[f64], period: usize, output: &mut [f64], start_i: usize) {
     let n = data.len();
     let inv_period = 1.0 / period as f64;
 
@@ -240,7 +233,7 @@ fn sma_f64_with_tracking_from(
     }
 
     // Recompute sum from sanitized buffer
-    sum = buf.iter().sum();
+    let mut sum: f64 = buf.iter().sum();
 
     // Process from start_i onward with tracking
     for i in start_i..n {
@@ -302,131 +295,6 @@ fn sma_f32_optimistic(data: &[f32], period: usize, output: &mut [f32]) {
         } else {
             sma_f32_with_tracking(data, period, output);
             return;
-        }
-    }
-}
-
-/// SIMD-optimized SMA for f64 - single pass with adaptive fast path.
-///
-/// Uses SIMD for initial window sum. If no invalid values are found during
-/// initial window computation, switches to branchless rolling sum.
-/// Otherwise uses nan_count tracking.
-#[inline]
-fn sma_f64_optimized(data: &[f64], period: usize, output: &mut [f64]) {
-    let n = data.len();
-    let inv_period = 1.0 / period as f64;
-
-    // Fill lookback with NaN
-    for item in output.iter_mut().take(period - 1) {
-        *item = f64::NAN;
-    }
-
-    // Compute initial sum and count using SIMD
-    let (mut sum, valid_count) = simd::sum_and_count_f64(&data[..period]);
-    let invalid_count = period - valid_count;
-
-    // First valid output
-    if invalid_count == 0 {
-        output[period - 1] = sum * inv_period;
-    } else {
-        output[period - 1] = f64::NAN;
-    }
-
-    // If initial window has no invalids, check if remaining data is also clean
-    // by doing fast path with lazy validity detection
-    if invalid_count == 0 {
-        // Optimistic fast path - assume rest is clean, bail if we find invalid
-        for i in period..n {
-            let new_value = data[i];
-            let old_value = data[i - period];
-
-            // Branchless update when both values are finite
-            // Most common case: both values are valid
-            if new_value.is_finite() && old_value.is_finite() {
-                sum = sum + new_value - old_value;
-                output[i] = sum * inv_period;
-            } else {
-                // Hit an invalid value - fall back to tracking mode for rest
-                sma_f64_tracking_tail(data, period, output, i, sum, new_value, old_value, inv_period);
-                return;
-            }
-        }
-    } else {
-        // Slow path from start - use full tracking
-        sma_f64_tracking_loop(data, period, output, period, sum, invalid_count, inv_period);
-    }
-}
-
-/// Continue SMA computation with full NaN tracking from a given index.
-#[inline]
-fn sma_f64_tracking_tail(
-    data: &[f64],
-    period: usize,
-    output: &mut [f64],
-    start_i: usize,
-    mut sum: f64,
-    new_value: f64,
-    old_value: f64,
-    inv_period: f64,
-) {
-    // Process the current element that triggered the switch
-    let mut invalid_count = 0usize;
-
-    if !new_value.is_finite() {
-        invalid_count += 1;
-    } else {
-        sum += new_value;
-    }
-
-    if !old_value.is_finite() {
-        // old_value was invalid, so invalid_count was already 0, decrement not needed
-    } else {
-        sum -= old_value;
-    }
-
-    if invalid_count == 0 {
-        output[start_i] = sum * inv_period;
-    } else {
-        output[start_i] = f64::NAN;
-    }
-
-    // Continue with tracking loop
-    sma_f64_tracking_loop(data, period, output, start_i + 1, sum, invalid_count, inv_period);
-}
-
-/// Rolling sum loop with full invalid_count tracking.
-#[inline]
-fn sma_f64_tracking_loop(
-    data: &[f64],
-    period: usize,
-    output: &mut [f64],
-    start_i: usize,
-    mut sum: f64,
-    mut invalid_count: usize,
-    inv_period: f64,
-) {
-    let n = data.len();
-
-    for i in start_i..n {
-        let new_value = data[i];
-        let old_value = data[i - period];
-
-        if !new_value.is_finite() {
-            invalid_count += 1;
-        } else {
-            sum += new_value;
-        }
-
-        if !old_value.is_finite() {
-            invalid_count = invalid_count.saturating_sub(1);
-        } else {
-            sum -= old_value;
-        }
-
-        if invalid_count == 0 {
-            output[i] = sum * inv_period;
-        } else {
-            output[i] = f64::NAN;
         }
     }
 }

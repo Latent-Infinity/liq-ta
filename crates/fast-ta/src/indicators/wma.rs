@@ -59,84 +59,12 @@ fn is_invalid<T: SeriesElement>(value: T) -> bool {
     !value.is_finite()
 }
 
-/// Optimized f64 WMA kernel with unchecked rolling sum (no validation).
-/// Fast path for clean data.
-#[inline]
-fn wma_f64_unchecked(data: &[f64], period: usize, output: &mut [f64]) {
-    let n = data.len();
-    let weight_sum = (period * (period + 1) / 2) as f64;
-    let inv_weight_sum = 1.0 / weight_sum;
-    let period_f64 = period as f64;
-
-    // Fill lookback
-    output[..period - 1].fill(f64::NAN);
-
-    // Compute initial weighted sum
-    let mut weighted_sum = 0.0;
-    let mut simple_sum = 0.0;
-
-    for i in 0..period {
-        let val = unsafe { *data.get_unchecked(i) };
-        let weight = (i + 1) as f64;
-        weighted_sum += val * weight;
-        simple_sum += val;
-    }
-
-    unsafe { *output.get_unchecked_mut(period - 1) = weighted_sum * inv_weight_sum; }
-
-    // Rolling update
-    for i in period..n {
-        let new_val = unsafe { *data.get_unchecked(i) };
-        let old_val = unsafe { *data.get_unchecked(i - period) };
-
-        weighted_sum = weighted_sum - simple_sum + new_val * period_f64;
-        simple_sum = simple_sum - old_val + new_val;
-
-        unsafe { *output.get_unchecked_mut(i) = weighted_sum * inv_weight_sum; }
-    }
-}
-
-/// Optimized f32 WMA kernel with unchecked rolling sum.
-/// Uses f64 accumulator for better accuracy.
-#[inline]
-fn wma_f32_unchecked(data: &[f32], period: usize, output: &mut [f32]) {
-    let n = data.len();
-    let weight_sum = (period * (period + 1) / 2) as f64;
-    let inv_weight_sum = 1.0 / weight_sum;
-    let period_f64 = period as f64;
-
-    output[..period - 1].fill(f32::NAN);
-
-    let mut weighted_sum = 0.0f64;
-    let mut simple_sum = 0.0f64;
-
-    for i in 0..period {
-        let val = unsafe { *data.get_unchecked(i) as f64 };
-        let weight = (i + 1) as f64;
-        weighted_sum += val * weight;
-        simple_sum += val;
-    }
-
-    unsafe { *output.get_unchecked_mut(period - 1) = (weighted_sum * inv_weight_sum) as f32; }
-
-    for i in period..n {
-        let new_val = unsafe { *data.get_unchecked(i) as f64 };
-        let old_val = unsafe { *data.get_unchecked(i - period) as f64 };
-
-        weighted_sum = weighted_sum - simple_sum + new_val * period_f64;
-        simple_sum = simple_sum - old_val + new_val;
-
-        unsafe { *output.get_unchecked_mut(i) = (weighted_sum * inv_weight_sum) as f32; }
-    }
-}
-
 /// f64 WMA with ring buffer for invalid tracking.
 #[inline]
 fn wma_f64_with_tracking(data: &[f64], period: usize, output: &mut [f64]) {
     let n = data.len();
     let weight_sum = (period * (period + 1) / 2) as f64;
     let inv_weight_sum = 1.0 / weight_sum;
-    let period_f64 = period as f64;
 
     output[..period - 1].fill(f64::NAN);
 
@@ -145,7 +73,6 @@ fn wma_f64_with_tracking(data: &[f64], period: usize, output: &mut [f64]) {
     let mut inv = vec![0u8; period];
 
     let mut weighted_sum = 0.0;
-    let mut simple_sum = 0.0;
     let mut invalid_count = 0usize;
 
     // Initialize first window
@@ -158,7 +85,6 @@ fn wma_f64_with_tracking(data: &[f64], period: usize, output: &mut [f64]) {
 
         let weight = (i + 1) as f64;
         weighted_sum += buf[i] * weight;
-        simple_sum += buf[i];
         invalid_count += inv[i] as usize;
     }
 
@@ -188,12 +114,10 @@ fn wma_f64_with_tracking(data: &[f64], period: usize, output: &mut [f64]) {
 
         // Recompute sums from ring
         weighted_sum = 0.0;
-        simple_sum = 0.0;
         for j in 0..period {
             let ring_idx = (i - period + 1 + j) % period;
             let weight = (j + 1) as f64;
             weighted_sum += buf[ring_idx] * weight;
-            simple_sum += buf[ring_idx];
         }
 
         if invalid_count == 0 {
@@ -217,7 +141,6 @@ fn wma_f32_with_tracking(data: &[f32], period: usize, output: &mut [f32]) {
     let mut inv = vec![0u8; period];
 
     let mut weighted_sum = 0.0f64;
-    let mut simple_sum = 0.0f64;
     let mut invalid_count = 0usize;
 
     for i in 0..period {
@@ -229,7 +152,6 @@ fn wma_f32_with_tracking(data: &[f32], period: usize, output: &mut [f32]) {
 
         let weight = (i + 1) as f64;
         weighted_sum += buf[i] * weight;
-        simple_sum += buf[i];
         invalid_count += inv[i] as usize;
     }
 
@@ -252,12 +174,10 @@ fn wma_f32_with_tracking(data: &[f32], period: usize, output: &mut [f32]) {
         invalid_count = invalid_count - old_inv as usize + inv[idx] as usize;
 
         weighted_sum = 0.0;
-        simple_sum = 0.0;
         for j in 0..period {
             let ring_idx = (i - period + 1 + j) % period;
             let weight = (j + 1) as f64;
             weighted_sum += buf[ring_idx] * weight;
-            simple_sum += buf[ring_idx];
         }
 
         if invalid_count == 0 {

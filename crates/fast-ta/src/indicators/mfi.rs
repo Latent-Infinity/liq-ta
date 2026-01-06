@@ -5,11 +5,11 @@
 //!
 //! # Algorithm
 //!
-//! This implementation uses an O(n) rolling sum approach with pre-scan optimization:
-//! 1. Pre-scan inputs to detect NaN values
-//! 2. If no NaN detected, use fast path without validity tracking
-//! 3. If NaN present, use slow path with invalid_count tracking
-//! 4. Both paths use rolling sums with O(1) operations per element
+//! This implementation uses an O(n) rolling sum approach with inline NaN handling:
+//! 1. Uses circular buffer to track positive/negative money flows
+//! 2. Maintains rolling sums with O(1) operations per element
+//! 3. Tracks invalid_count for proper NaN propagation
+//! 4. Uses branchless direction assignment in f64 kernel
 //!
 //! # Formula
 //!
@@ -68,30 +68,10 @@ pub const fn mfi_min_len(period: usize) -> usize {
 }
 
 // =============================================================================
-// Helper functions
+// Helper types
 // =============================================================================
 
-/// Helper function to calculate MFI from positive and negative money flow sums.
-#[inline]
-fn calculate_mfi<T: SeriesElement>(positive_mf: T, negative_mf: T, hundred: T, one: T) -> T {
-    // Check for NaN first - must propagate invalid values
-    if positive_mf.is_nan() || negative_mf.is_nan() {
-        return T::nan();
-    }
-
-    if negative_mf == T::zero() {
-        // All positive or no flow - MFI = 100
-        hundred
-    } else if positive_mf == T::zero() {
-        // All negative - MFI = 0
-        T::zero()
-    } else {
-        let mfr = positive_mf / negative_mf;
-        hundred - (hundred / (one + mfr))
-    }
-}
-
-/// Money flow entry for circular buffer (old version with NaN sentinel).
+/// Money flow entry for circular buffer with NaN sentinel.
 /// Kept for the checked kernel that uses NaN as a sentinel.
 #[derive(Clone, Copy)]
 struct MoneyFlowEntry {
@@ -99,38 +79,7 @@ struct MoneyFlowEntry {
     negative: f64,
 }
 
-/// Optimized money flow entry for branchless eviction.
-/// Stores positive contribution and total (pos + |neg|) instead of separate pos/neg.
-/// This eliminates one accumulator and enables fully branchless ring operations.
-#[derive(Clone, Copy)]
-struct MfEntry {
-    pos: f64,  // contribution to positive sum
-    tot: f64,  // contribution to total flow (pos + abs(neg))
-}
-
-/// Branchless assignment for (positive, total) contributions.
-///
-/// Given raw money flow (tp * volume), returns:
-/// - pos: raw if tp > prev_tp, else 0
-/// - tot: raw if tp != prev_tp, else 0  (used for total = pos + |neg|)
-///
-/// This enables computing MFI as 100 * pos/tot instead of 100 * pos/(pos+neg).
-#[inline(always)]
-fn assign_pos_tot(raw3: f64, tp3: f64, prev_tp3: f64) -> (f64, f64) {
-    let bits = raw3.to_bits();
-    let gt = (tp3 > prev_tp3) as u64;
-    let lt = (tp3 < prev_tp3) as u64;
-
-    let gt_mask = 0u64.wrapping_sub(gt);
-    let any_mask = gt_mask | 0u64.wrapping_sub(lt);
-
-    let pos = f64::from_bits(bits & gt_mask);
-    let tot = f64::from_bits(bits & any_mask); // raw3 if gt||lt else 0.0
-
-    (pos, tot)
-}
-
-/// Branchless direction assignment using bit masks (old version).
+/// Branchless direction assignment using bit masks.
 ///
 /// Performance characteristics:
 /// - In unchecked kernels (no validation): Simple branching is ~20% faster
@@ -155,130 +104,6 @@ fn assign_direction_branchless(raw3: f64, tp3: f64, prev_tp3: f64) -> (f64, f64)
     let neg = f64::from_bits(raw_bits & lt_mask);
 
     (pos, neg)
-}
-
-/// Unchecked MFI kernel WITHOUT validation (finite data assumed).
-///
-/// UNSAFE: Assumes all input data is finite. Matches TA-Lib behavior (no checks).
-/// This is the "apples-to-apples" comparison - no `.is_finite()` overhead.
-#[inline]
-#[allow(dead_code)]
-fn mfi_streaming_f64_unchecked(
-    high: &[f64],
-    low: &[f64],
-    close: &[f64],
-    volume: &[f64],
-    period: usize,
-    output: &mut [f64],
-) -> Result<()> {
-    let n = high.len();
-    let lookback = period;
-
-    output[..lookback].fill(f64::NAN);
-
-    // Circular buffer with separate positive/negative fields
-    let mut mf_buf = vec![MoneyFlowEntry { positive: 0.0, negative: 0.0 }; period];
-    let mut idx = 0usize;
-
-    let hundred = 100.0;
-
-    // Initial unscaled typical price (H + L + C, no /3)
-    let mut prev_tp3 = unsafe { *high.get_unchecked(0) + *low.get_unchecked(0) + *close.get_unchecked(0) };
-
-    let mut pos_sum = 0.0;
-    let mut neg_sum = 0.0;
-
-    // Build initial window [1..=period]
-    for j in 1..=period {
-        let tp3 = unsafe { *high.get_unchecked(j) + *low.get_unchecked(j) + *close.get_unchecked(j) };
-        let vol = unsafe { *volume.get_unchecked(j) };
-        let raw3 = tp3 * vol;  // No /3 division
-
-        // Simple branching (faster than branchless without validation overhead)
-        if tp3 > prev_tp3 {
-            unsafe {
-                mf_buf.get_unchecked_mut(idx).positive = raw3;
-                mf_buf.get_unchecked_mut(idx).negative = 0.0;
-            }
-            pos_sum += raw3;
-        } else if tp3 < prev_tp3 {
-            unsafe {
-                mf_buf.get_unchecked_mut(idx).positive = 0.0;
-                mf_buf.get_unchecked_mut(idx).negative = raw3;
-            }
-            neg_sum += raw3;
-        } else {
-            unsafe {
-                mf_buf.get_unchecked_mut(idx).positive = 0.0;
-                mf_buf.get_unchecked_mut(idx).negative = 0.0;
-            }
-        }
-
-        idx += 1;
-        if idx == period {
-            idx = 0;
-        }
-
-        prev_tp3 = tp3;
-    }
-
-    // First output at index = period
-    let total = pos_sum + neg_sum;
-    output[lookback] = if total <= 0.0 {
-        0.0
-    } else {
-        hundred * (pos_sum / total)
-    };
-
-    // Rolling window for remaining elements - NO CHECKS
-    for i in (period + 1)..n {
-        // Remove oldest money flow from sums
-        let old_entry = unsafe { *mf_buf.get_unchecked(idx) };
-
-        // Branch-free removal: unconditional subtraction
-        pos_sum -= old_entry.positive;
-        neg_sum -= old_entry.negative;
-
-        let tp3 = unsafe { *high.get_unchecked(i) + *low.get_unchecked(i) + *close.get_unchecked(i) };
-        let vol = unsafe { *volume.get_unchecked(i) };
-        let raw3 = tp3 * vol;
-
-        // Simple branching (test if faster than "branchless")
-        if tp3 > prev_tp3 {
-            unsafe {
-                mf_buf.get_unchecked_mut(idx).positive = raw3;
-                mf_buf.get_unchecked_mut(idx).negative = 0.0;
-            }
-            pos_sum += raw3;
-        } else if tp3 < prev_tp3 {
-            unsafe {
-                mf_buf.get_unchecked_mut(idx).positive = 0.0;
-                mf_buf.get_unchecked_mut(idx).negative = raw3;
-            }
-            neg_sum += raw3;
-        } else {
-            unsafe {
-                mf_buf.get_unchecked_mut(idx).positive = 0.0;
-                mf_buf.get_unchecked_mut(idx).negative = 0.0;
-            }
-        }
-
-        let total = pos_sum + neg_sum;
-        output[i] = if total <= 0.0 {
-            0.0
-        } else {
-            hundred * (pos_sum / total)
-        };
-
-        idx += 1;
-        if idx == period {
-            idx = 0;
-        }
-
-        prev_tp3 = tp3;
-    }
-
-    Ok(())
 }
 
 /// Optimized single-pass streaming algorithm with branchless direction assignment.
@@ -416,135 +241,6 @@ fn mfi_streaming_f64_optimized(
 
         prev_tp3 = tp3;
         prev_tp3_valid = tp3_valid;
-    }
-
-    Ok(())
-}
-
-/// Optimized f64 MFI kernel with branchless eviction.
-///
-/// Key optimizations:
-/// - Explicit invalid_flag ring instead of NaN sentinel (removes is_nan checks)
-/// - Track pos_sum and tot_sum instead of pos_sum and neg_sum (removes one accumulator)
-/// - Fully branchless eviction (unconditional sum updates)
-/// - prev_tp3_valid doesn't depend on volume[0] (correctness fix)
-#[inline]
-fn mfi_streaming_f64_branchless_eviction(
-    high: &[f64],
-    low: &[f64],
-    close: &[f64],
-    volume: &[f64],
-    period: usize,
-    output: &mut [f64],
-) -> Result<()> {
-    let n = high.len();
-    output[..period].fill(f64::NAN);
-
-    let mut buf = vec![MfEntry { pos: 0.0, tot: 0.0 }; period];
-    let mut inv = vec![0u8; period]; // 1 => invalid contribution, 0 => valid
-
-    let hundred = 100.0;
-    let mut idx = 0usize;
-
-    let mut pos_sum = 0.0;
-    let mut tot_sum = 0.0;
-    let mut invalid_count: usize = 0;
-
-    // Fix: prev_tp3_valid should NOT depend on volume[0]
-    let mut prev_tp3 = unsafe { *high.get_unchecked(0) + *low.get_unchecked(0) + *close.get_unchecked(0) };
-    let mut prev_tp3_valid = prev_tp3.is_finite();
-
-    // Build initial window contributions j=1..=period
-    let mut j = 1usize;
-    while j <= period {
-        let tp3 = unsafe { *high.get_unchecked(j) + *low.get_unchecked(j) + *close.get_unchecked(j) };
-        let vol = unsafe { *volume.get_unchecked(j) };
-
-        let tp3_valid = tp3.is_finite();
-        let ok = tp3_valid & prev_tp3_valid & vol.is_finite();
-
-        let (pos, tot, inv_bit) = if ok {
-            let raw3 = tp3 * vol;
-            let (pos, tot) = assign_pos_tot(raw3, tp3, prev_tp3);
-            (pos, tot, 0u8)
-        } else {
-            (0.0, 0.0, 1u8)
-        };
-
-        unsafe {
-            *buf.get_unchecked_mut(idx) = MfEntry { pos, tot };
-            *inv.get_unchecked_mut(idx) = inv_bit;
-        }
-
-        pos_sum += pos;
-        tot_sum += tot;
-        invalid_count += inv_bit as usize;
-
-        idx += 1;
-        if idx == period { idx = 0; }
-
-        prev_tp3 = tp3;
-        prev_tp3_valid = tp3_valid;
-
-        j += 1;
-    }
-
-    // First output at i = period
-    output[period] = if invalid_count == 0 {
-        if tot_sum > 0.0 { hundred * (pos_sum / tot_sum) } else { 0.0 }
-    } else {
-        f64::NAN
-    };
-
-    // Rolling window - fully branchless eviction
-    let mut i = period + 1;
-    while i < n {
-        // Evict old (branchless)
-        let old = unsafe { *buf.get_unchecked(idx) };
-        let old_inv = unsafe { *inv.get_unchecked(idx) } as usize;
-
-        pos_sum -= old.pos;
-        tot_sum -= old.tot;
-        invalid_count -= old_inv;
-
-        // Add new
-        let tp3 = unsafe { *high.get_unchecked(i) + *low.get_unchecked(i) + *close.get_unchecked(i) };
-        let vol = unsafe { *volume.get_unchecked(i) };
-
-        let tp3_valid = tp3.is_finite();
-        let ok = tp3_valid & prev_tp3_valid & vol.is_finite();
-
-        let (pos, tot, inv_bit) = if ok {
-            let raw3 = tp3 * vol;
-            let (pos, tot) = assign_pos_tot(raw3, tp3, prev_tp3);
-            (pos, tot, 0u8)
-        } else {
-            (0.0, 0.0, 1u8)
-        };
-
-        unsafe {
-            *buf.get_unchecked_mut(idx) = MfEntry { pos, tot };
-            *inv.get_unchecked_mut(idx) = inv_bit;
-            *output.get_unchecked_mut(i) = if invalid_count + (inv_bit as usize) == 0 {
-                let new_pos_sum = pos_sum + pos;
-                let new_tot_sum = tot_sum + tot;
-                if new_tot_sum > 0.0 { hundred * (new_pos_sum / new_tot_sum) } else { 0.0 }
-            } else {
-                f64::NAN
-            };
-        }
-
-        pos_sum += pos;
-        tot_sum += tot;
-        invalid_count += inv_bit as usize;
-
-        idx += 1;
-        if idx == period { idx = 0; }
-
-        prev_tp3 = tp3;
-        prev_tp3_valid = tp3_valid;
-
-        i += 1;
     }
 
     Ok(())
@@ -739,121 +435,9 @@ fn mfi_rolling_fast<T: SeriesElement>(
     Ok(())
 }
 
-/// Slow path MFI computation - handles NaN values with invalid_count tracking.
-/// Kept for reference but currently unused.
-#[allow(dead_code)]
-#[inline]
-fn mfi_rolling_slow<T: SeriesElement>(
-    high: &[T],
-    low: &[T],
-    close: &[T],
-    volume: &[T],
-    period: usize,
-    output: &mut [T],
-) -> Result<()> {
-    let n = high.len();
-    let lookback = mfi_lookback(period);
-    let three = T::from_f64(3.0)?;
-    let hundred = T::from_f64(100.0)?;
-    let one = T::from_f64(1.0)?;
-
-    // Pre-compute typical prices for all elements
-    let mut tp = vec![T::zero(); n];
-    for i in 0..n {
-        tp[i] = (high[i] + low[i] + close[i]) / three;
-    }
-
-    // Pre-compute positive and negative money flows for each index
-    // Also track which indices have invalid contributions (due to NaN values)
-    let mut pos_mf = vec![T::zero(); n];
-    let mut neg_mf = vec![T::zero(); n];
-    let mut is_invalid = vec![false; n];
-
-    // Index 0 is considered "invalid" since it has no contribution to the window
-    // but it doesn't affect the window sum. We mark it as invalid for consistency.
-    is_invalid[0] = !tp[0].is_finite() || !volume[0].is_finite();
-
-    for j in 1..n {
-        // Check if this money flow contribution is invalid
-        // Invalid if: current TP is not finite, previous TP is not finite (needed for comparison),
-        // or volume is not finite
-        if !tp[j].is_finite() || !tp[j - 1].is_finite() || !volume[j].is_finite() {
-            is_invalid[j] = true;
-            // pos_mf[j] and neg_mf[j] stay at zero
-        } else {
-            let raw_mf = tp[j] * volume[j];
-            if tp[j] > tp[j - 1] {
-                pos_mf[j] = raw_mf;
-            } else if tp[j] < tp[j - 1] {
-                neg_mf[j] = raw_mf;
-            }
-            // If TP unchanged, both remain zero
-        }
-    }
-
-    // Fill lookback period with NaN
-    for item in output.iter_mut().take(lookback) {
-        *item = T::nan();
-    }
-
-    // Compute initial sums for the first valid window, tracking invalid count
-    let mut positive_mf_sum = T::zero();
-    let mut negative_mf_sum = T::zero();
-    let mut invalid_count = 0usize;
-
-    // Initial window: indices 1 to period (inclusive)
-    for j in 1..=period {
-        if is_invalid[j] {
-            invalid_count += 1;
-        } else {
-            positive_mf_sum = positive_mf_sum + pos_mf[j];
-            negative_mf_sum = negative_mf_sum + neg_mf[j];
-        }
-    }
-
-    // Calculate first MFI value if no invalid contributions
-    if invalid_count == 0 {
-        output[lookback] = calculate_mfi(positive_mf_sum, negative_mf_sum, hundred, one);
-    } else {
-        output[lookback] = T::nan();
-    }
-
-    // Rolling sum for remaining elements
-    for i in (lookback + 1)..n {
-        let old_idx = i - period;
-        let new_idx = i;
-
-        // Remove old contribution
-        if is_invalid[old_idx] {
-            invalid_count -= 1;
-        } else {
-            positive_mf_sum = positive_mf_sum - pos_mf[old_idx];
-            negative_mf_sum = negative_mf_sum - neg_mf[old_idx];
-        }
-
-        // Add new contribution
-        if is_invalid[new_idx] {
-            invalid_count += 1;
-        } else {
-            positive_mf_sum = positive_mf_sum + pos_mf[new_idx];
-            negative_mf_sum = negative_mf_sum + neg_mf[new_idx];
-        }
-
-        if invalid_count == 0 {
-            output[i] = calculate_mfi(positive_mf_sum, negative_mf_sum, hundred, one);
-        } else {
-            output[i] = T::nan();
-        }
-    }
-
-    Ok(())
-}
-
 /// Computes MFI and stores results in output slice.
 ///
-/// This function uses pre-scan optimization to detect NaN values in the input:
-/// - If no NaN is found, uses fast path without validity tracking overhead
-/// - If NaN is found, uses slow path with invalid_count tracking
+/// This function handles NaN values inline using invalid_count tracking.
 ///
 /// # Arguments
 ///

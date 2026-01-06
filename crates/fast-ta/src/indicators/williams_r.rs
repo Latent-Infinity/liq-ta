@@ -570,7 +570,6 @@ fn williams_r_f64_van_herk(
     let offset = lookback;
 
     // Combine loop (SIMD-friendly structure, currently scalar)
-    // TODO: Vectorize this loop with f64x4 for additional speedup
     for j in 0..(n - offset) {
         let start = j;
         let end = j + offset;

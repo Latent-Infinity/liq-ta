@@ -144,7 +144,25 @@ pub fn dema<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
     let two = T::from_usize(2)?;
     let lookback = dema_lookback(period);
 
-    let mut result = vec![T::nan(); data.len()];
+    // Optimization: For f64/f32, allocate uninitialized memory since we write all elements
+    // (lookback NaNs + computed DEMA values). This avoids the double-write tax.
+    use std::any::TypeId;
+    let mut result = if TypeId::of::<T>() == TypeId::of::<f64>() {
+        let mut v: Vec<T> = Vec::with_capacity(data.len());
+        unsafe { v.set_len(data.len()); } // Safe: we write all elements below
+        v
+    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
+        let mut v: Vec<T> = Vec::with_capacity(data.len());
+        unsafe { v.set_len(data.len()); } // Safe: we write all elements below
+        v
+    } else {
+        vec![T::nan(); data.len()]
+    };
+
+    // Fill lookback period with NaN
+    for item in result.iter_mut().take(lookback) {
+        *item = T::nan();
+    }
 
     // Compute EMA2 manually, starting from valid EMA1 values
     let alpha = T::from_usize(2)? / T::from_usize(period + 1)?;
@@ -225,8 +243,22 @@ pub fn dema_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) 
         });
     }
 
+    // Optimization: For f64/f32, allocate uninitialized memory for intermediate EMA1
+    // since ema_into writes all elements (lookback NaNs + computed values)
+    use std::any::TypeId;
+    let mut ema1 = if TypeId::of::<T>() == TypeId::of::<f64>() {
+        let mut v: Vec<T> = Vec::with_capacity(data.len());
+        unsafe { v.set_len(data.len()); } // Safe: ema_into writes all elements
+        v
+    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
+        let mut v: Vec<T> = Vec::with_capacity(data.len());
+        unsafe { v.set_len(data.len()); } // Safe: ema_into writes all elements
+        v
+    } else {
+        vec![T::nan(); data.len()]
+    };
+
     // Calculate EMA of input
-    let mut ema1 = vec![T::nan(); data.len()];
     ema_into(data, period, &mut ema1)?;
 
     // Calculate EMA2 manually to avoid NaN propagation
