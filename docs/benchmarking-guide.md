@@ -19,11 +19,11 @@ This guide explains how to run benchmarks effectively with variance control and 
 ### Run hybrid benchmarks with variance control (recommended)
 
 ```bash
-# Default: 3 rounds, 60s cooldown between groups
+# Default: 3 rounds, 10s cooldown between groups
 ./scripts/run_benchmarks.sh
 
-# Custom configuration
-ROUNDS=5 COOLDOWN=90 ./scripts/run_benchmarks.sh
+# Custom configuration (longer cooldown for thermal management)
+ROUNDS=5 COOLDOWN=60 ./scripts/run_benchmarks.sh
 ```
 
 ### Run traditional single-round benchmarks
@@ -107,13 +107,13 @@ Parallel with 5000 samples:
 Our `run_benchmarks.sh` script implements:
 
 **1. Hybrid Parallelism**
-- Sequential groups (8 groups)
-- Parallel indicators within each group (2-6 cores)
-- Reduces contention while maintaining speedup
+- Sequential groups (3 groups)
+- Parallel indicators within each group (11-12 cores)
+- Maximizes core utilization while maintaining thermal headroom
 
 **2. Multi-Round Execution**
 - 3 rounds by default (configurable)
-- 60s cooldown between groups
+- 10s cooldown between groups (configurable)
 - 120s cooldown between rounds
 - Prevents thermal accumulation
 
@@ -129,7 +129,7 @@ Our `run_benchmarks.sh` script implements:
 |----------|---------|----------|------|---------|
 | Sequential | 1x | Very Low | ~20 min | Excellent |
 | Full Parallel (no variance control) | 5-10x | High (CV > 20%) | 2-3 min | Poor |
-| **Hybrid (recommended)** | **3-5x** | **Low (CV < 10%)** | **5-7 min** | **Good** |
+| **Hybrid (recommended)** | **8-10x** | **Low (CV < 5%)** | **~2-3 min** | **Excellent** |
 
 ---
 
@@ -146,18 +146,18 @@ ROUNDS=5 COOLDOWN=90 ./scripts/run_benchmarks.sh
 
 # Environment variables:
 #   ROUNDS        - Number of rounds (default: 3)
-#   COOLDOWN      - Seconds between groups (default: 60)
+#   COOLDOWN      - Seconds between groups (default: 10)
 ```
 
 **What it does:**
 
 1. Builds benchmarks
 2. For each round:
-   - Run group 1 (moving_averages): sma, ema, wma, dema, tema, trima
-   - Cooldown 60s
-   - Run group 2 (momentum): rsi, roc, mom, cmo, apo, trix
-   - Cooldown 60s
-   - ... (8 groups total)
+   - Run group 1 (fast_indicators): 12 indicators in parallel (sma, ema, wma, dema, tema, trima, rsi, mom, roc, cmo, apo, trix)
+   - Cooldown 10s
+   - Run group 2 (simple_volume): 12 indicators in parallel
+   - Cooldown 10s
+   - Run group 3 (complex_indicators): 11 indicators in parallel
    - Cooldown 120s before next round
 3. Aggregate results with robust statistics
 4. Generate quality report
@@ -332,16 +332,17 @@ python3 --version  # Should be >= 3.4
 Edit `scripts/run_benchmarks.sh` to reorganize groups:
 
 ```bash
-GROUPS=(
-    "fast_indicators:sma,ema,rsi"
-    "slow_indicators:adx,stochastic,macd"
+BENCHMARK_GROUPS=(
+    "fast_indicators:sma,ema,rsi,mom,roc"
+    "slow_indicators:adx,stochastic,macd,cci,mfi"
 )
 ```
 
 **Guidelines for grouping:**
 - Group indicators with similar computation time
-- Limit group size to 4-6 indicators (reduces contention)
-- Separate CPU-intensive indicators across groups
+- Up to 12 indicators per group on 16-core system
+- Leave 4 cores for system overhead and thermal headroom
+- Consider benchmark duration (faster indicators can run with more parallelism)
 
 ### Running Single Group
 

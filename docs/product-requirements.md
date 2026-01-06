@@ -498,9 +498,9 @@ let macd_result = Macd::default().compute(&prices)?;
 
 // MACD with custom parameters
 let macd_result = Macd::new()
-    .fast_period(10)
-    .slow_period(21)
-    .signal_period(7)
+    .with_fast_period(10)
+    .with_slow_period(21)
+    .with_signal_period(7)
     .compute(&prices)?;
 
 // Bollinger with defaults (period=20, std_dev=2.0)
@@ -511,7 +511,7 @@ let fast_stoch = Stochastic::default().compute(&high, &low, &close)?;
 
 // Slow Stochastic (k_slowing=3 is traditional)
 let slow_stoch = Stochastic::new()
-    .k_slowing(3)
+    .with_k_slowing(3)
     .compute(&high, &low, &close)?;
 ```
 
@@ -865,6 +865,23 @@ Golden files are stored in `crates/fast-ta/tests/golden/`:
 
 > **Note**: Absolute performance targets are measured on a reference machine (documented in `docs/BENCHMARK_BASELINE.md`) using `rustc` stable with default settings. CI gates are regression-only due to hardware variance across runners.
 
+**Variance-Controlled Benchmarking** (recommended for releases):
+
+For reliable performance measurements with low variance (CV < 10%):
+
+```bash
+# Hybrid approach: sequential groups, parallel indicators, multi-round execution
+./scripts/run_benchmarks.sh
+```
+
+This approach:
+- Reduces CPU contention vs full parallel (3-5x speedup vs sequential)
+- Uses multi-round execution with cooldown for thermal stability
+- Aggregates results using median/MAD (robust statistics)
+- Detects outliers and reports quality metrics (Coefficient of Variation)
+
+See [docs/benchmarking-guide.md](./benchmarking-guide.md) for complete methodology and troubleshooting.
+
 ### 7.6 User Validation Guidance
 
 For users validating fast-ta outputs against their existing pipelines:
@@ -981,8 +998,9 @@ When fast-ta differs from TA-Lib:
 
 ### 10.1 Minimum Supported Rust Version
 
-- **MSRV**: 1.75
-- **Edition**: 2021
+- **MSRV**: 1.90
+- **Edition**: 2024
+- **Toolchain**: Nightly (required for portable SIMD)
 
 ### 10.2 Platform Support
 

@@ -363,6 +363,7 @@ Collection choice dramatically impacts performance because different data struct
 
 * **MUST** use Vec as default for sequences (best cache performance)
 * **SHOULD** switch to VecDeque when you need efficient `push_front()` or `pop_front()` operations
+* **AVOID** `Vec::remove(0)` / front-draining in FIFO loops; use `VecDeque` or a head index + periodic compaction
 * **SHOULD** use HashMap for unsorted key-value storage with fast lookup
 * **SHOULD** use BTreeMap when you need sorted keys or range queries
 * **MUST** consider `SmallVec` for collections typically containing < 16-32 elements (10-100x speedup)
@@ -516,11 +517,13 @@ Rust's `Result<T, E>` and `Option<T>` types force explicit error handling at com
 
 * **MUST** use small `enum` error types per module with `thiserror`
 * **MUST** use `?` operator for propagation and early returns
+* **MUST** be explicit when intentionally discarding a `#[must_use]` value (`Result`, `Option`, etc.) via `let _ = ...;` or `drop(...)` (leave a short comment explaining why ignoring is correct)
 * **SHOULD** attach context at boundary layers (`anyhow`/`eyre` for application edges)
 * **SHOULD** use `#[cold]` and `#[inline(never)]` on error construction paths
 * **AVOID** `format!()` in error types on hot paths; structure first, format on log
 * **AVOID** `Result<T, String>` or string-based errors
 * **AVOID** `unwrap()` in library code; propagate errors to callers
+* **AVOID** broad `#[allow(unused_must_use)]` (it hides real bugs); prefer local intent at the callsite
 
 ### Anti-pattern: String-Based Errors
 
@@ -575,6 +578,47 @@ pub fn get_timeout() -> u64 {
     config.get("timeout")
         .and_then(|s| s.parse().ok())
         .unwrap_or(30)  // Safe default value
+}
+```
+
+
+### Pattern: Explicitly Discard Non-Critical `Result`/`Option` (`let _ =` / `drop`)
+
+Rust warns on unused `#[must_use]` values to prevent accidentally swallowing failures. When the outcome is genuinely non-critical (best-effort cleanup, fire-and-forget metrics, shutdown cleanup), be explicit and local about it.
+
+* Use `let _ = expr;` when you want to evaluate `expr` and discard the value.
+* Use `drop(value);` when you want to end a value's lifetime **now** (often to release memory or to shorten a borrow).
+
+```rust
+use std::fs;
+
+fn best_effort_cleanup() {
+    // Best-effort cleanup: missing file / permissions are acceptable here.
+    let _ = fs::remove_file("/tmp/temp_cache.dat");
+}
+
+fn release_memory_early() {
+    // Large temporary allocation we want to free before the next phase.
+    let tmp = vec![0u8; 8 * 1024 * 1024];
+
+    // ... use tmp ...
+
+    drop(tmp); // Explicit early drop (also ends borrows)
+    // tmp is moved/dropped here; using it again is a compile error.
+}
+```
+
+For readability, a scoped block is often the cleanest "early drop":
+
+```rust
+fn do_work_in_phases() {
+    {
+        let tmp = vec![0u8; 8 * 1024 * 1024];
+        // ... phase 1 ...
+        let _ = tmp.len(); // stand-in for real work
+    } // tmp dropped here
+
+    // ... phase 2 (runs with lower memory pressure) ...
 }
 ```
 
@@ -729,6 +773,27 @@ fn get_iterator() -> impl Iterator<Item = i32> {
     vec![1, 2, 3].into_iter()  // Concrete type known at compile time
 }
 ```
+
+### Pattern: `impl Trait` Return Values Hide Implementation Details
+
+Returning concrete iterator adapter types (e.g., `Map<Filter<Range<...>>>`) leaks implementation details into your API surface and can cause churn when internals change.
+
+Prefer returning `impl Trait` to keep signatures stable and readable:
+
+```rust
+// Caller doesn't need to know this is a filtered Range.
+fn odd_numbers(limit: u32) -> impl Iterator<Item = u32> {
+    (0..limit).filter(|x| x % 2 != 0)
+}
+
+fn main() {
+    for n in odd_numbers(10) {
+        println!("Odd: {}", n);
+    }
+}
+```
+
+**Constraint:** `-> impl Trait` is still **one concrete type** per function. If you need to return different concrete types in different branches, use an enum wrapper or `Box<dyn Trait>` (and pay the dynamic dispatch cost).
 
 ### When to Use Dynamic Dispatch
 
@@ -976,6 +1041,119 @@ async fn fetch_fastest(urls: Vec<String>) -> Response {
 
 ---
 
+## 11. Control Flow & Pattern Matching
+
+### Understanding Why Flattening Matters
+
+Rust will optimize `match`, `if let`, and `while let` similarly in most cases — this is primarily about reducing indentation, making the "happy path" obvious, and keeping error/None handling close to the callsite.
+
+### Standards
+
+* **MUST** prefer guard clauses / early returns over deeply nested `match` blocks
+* **SHOULD** use `if let` when only one pattern is relevant
+* **SHOULD** use `while let` for "repeat-until-empty" loops (`next()`, `recv()`, `pop_front()`, etc.)
+* **AVOID** `match` with `_ => {}` when only one arm matters
+* **AVOID** `while let` for simple iteration — prefer `for x in iter` when you can
+
+### Anti-pattern: Verbose `match` for a Single Arm
+
+```rust
+let app_mode: Option<&str> = Some("Production");
+
+match app_mode {
+    Some(mode) => println!("Running in: {}", mode),
+    None => {}
+}
+```
+
+### Prefer: `if let` / `while let`
+
+```rust
+let app_mode: Option<&str> = Some("Production");
+
+if let Some(mode) = app_mode {
+    println!("Running in: {}", mode);
+}
+
+// Drain an iterator until it returns None.
+let mut tasks = vec!["Task A", "Task B", "Task C"].into_iter();
+while let Some(task) = tasks.next() {
+    println!("Processing: {}", task);
+}
+```
+
+### Pattern: Drain a FIFO Queue Until Empty
+
+```rust
+use std::collections::VecDeque;
+
+let mut q: VecDeque<&str> = VecDeque::from(vec!["A", "B", "C"]);
+
+while let Some(task) = q.pop_front() {
+    println!("Processing: {}", task);
+}
+```
+
+---
+
+## 12. `const` vs `static`: Compile-Time Constants vs Addressable Globals
+
+### The Distinction That Matters
+
+* `const` is a compile-time constant **value**. It is typically inlined and has no stable memory address contract.
+* `static` is a single global **location** with a stable address for the lifetime of the program.
+
+### Standards
+
+* **MUST** use `const` for configuration values, sizes, and math constants
+* **MUST** use `static` only for true globals that require a stable address (FFI, atomics, lazily-initialized singletons)
+* **MUST** make `static` state thread-safe (`Atomic*`, `OnceLock`, `Mutex`, etc.)
+* **AVOID** `static mut` (requires `unsafe` and is easy to misuse); prefer safe concurrency primitives
+* **SHOULD** pass state explicitly rather than reaching for globals by default
+
+### Pattern: Global Counter + Compile-Time Limit
+
+```rust
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+// Compile-time constant (inlined).
+const MAX_CONNECTIONS: u32 = 100;
+
+// Global with a stable address (shared state).
+static ACTIVE_USERS: AtomicUsize = AtomicUsize::new(0);
+
+fn try_new_connection() -> bool {
+    // Relaxed is often enough for counters; use stronger orderings when correctness needs it.
+    let current = ACTIVE_USERS.fetch_add(1, Ordering::Relaxed) + 1;
+
+    if current as u32 <= MAX_CONNECTIONS {
+        true
+    } else {
+        // Roll back if we exceeded the limit.
+        ACTIVE_USERS.fetch_sub(1, Ordering::Relaxed);
+        false
+    }
+}
+```
+
+### Pattern: Lazy Global Initialization
+
+```rust
+use std::sync::OnceLock;
+
+struct Config {
+    // ...
+}
+
+static CONFIG: OnceLock<Config> = OnceLock::new();
+
+fn config() -> &'static Config {
+    CONFIG.get_or_init(|| Config { /* ... */ })
+}
+```
+
+---
+
 ## 13. Build & Release Configuration
 
 ### Understanding Build Optimization Tradeoffs
@@ -1076,42 +1254,85 @@ let b = [5, 6, 7, 8];
 let result = add_arrays(a, b);  // All on stack
 ```
 
-### Zero-Sized Types for Type-State Patterns
-
-Zero-sized types (ZSTs) occupy zero bytes at runtime while providing compile-time guarantees.
+A common use of const generics is parameterizing dimensions at compile time (traditional generics parameterize types; const generics parameterize values):
 
 ```rust
-// Type-state pattern with ZSTs
-struct Locked;
-struct Unlocked;
+// Fixed-size matrix with compile-time dimensions (stack allocated).
+struct Matrix<T, const ROWS: usize, const COLS: usize> {
+    data: [[T; COLS]; ROWS],
+}
 
-struct Connection<State> {
+impl<T: Default + Copy, const ROWS: usize, const COLS: usize> Matrix<T, ROWS, COLS> {
+    fn new() -> Self {
+        Self { data: [[T::default(); COLS]; ROWS] }
+    }
+
+    fn size_info(&self) {
+        println!("Matrix size: {}x{}", ROWS, COLS);
+    }
+}
+
+fn main() {
+    let mat = Matrix::<f64, 4, 4>::new();
+    mat.size_info();
+}
+```
+
+
+
+### PhantomData: Type System Marker for Type-State and Phantom Ownership
+
+`PhantomData<T>` is a zero-sized marker that tells the compiler your type has a relationship with `T` (or a lifetime) even if you don't store a `T` at runtime. This enables **zero-cost type-state patterns**, safer FFI wrappers, and correct auto-trait/lifetime behavior with no runtime overhead.
+
+### Standards
+
+* **SHOULD** use `PhantomData` for type-state/state-machine APIs (compile-time enforced call ordering)
+* **SHOULD** use `PhantomData` in wrappers around raw pointers/FFI handles to model ownership or lifetimes
+* **AVOID** using `PhantomData` as a workaround for confusing lifetimes — prefer simpler ownership first
+
+### Pattern: Type-State Client (Zero Runtime Size)
+
+```rust
+use std::marker::PhantomData;
+
+struct Connected;
+struct Disconnected;
+
+struct Client<State> {
+    id: u32,
     _state: PhantomData<State>,
-    // ... actual data ...
 }
 
-impl Connection<Unlocked> {
-    fn lock(self) -> Connection<Locked> {
-        // Perform locking...
-        Connection { _state: PhantomData }
+impl<State> Client<State> {
+    fn new(id: u32) -> Self {
+        Self { id, _state: PhantomData }
     }
 }
 
-impl Connection<Locked> {
-    fn write(&mut self, data: &[u8]) {
-        // Can only write when locked
-    }
-    
-    fn unlock(self) -> Connection<Unlocked> {
-        Connection { _state: PhantomData }
+impl Client<Disconnected> {
+    fn connect(self) -> Client<Connected> {
+        Client { id: self.id, _state: PhantomData }
     }
 }
 
-// Compile-time enforcement, zero runtime cost
-let conn = Connection::new();
-// conn.write(&data);  // Compile error: must lock first
-let conn = conn.lock();
-conn.write(&data);  // OK
+impl Client<Connected> {
+    fn send(&self, msg: &[u8]) {
+        println!("client {} -> {} bytes", self.id, msg.len());
+    }
+
+    fn disconnect(self) -> Client<Disconnected> {
+        Client { id: self.id, _state: PhantomData }
+    }
+}
+
+fn main() {
+    let c = Client::<Disconnected>::new(1);
+
+    // c.send(b"hi"); // Compile error: only Connected clients can send.
+    let c = c.connect();
+    c.send(b"hi");
+    let _c = c.disconnect();
+}
 ```
 
 ### Inline Directives
@@ -1345,6 +1566,7 @@ When in doubt, **profile first**. If a path appears in the top 10% of CPU time o
 
 * **MUST** enable Clippy in CI with performance-focused lints
 * **MUST** run `rustfmt` with project default configuration
+* **MUST NOT** blanket-suppress unused `#[must_use]` warnings; handle `Result`/`Option` or discard explicitly (`let _ = ...;`)
 * **SHOULD** use `cargo-udeps` to prune unused dependencies
 * **SHOULD** use `cargo-deny` for license and vulnerability checks
 * **SHOULD** use `cargo-nextest` for faster test execution
@@ -1398,6 +1620,7 @@ Apply this checklist to every PR touching performance-sensitive code:
 * [ ] **Capacity**: Are large `Vec`s/`String`s/`HashMap`s pre-sized with `with_capacity`?
 * [ ] **Strings**: Are function parameters `&str` instead of `String`? Any `format!()` in hot paths?
 * [ ] **Errors**: Are failures typed with `thiserror`? Using `?` and small enums?
+* [ ] **Discarded must_use values**: Any intentionally ignored `Result`/`Option` is explicit (`let _ = ...;` / `drop(...)`) and justified (best-effort)?
 * [ ] **Logs**: Are logs structured with fields via `tracing`? No hot-path string formatting?
 * [ ] **Hashing**: Using appropriate hasher? Default for untrusted input, FxHash/AHash for internal hot paths with documented rationale?
 * [ ] **I/O**: Is file/network I/O buffered? Large serialization streaming to writer instead of building intermediate String?
