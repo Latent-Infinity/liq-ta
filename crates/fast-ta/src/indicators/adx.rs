@@ -147,6 +147,25 @@ pub const fn di_lookback(period: usize) -> usize {
     period
 }
 
+/// Returns the minimum input length required for +DI and -DI.
+///
+/// This is the smallest input size that will produce at least one valid output.
+/// For DI indicators, this equals `period + 1`.
+///
+/// # Example
+///
+/// ```
+/// use fast_ta::indicators::adx::di_min_len;
+///
+/// assert_eq!(di_min_len(14), 15);
+/// assert_eq!(di_min_len(5), 6);
+/// ```
+#[inline]
+#[must_use]
+pub const fn di_min_len(period: usize) -> usize {
+    period + 1
+}
+
 /// Computes the Average Directional Index (ADX) with +DI and -DI.
 ///
 /// # Arguments

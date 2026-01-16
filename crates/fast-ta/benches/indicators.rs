@@ -25,9 +25,12 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use std::time::Duration;
 use fast_ta::indicators::{
-    ad::ad, adx::adx, atr::atr, bollinger::bollinger, donchian::donchian, ema::ema, macd::macd, mfi::mfi,
-    obv::obv, price_transform::{avgprice, medprice, typprice, wclprice},
-    roc::roc, rsi::rsi, sma::sma, statistics::var, stochastic::stochastic, vwap::vwap, williams_r::williams_r,
+    ad::ad, adosc::adosc, adx::adx, apo::apo, aroon::aroon, atr::atr, bollinger::bollinger,
+    bop::bop, cci::cci, cmo::cmo, dema::dema, donchian::donchian, ema::ema, kama::kama,
+    macd::macd, mfi::mfi, midpoint::midpoint, midprice::midprice, mom::mom, obv::obv,
+    price_transform::{avgprice, medprice, typprice, wclprice}, roc::roc, rsi::rsi, sar::sar,
+    sma::sma, statistics::var, stochastic::stochastic, stochrsi::stochrsi, t3::t3, tema::tema,
+    trima::trima, trix::trix, ultosc::ultosc, vwap::vwap, williams_r::williams_r, wma::wma,
 };
 
 /// Generate synthetic OHLCV data for benchmarks.
@@ -373,27 +376,323 @@ fn bench_var(c: &mut Criterion) {
     group.finish();
 }
 
+// ============================================================================
+// Moving Averages - WMA, DEMA, TEMA, TRIMA, KAMA, T3
+// ============================================================================
+
+fn bench_wma(c: &mut Criterion) {
+    let mut group = c.benchmark_group("wma");
+    for &size in SIZES {
+        let data = generate_series(size);
+        group.throughput(Throughput::Elements(size as u64));
+        group.bench_with_input(BenchmarkId::from_parameter(size), &data, |b, data| {
+            b.iter(|| wma(black_box(data), black_box(20)));
+        });
+    }
+    group.finish();
+}
+
+fn bench_dema(c: &mut Criterion) {
+    let mut group = c.benchmark_group("dema");
+    for &size in SIZES {
+        let data = generate_series(size);
+        group.throughput(Throughput::Elements(size as u64));
+        group.bench_with_input(BenchmarkId::from_parameter(size), &data, |b, data| {
+            b.iter(|| dema(black_box(data), black_box(20)));
+        });
+    }
+    group.finish();
+}
+
+fn bench_tema(c: &mut Criterion) {
+    let mut group = c.benchmark_group("tema");
+    for &size in SIZES {
+        let data = generate_series(size);
+        group.throughput(Throughput::Elements(size as u64));
+        group.bench_with_input(BenchmarkId::from_parameter(size), &data, |b, data| {
+            b.iter(|| tema(black_box(data), black_box(20)));
+        });
+    }
+    group.finish();
+}
+
+fn bench_trima(c: &mut Criterion) {
+    let mut group = c.benchmark_group("trima");
+    for &size in SIZES {
+        let data = generate_series(size);
+        group.throughput(Throughput::Elements(size as u64));
+        group.bench_with_input(BenchmarkId::from_parameter(size), &data, |b, data| {
+            b.iter(|| trima(black_box(data), black_box(20)));
+        });
+    }
+    group.finish();
+}
+
+fn bench_kama(c: &mut Criterion) {
+    let mut group = c.benchmark_group("kama");
+    for &size in SIZES {
+        let data = generate_series(size);
+        group.throughput(Throughput::Elements(size as u64));
+        group.bench_with_input(BenchmarkId::from_parameter(size), &data, |b, data| {
+            b.iter(|| kama(black_box(data), black_box(10)));
+        });
+    }
+    group.finish();
+}
+
+fn bench_t3(c: &mut Criterion) {
+    let mut group = c.benchmark_group("t3");
+    for &size in SIZES {
+        let data = generate_series(size);
+        group.throughput(Throughput::Elements(size as u64));
+        group.bench_with_input(BenchmarkId::from_parameter(size), &data, |b, data| {
+            b.iter(|| t3(black_box(data), black_box(5)));
+        });
+    }
+    group.finish();
+}
+
+// ============================================================================
+// Momentum Indicators - MOM, CMO, APO, TRIX
+// ============================================================================
+
+fn bench_mom(c: &mut Criterion) {
+    let mut group = c.benchmark_group("mom");
+    for &size in SIZES {
+        let data = generate_series(size);
+        group.throughput(Throughput::Elements(size as u64));
+        group.bench_with_input(BenchmarkId::from_parameter(size), &data, |b, data| {
+            b.iter(|| mom(black_box(data), black_box(10)));
+        });
+    }
+    group.finish();
+}
+
+fn bench_cmo(c: &mut Criterion) {
+    let mut group = c.benchmark_group("cmo");
+    for &size in SIZES {
+        let data = generate_series(size);
+        group.throughput(Throughput::Elements(size as u64));
+        group.bench_with_input(BenchmarkId::from_parameter(size), &data, |b, data| {
+            b.iter(|| cmo(black_box(data), black_box(14)));
+        });
+    }
+    group.finish();
+}
+
+fn bench_apo(c: &mut Criterion) {
+    let mut group = c.benchmark_group("apo");
+    for &size in SIZES {
+        let data = generate_series(size);
+        group.throughput(Throughput::Elements(size as u64));
+        group.bench_with_input(BenchmarkId::from_parameter(size), &data, |b, data| {
+            b.iter(|| apo(black_box(data), black_box(12), black_box(26)));
+        });
+    }
+    group.finish();
+}
+
+fn bench_trix(c: &mut Criterion) {
+    let mut group = c.benchmark_group("trix");
+    for &size in SIZES {
+        let data = generate_series(size);
+        group.throughput(Throughput::Elements(size as u64));
+        group.bench_with_input(BenchmarkId::from_parameter(size), &data, |b, data| {
+            b.iter(|| trix(black_box(data), black_box(15)));
+        });
+    }
+    group.finish();
+}
+
+// ============================================================================
+// Volume Indicators - ADOSC
+// ============================================================================
+
+fn bench_adosc(c: &mut Criterion) {
+    let mut group = c.benchmark_group("adosc");
+    for &size in SIZES {
+        let (_, high, low, close, volume) = generate_ohlcv(size);
+        group.throughput(Throughput::Elements(size as u64));
+        group.bench_with_input(
+            BenchmarkId::from_parameter(size),
+            &(high, low, close, volume),
+            |b, (h, l, c, v)| {
+                b.iter(|| adosc(black_box(h), black_box(l), black_box(c), black_box(v), black_box(3), black_box(10)));
+            },
+        );
+    }
+    group.finish();
+}
+
+// ============================================================================
+// Price-Based Indicators - BOP, CCI, AROON, MIDPOINT, MIDPRICE, SAR, STOCHRSI, ULTOSC
+// ============================================================================
+
+fn bench_bop(c: &mut Criterion) {
+    let mut group = c.benchmark_group("bop");
+    for &size in SIZES {
+        let (open, high, low, close, _) = generate_ohlcv(size);
+        group.throughput(Throughput::Elements(size as u64));
+        group.bench_with_input(
+            BenchmarkId::from_parameter(size),
+            &(open, high, low, close),
+            |b, (o, h, l, c)| {
+                b.iter(|| bop(black_box(o), black_box(h), black_box(l), black_box(c)));
+            },
+        );
+    }
+    group.finish();
+}
+
+fn bench_cci(c: &mut Criterion) {
+    let mut group = c.benchmark_group("cci");
+    for &size in SIZES {
+        let (_, high, low, close, _) = generate_ohlcv(size);
+        group.throughput(Throughput::Elements(size as u64));
+        group.bench_with_input(
+            BenchmarkId::from_parameter(size),
+            &(high, low, close),
+            |b, (h, l, c)| {
+                b.iter(|| cci(black_box(h), black_box(l), black_box(c), black_box(20)));
+            },
+        );
+    }
+    group.finish();
+}
+
+fn bench_aroon(c: &mut Criterion) {
+    let mut group = c.benchmark_group("aroon");
+    for &size in SIZES {
+        let (_, high, low, _, _) = generate_ohlcv(size);
+        group.throughput(Throughput::Elements(size as u64));
+        group.bench_with_input(
+            BenchmarkId::from_parameter(size),
+            &(high, low),
+            |b, (h, l)| {
+                b.iter(|| aroon(black_box(h), black_box(l), black_box(25)));
+            },
+        );
+    }
+    group.finish();
+}
+
+fn bench_midpoint(c: &mut Criterion) {
+    let mut group = c.benchmark_group("midpoint");
+    for &size in SIZES {
+        let data = generate_series(size);
+        group.throughput(Throughput::Elements(size as u64));
+        group.bench_with_input(BenchmarkId::from_parameter(size), &data, |b, data| {
+            b.iter(|| midpoint(black_box(data), black_box(14)));
+        });
+    }
+    group.finish();
+}
+
+fn bench_midprice(c: &mut Criterion) {
+    let mut group = c.benchmark_group("midprice");
+    for &size in SIZES {
+        let (_, high, low, _, _) = generate_ohlcv(size);
+        group.throughput(Throughput::Elements(size as u64));
+        group.bench_with_input(
+            BenchmarkId::from_parameter(size),
+            &(high, low),
+            |b, (h, l)| {
+                b.iter(|| midprice(black_box(h), black_box(l), black_box(14)));
+            },
+        );
+    }
+    group.finish();
+}
+
+fn bench_sar(c: &mut Criterion) {
+    let mut group = c.benchmark_group("sar");
+    for &size in SIZES {
+        let (_, high, low, _, _) = generate_ohlcv(size);
+        group.throughput(Throughput::Elements(size as u64));
+        group.bench_with_input(
+            BenchmarkId::from_parameter(size),
+            &(high, low),
+            |b, (h, l)| {
+                b.iter(|| sar(black_box(h), black_box(l)));
+            },
+        );
+    }
+    group.finish();
+}
+
+fn bench_stochrsi(c: &mut Criterion) {
+    let mut group = c.benchmark_group("stochrsi");
+    for &size in SIZES {
+        let data = generate_series(size);
+        group.throughput(Throughput::Elements(size as u64));
+        group.bench_with_input(BenchmarkId::from_parameter(size), &data, |b, data| {
+            b.iter(|| stochrsi(black_box(data), black_box(14), black_box(14), black_box(3), black_box(3)));
+        });
+    }
+    group.finish();
+}
+
+fn bench_ultosc(c: &mut Criterion) {
+    let mut group = c.benchmark_group("ultosc");
+    for &size in SIZES {
+        let (_, high, low, close, _) = generate_ohlcv(size);
+        group.throughput(Throughput::Elements(size as u64));
+        group.bench_with_input(
+            BenchmarkId::from_parameter(size),
+            &(high, low, close),
+            |b, (h, l, c)| {
+                b.iter(|| ultosc(black_box(h), black_box(l), black_box(c), black_box(7), black_box(14), black_box(28)));
+            },
+        );
+    }
+    group.finish();
+}
+
 // Standard benchmarks with default configuration
 criterion_group!(
     benches,
+    // Core moving averages
     bench_sma,
     bench_ema,
-    bench_rsi,
+    bench_wma,
+    bench_dema,
+    bench_tema,
+    bench_trima,
+    bench_kama,
+    bench_t3,
+    // Trend indicators
     bench_macd,
     bench_bollinger,
     bench_atr,
     bench_adx,
-    bench_williams_r,
     bench_donchian,
+    bench_aroon,
+    bench_cci,
+    bench_sar,
+    // Momentum oscillators
+    bench_rsi,
+    bench_williams_r,
+    bench_mom,
+    bench_cmo,
+    bench_apo,
+    bench_trix,
+    bench_ultosc,
+    // Volume indicators
     bench_obv,
     bench_vwap,
+    bench_ad,
+    bench_adosc,
+    bench_mfi,
+    // Price transform
     bench_avgprice,
     bench_medprice,
     bench_typprice,
     bench_wclprice,
-    bench_ad,
+    bench_midpoint,
+    bench_midprice,
+    bench_bop,
+    // Other
     bench_roc,
-    bench_mfi,
     bench_var,
 );
 
@@ -404,7 +703,7 @@ criterion_group! {
         .warm_up_time(Duration::from_secs(5))
         .measurement_time(Duration::from_secs(15))
         .sample_size(500);
-    targets = bench_stochastic
+    targets = bench_stochastic, bench_stochrsi
 }
 
 criterion_main!(benches, slow_benches);

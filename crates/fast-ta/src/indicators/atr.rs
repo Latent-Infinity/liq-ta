@@ -146,6 +146,24 @@ pub const fn true_range_lookback() -> usize {
     1
 }
 
+/// Returns the minimum input length required for True Range.
+///
+/// This is the smallest input size that will produce at least one valid output.
+/// For True Range, this equals 2 (one for the NaN prefix, one for the first valid value).
+///
+/// # Example
+///
+/// ```
+/// use fast_ta::indicators::atr::true_range_min_len;
+///
+/// assert_eq!(true_range_min_len(), 2);
+/// ```
+#[inline]
+#[must_use]
+pub const fn true_range_min_len() -> usize {
+    2
+}
+
 /// Computes the True Range (TR) for a series of OHLC data.
 ///
 /// True Range measures the greatest of:
