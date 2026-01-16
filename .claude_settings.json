@@ -11,14 +11,24 @@
       "Edit(./**)",
       "Glob(./**)",
       "Grep(./**)",
+      "Read(/Users/firestrand/Projects/latenty-infinity/fast-ta/**)",
+      "Write(/Users/firestrand/Projects/latenty-infinity/fast-ta/**)",
+      "Edit(/Users/firestrand/Projects/latenty-infinity/fast-ta/**)",
+      "Glob(/Users/firestrand/Projects/latenty-infinity/fast-ta/**)",
+      "Grep(/Users/firestrand/Projects/latenty-infinity/fast-ta/**)",
+      "Read(/Users/firestrand/Projects/latenty-infinity/fast-ta/.auto-claude/specs/012-audit-codebase-against-quality-standards/**)",
+      "Write(/Users/firestrand/Projects/latenty-infinity/fast-ta/.auto-claude/specs/012-audit-codebase-against-quality-standards/**)",
+      "Edit(/Users/firestrand/Projects/latenty-infinity/fast-ta/.auto-claude/specs/012-audit-codebase-against-quality-standards/**)",
       "Bash(*)",
-      "mcp__context7__resolve-library-id",
-      "mcp__context7__get-library-docs",
-      "mcp__graphiti-memory__search_nodes",
-      "mcp__graphiti-memory__search_facts",
-      "mcp__graphiti-memory__add_episode",
-      "mcp__graphiti-memory__get_episodes",
-      "mcp__graphiti-memory__get_entity_edge"
+      "WebFetch(*)",
+      "WebSearch(*)",
+      "mcp__context7__resolve-library-id(*)",
+      "mcp__context7__get-library-docs(*)",
+      "mcp__graphiti-memory__search_nodes(*)",
+      "mcp__graphiti-memory__search_facts(*)",
+      "mcp__graphiti-memory__add_episode(*)",
+      "mcp__graphiti-memory__get_episodes(*)",
+      "mcp__graphiti-memory__get_entity_edge(*)"
     ]
   }
 }
