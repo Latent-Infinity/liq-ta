@@ -1,16 +1,16 @@
 [workspace]
 resolver = "2"
-members = ["crates/fast-ta", "crates/fast-ta-cli", "crates/fast-ta-python"]
+members = ["crates/liq-ta", "crates/liq-ta-cli", "crates/liq-ta-python"]
 # Python crate requires maturin to build properly, exclude from default cargo commands
-default-members = ["crates/fast-ta", "crates/fast-ta-cli"]
+default-members = ["crates/liq-ta", "crates/liq-ta-cli"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.90"
 license = "MIT"
-repository = "https://github.com/latenty-infinity/fast-ta"
-authors = ["Latenty Infinity"]
+repository = "https://github.com/Latent-Infinity/liq-ta"
+authors = ["Latent Infinity"]
 
 [workspace.dependencies]
 # Core dependencies

@@ -1,0 +1,15 @@
+{
+  "description": "Golden file metadata for TA-Lib reference comparisons",
+  "talib_version": "0.4.32",
+  "generated_at": "2025-01-01T00:00:00Z",
+  "indicators": ["SMA", "EMA", "RSI", "MACD", "ATR", "BBANDS", "STOCH"],
+  "generator": "tools/golden/generate.py",
+  "notes": [
+    "These are TA-Lib reference values for comparison testing (PRD 7.4)",
+    "Discrepancies are informational only and do not block releases",
+    "Use --features reference-checks-strict to treat divergences as errors",
+    "Known divergences:",
+    "- Stochastic: TA-Lib returns 0 when h==l, liq-ta returns 50 per PRD spec",
+    "- Minor floating-point differences may occur due to different operation ordering"
+  ]
+}

@@ -1,0 +1,21 @@
+[package]
+name = "liq-ta-python"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Python bindings for liq-ta technical analysis library"
+
+[lib]
+name = "liq_ta"
+crate-type = ["cdylib"]
+
+[dependencies]
+liq-ta = { path = "../liq-ta" }
+pyo3 = { version = "0.23", features = ["extension-module"] }
+numpy = "0.23"
+
+[dev-dependencies]
+pyo3 = { version = "0.23", features = ["auto-initialize"] }

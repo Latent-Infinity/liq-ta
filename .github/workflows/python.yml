@@ -4,14 +4,14 @@ on:
   push:
     branches: [master, main]
     paths:
-      - 'crates/fast-ta-python/**'
-      - 'crates/fast-ta/**'
+      - 'crates/liq-ta-python/**'
+      - 'crates/liq-ta/**'
       - '.github/workflows/python.yml'
   pull_request:
     branches: [master, main]
     paths:
-      - 'crates/fast-ta-python/**'
-      - 'crates/fast-ta/**'
+      - 'crates/liq-ta-python/**'
+      - 'crates/liq-ta/**'
       - '.github/workflows/python.yml'
   workflow_dispatch:
 
@@ -42,7 +42,7 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: crates/fast-ta-python
+          workspaces: crates/liq-ta-python
 
       - name: Install dependencies
         run: |
@@ -50,11 +50,11 @@ jobs:
           pip install maturin pytest numpy
 
       - name: Build and install package
-        working-directory: crates/fast-ta-python
+        working-directory: crates/liq-ta-python
         run: maturin develop
 
       - name: Run tests
-        working-directory: crates/fast-ta-python
+        working-directory: crates/liq-ta-python
         run: pytest tests/ -v
 
   build-wheels:
@@ -78,20 +78,20 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: crates/fast-ta-python
+          workspaces: crates/liq-ta-python
 
       - name: Install maturin
         run: pip install maturin
 
       - name: Build wheel
-        working-directory: crates/fast-ta-python
+        working-directory: crates/liq-ta-python
         run: maturin build --release
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
           name: wheels-${{ matrix.os }}
-          path: crates/fast-ta-python/target/wheels/*.whl
+          path: crates/liq-ta-python/target/wheels/*.whl
 
   # Build wheels for multiple Python versions and platforms
   build-sdist:
@@ -109,14 +109,14 @@ jobs:
         run: pip install maturin
 
       - name: Build sdist
-        working-directory: crates/fast-ta-python
+        working-directory: crates/liq-ta-python
         run: maturin sdist
 
       - name: Upload sdist
         uses: actions/upload-artifact@v4
         with:
           name: sdist
-          path: crates/fast-ta-python/target/wheels/*.tar.gz
+          path: crates/liq-ta-python/target/wheels/*.tar.gz
 
   # Optional: publish to PyPI (requires secrets configuration)
   # publish:

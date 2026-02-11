@@ -40,7 +40,7 @@ jobs:
         run: cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Run tests
-        run: cargo test --all-features
+        run: cargo test --features parallel,serde,reference-checks-strict,precision-fast
 
       - name: Build documentation
         run: cargo doc --no-deps --all-features
@@ -70,20 +70,20 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        working-directory: crates/fast-ta-python
+        working-directory: crates/liq-ta-python
         run: |
           uv venv .venv
           uv pip install maturin numpy pytest
 
       - name: Build and install package
-        working-directory: crates/fast-ta-python
+        working-directory: crates/liq-ta-python
         shell: bash
         run: |
           source .venv/bin/activate || .venv/Scripts/activate
           maturin develop
 
       - name: Run Python tests
-        working-directory: crates/fast-ta-python
+        working-directory: crates/liq-ta-python
         shell: bash
         run: |
           source .venv/bin/activate || .venv/Scripts/activate
@@ -102,7 +102,7 @@ jobs:
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
-          working-directory: crates/fast-ta-python
+          working-directory: crates/liq-ta-python
           args: --release --out dist
           sccache: 'true'
           manylinux: auto
@@ -111,4 +111,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: wheels-${{ matrix.os }}
-          path: crates/fast-ta-python/dist
+          path: crates/liq-ta-python/dist

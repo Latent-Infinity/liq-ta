@@ -1,7 +1,7 @@
-# PRD: Advanced API Expansion — Zero-Alloc Chaining for `fast-ta`
+# PRD: Advanced API Expansion — Zero-Alloc Chaining for `liq-ta`
 
 **Status:** Draft (Proposed)
-**Owner:** fast-ta maintainers
+**Owner:** liq-ta maintainers
 **Target Release:** vNext (minor)
 **Audience:** Library maintainers + performance-focused users
 
@@ -9,7 +9,7 @@
 
 ## 1. Executive Summary
 
-This PRD defines an advanced API expansion for `fast-ta` to support **zero-alloc chaining** of technical indicators. The feature introduces a reusable `Workspace` with preallocated buffers and a handle-based series model (`SeriesId` / `SeriesRef`) to enable high-throughput multi-indicator workflows without heap allocation during computation.
+This PRD defines an advanced API expansion for `liq-ta` to support **zero-alloc chaining** of technical indicators. The feature introduces a reusable `Workspace` with preallocated buffers and a handle-based series model (`SeriesId` / `SeriesRef`) to enable high-throughput multi-indicator workflows without heap allocation during computation.
 
 The existing **Simple API** and **Buffer API** remain unchanged and authoritative for current usage. The new API is explicitly targeted at advanced users and high-performance pipelines (batch backtests, large-scale feature generation).
 
@@ -25,7 +25,7 @@ Current indicator workflows typically require users to:
 
 These costs compound in backtesting and feature pipelines where dozens to hundreds of indicators are computed across long series.
 
-`fast-ta` needs a deterministic, high-performance workflow for composing indicators:
+`liq-ta` needs a deterministic, high-performance workflow for composing indicators:
 
 * **No additional allocations during compute**
 * **Reusable buffers** across indicators and runs
@@ -67,7 +67,7 @@ These costs compound in backtesting and feature pipelines where dozens to hundre
 
 * Replace, deprecate, or weaken Simple/Buffer APIs.
 * Add streaming/incremental update semantics (separate effort).
-* Provide TA-Lib compatibility guarantees beyond the `fast-ta` spec.
+* Provide TA-Lib compatibility guarantees beyond the `liq-ta` spec.
 * Guarantee “zero-copy” in the literal sense (we compute and write outputs). The goal is zero *additional allocation*.
 
 ---

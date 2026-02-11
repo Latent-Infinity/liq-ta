@@ -62,8 +62,8 @@ class BenchmarkAggregator:
                     baseline_dirs = list(benchmark_dir.glob(f"**/{baseline_name}"))
 
                     if baseline_dirs:
-                        # Take the first match (usually fast-ta implementation)
-                        # Could aggregate both fast-ta and ta-lib if needed
+                        # Take the first match (usually liq-ta implementation)
+                        # Could aggregate both liq-ta and ta-lib if needed
                         estimates_file = baseline_dirs[0] / "estimates.json"
 
                         if estimates_file.exists():

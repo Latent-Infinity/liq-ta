@@ -1,11 +1,11 @@
 # Baseline Benchmarks for Rust Standards Audit
 
-This document captures baseline performance metrics for the fast-ta library before the standards compliance audit.
+This document captures baseline performance metrics for the liq-ta library before the standards compliance audit.
 These baselines are used to verify that audit refactoring does not introduce performance regressions.
 
 ## Benchmark Configuration
 
-**Criterion Settings** (from `crates/fast-ta/criterion.toml`):
+**Criterion Settings** (from `crates/liq-ta/criterion.toml`):
 - Warmup: 5 seconds
 - Measurement: 10 seconds (15 seconds for slow benchmarks)
 - Samples: 500
@@ -16,7 +16,7 @@ These baselines are used to verify that audit refactoring does not introduce per
 
 ## Benchmark Suites
 
-### 1. Core Indicators (`crates/fast-ta/benches/indicators.rs`)
+### 1. Core Indicators (`crates/liq-ta/benches/indicators.rs`)
 
 Measures throughput for individual indicators across various input sizes.
 
@@ -27,9 +27,9 @@ Measures throughput for individual indicators across various input sizes.
 - Trend: ADX, Williams %R, Donchian
 - Volume: OBV, VWAP
 
-### 2. TA-Lib Comparison (`crates/fast-ta/benches/talib_comparison.rs`)
+### 2. TA-Lib Comparison (`crates/liq-ta/benches/talib_comparison.rs`)
 
-Compares fast-ta performance against TA-Lib reference implementation.
+Compares liq-ta performance against TA-Lib reference implementation.
 
 **Categories Tested**:
 - Moving Averages: SMA, EMA, WMA, DEMA, TEMA, TRIMA, KAMA, T3
@@ -41,7 +41,7 @@ Compares fast-ta performance against TA-Lib reference implementation.
 - Statistics: VAR, LINEARREG, TSF
 - Other: MIDPOINT, MIDPRICE, BOP
 
-### 3. Workload Simulation (`crates/fast-ta/benches/workload.rs`)
+### 3. Workload Simulation (`crates/liq-ta/benches/workload.rs`)
 
 Simulates realistic backtesting workload with multiple indicators.
 
@@ -66,7 +66,7 @@ rustup run nightly cargo --version
 Run this command to capture the audit baseline:
 
 ```bash
-cargo +nightly bench -p fast-ta -- --save-baseline audit-baseline
+cargo +nightly bench -p liq-ta -- --save-baseline audit-baseline
 ```
 
 This saves baseline data to `target/criterion/<benchmark>/audit-baseline/`.
@@ -76,7 +76,7 @@ This saves baseline data to `target/criterion/<benchmark>/audit-baseline/`.
 Run this command after making changes to compare performance:
 
 ```bash
-cargo +nightly bench -p fast-ta -- --baseline audit-baseline
+cargo +nightly bench -p liq-ta -- --baseline audit-baseline
 ```
 
 Criterion will report:
@@ -110,7 +110,7 @@ Criterion will report:
 
 ### TA-Lib Comparison Results (100K elements)
 
-| Indicator | fast-ta | TA-Lib | Speedup |
+| Indicator | liq-ta | TA-Lib | Speedup |
 |-----------|---------|--------|---------|
 | SMA | - | - | -x |
 | EMA | - | - | -x |
@@ -152,10 +152,10 @@ Since `cargo` commands may be restricted in the automation environment, run thes
 
 ```bash
 # 1. Navigate to project root
-cd /path/to/fast-ta
+cd /path/to/liq-ta
 
 # 2. Save baseline before making any changes
-cargo +nightly bench -p fast-ta -- --save-baseline audit-baseline
+cargo +nightly bench -p liq-ta -- --save-baseline audit-baseline
 
 # 3. Copy benchmark output to this file
 # Look for output like:
@@ -163,7 +163,7 @@ cargo +nightly bench -p fast-ta -- --save-baseline audit-baseline
 #                        thrpt:  [X.XXX Melem/s Y.YYY Melem/s Z.ZZZ Melem/s]
 
 # 4. After audit changes, compare to baseline
-cargo +nightly bench -p fast-ta -- --baseline audit-baseline
+cargo +nightly bench -p liq-ta -- --baseline audit-baseline
 
 # 5. Document any regressions in AUDIT_REPORT.md
 ```

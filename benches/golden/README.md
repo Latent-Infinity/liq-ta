@@ -1,7 +1,7 @@
 # Golden Files Directory
 
 This directory contains pre-computed TA-Lib reference outputs for validating
-fast-ta indicator implementations.
+liq-ta indicator implementations.
 
 ## Generating Golden Files
 
@@ -41,7 +41,7 @@ Each indicator has a JSON file with the following structure:
 ```
 
 - `null` values represent NaN (lookback period or missing data)
-- Input data is generated using the same seeded RNG as fast-ta-experiments
+- Input data is generated using the same seeded RNG as liq-ta-experiments
 
 ## Indicators
 
@@ -60,7 +60,7 @@ The following indicators have golden files:
 ## Usage in Tests
 
 ```rust
-use fast_ta_experiments::talib_baseline::{load_golden_file, compare_outputs, DEFAULT_TOLERANCE};
+use liq_ta_experiments::talib_baseline::{load_golden_file, compare_outputs, DEFAULT_TOLERANCE};
 
 let golden = load_golden_file("benches/golden/sma.json")?;
 let test_case = golden.find_test_case("random_walk_1k_seed42").unwrap();
@@ -68,8 +68,8 @@ let test_case = golden.find_test_case("random_walk_1k_seed42").unwrap();
 // Generate input data with matching seed
 let input = generate_random_walk(test_case.input_length, test_case.input_seed);
 
-// Compute fast-ta output
-let output = fast_ta_core::indicators::sma(&input, 14)?;
+// Compute liq-ta output
+let output = liq_ta_core::indicators::sma(&input, 14)?;
 
 // Compare against golden reference
 let result = compare_outputs(&output, &test_case.output, DEFAULT_TOLERANCE)?;
@@ -84,5 +84,5 @@ Golden files should be regenerated when:
 2. TA-Lib version is updated
 3. New test cases are added
 
-After regenerating, verify that all fast-ta tests still pass to ensure
+After regenerating, verify that all liq-ta tests still pass to ensure
 there are no regressions.

@@ -42,7 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `set_precision_mode()`: Runtime configuration
   - `with_precision_mode()`: Thread-local scoped override
   - `current_precision_mode()`: Query current mode
-  - `FAST_TA_PRECISION` environment variable support
+  - `LIQ_TA_PRECISION` environment variable support
   - `precision-fast` Cargo feature for compile-time default
 
 - **Mixed-Precision Arithmetic for f32 Inputs**
@@ -136,7 +136,7 @@ When comparing f32 High mode against pure f64 reference:
   - `*_min_len()` functions for all indicators (minimum input length)
   - Semver-stable contracts per PRD §4.11
 
-- **CLI Tool** (`fast-ta-cli`)
+- **CLI Tool** (`liq-ta-cli`)
   - CSV input/output with auto-detected columns
   - All 12 indicators supported
   - Exit codes (0=success, 1=argument, 2=data, 3=computation)
@@ -162,7 +162,7 @@ When comparing f32 High mode against pure f64 reference:
   - Removed DAG-based plan mode (E07 showed 1.4-2.2x overhead)
   - Removed fusion kernels that benchmarked slower (E02, E03)
   - Kept rolling_extrema kernel (E04: 4.3-24.4x faster)
-  - Single library crate `fast-ta` + CLI crate `fast-ta-cli`
+  - Single library crate `liq-ta` + CLI crate `liq-ta-cli`
 
 - **Numeric Policy**
   - Full-length output (NaN prefix for lookback)
@@ -177,7 +177,7 @@ When comparing f32 High mode against pure f64 reference:
 
 ### Removed
 
-- `fast-ta-experiments` crate (benchmark/research code)
+- `liq-ta-experiments` crate (benchmark/research code)
 - `plan/` module (DAG-based execution)
 - `kernels/running_stat.rs` (2.8x slower than separate passes)
 - `kernels/ema_fusion.rs` (30% slower at scale)
@@ -216,7 +216,7 @@ Benchmark results (100K elements):
 | ADX | 238 Melem/s | ~1.0× |
 | MIDPOINT | 235 Melem/s | **1.40×** |
 
-All indicators demonstrate O(n) linear time complexity. fast-ta outperforms TA-Lib
+All indicators demonstrate O(n) linear time complexity. liq-ta outperforms TA-Lib
 on 9/35 benchmarked indicators (TEMA, RSI, MACD, ROC, APO, ATR, Bollinger, AD, MIDPOINT).
 
 ## [0.0.1] - 2024-XX-XX

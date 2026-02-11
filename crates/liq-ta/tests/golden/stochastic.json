@@ -1,0 +1,36 @@
+{
+  "indicator": "STOCH",
+  "description": "TA-Lib Stochastic Oscillator reference values",
+  "parameters": {"k_period": 14, "d_period": 3},
+  "talib_version": "0.4.32",
+  "generated_at": "2025-01-01T00:00:00Z",
+  "notes": "%K = 100 * (close - lowest_low) / (highest_high - lowest_low). When h==l, TA-Lib returns 0",
+  "test_cases": [
+    {
+      "name": "close_at_high",
+      "high":  [10.0, 12.0, 15.0, 14.0, 13.0],
+      "low":   [8.0, 9.0, 10.0, 11.0, 10.0],
+      "close": [9.0, 11.0, 15.0, 13.0, 13.0],
+      "params": {"k_period": 3, "d_period": 1},
+      "expected_k_approx": [null, null, 100.0, null, null],
+      "notes": "When close = highest high in window, %K = 100"
+    },
+    {
+      "name": "close_at_low",
+      "high":  [15.0, 14.0, 13.0, 12.0, 11.0],
+      "low":   [10.0, 9.0, 8.0, 7.0, 6.0],
+      "close": [12.0, 10.0, 8.0, 8.0, 7.0],
+      "params": {"k_period": 3, "d_period": 1},
+      "expected_k_approx": [null, null, 0.0, null, null],
+      "notes": "When close = lowest low in window, %K = 0"
+    },
+    {
+      "name": "flat_price_midpoint",
+      "high":  [50.0, 50.0, 50.0, 50.0, 50.0],
+      "low":   [50.0, 50.0, 50.0, 50.0, 50.0],
+      "close": [50.0, 50.0, 50.0, 50.0, 50.0],
+      "params": {"k_period": 3, "d_period": 1},
+      "notes": "When h==l, denominator is 0. TA-Lib returns 0, liq-ta returns 50 (PRD spec)"
+    }
+  ]
+}

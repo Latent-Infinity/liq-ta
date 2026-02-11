@@ -3,7 +3,7 @@
 
 This script generates reference outputs from TA-Lib for all 7 baseline
 indicators. The outputs are stored as JSON golden files for comparison
-with fast-ta implementations.
+with liq-ta implementations.
 
 Requirements:
     pip install talib numpy
@@ -35,7 +35,7 @@ except ImportError:
 
 
 # Configuration
-GOLDEN_DIR = Path("crates/fast-ta/tests/golden")
+GOLDEN_DIR = Path("crates/liq-ta/tests/golden")
 DATA_SIZES = [1_000, 10_000, 100_000]  # Skip 1M for faster generation
 SEEDS = [42, 123, 456]
 

@@ -1,8 +1,8 @@
-# NaN Handling Plan (fast-ta)
+# NaN Handling Plan (liq-ta)
 
 ## Overview
 
-This document tracks the NaN propagation optimization initiative for the fast-ta technical
+This document tracks the NaN propagation optimization initiative for the liq-ta technical
 analysis library. The goal is to leverage IEEE 754 floating-point semantics for NaN
 propagation wherever appropriate, while maintaining correctness for rolling window and
 recursive indicators that require explicit tracking.
@@ -285,29 +285,29 @@ first → [0.0001, 0.0002, ...] → no large number subtraction.
 
 ```bash
 # Full test suite
-cargo test -p fast-ta
+cargo test -p liq-ta
 
 # NaN-specific tests
-cargo test -p fast-ta nan_propagation
+cargo test -p liq-ta nan_propagation
 
 # Numeric policy tests
-cargo test -p fast-ta numeric_policy
+cargo test -p liq-ta numeric_policy
 ```
 
 ### Benchmark Commands
 
 ```bash
 # Full benchmark suite
-cargo bench -p fast-ta --bench indicators
+cargo bench -p liq-ta --bench indicators
 
 # Check for regressions
-cargo bench -p fast-ta --bench indicators 2>&1 | grep -E 'regressed' | wc -l
+cargo bench -p liq-ta --bench indicators 2>&1 | grep -E 'regressed' | wc -l
 # Expected: 0
 
 # Individual indicator benchmarks
-cargo bench -p fast-ta -- sma
-cargo bench -p fast-ta -- ema
-cargo bench -p fast-ta -- avgprice
+cargo bench -p liq-ta -- sma
+cargo bench -p liq-ta -- ema
+cargo bench -p liq-ta -- avgprice
 ```
 
 ### Acceptance Criteria (Updated 2025-12-28)

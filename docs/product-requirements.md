@@ -1,4 +1,4 @@
-# fast-ta Product Requirements Document
+# liq-ta Product Requirements Document
 
 **Version**: 3.0
 **Last Updated**: December 2025
@@ -33,11 +33,11 @@ Existing technical analysis libraries have fundamental issues that affect quanti
 - Performance suitable for large-scale historical analysis
 - A specification they can audit and trust
 
-fast-ta addresses these gaps by owning its specification, documenting all edge cases, and validating performance through experiments.
+liq-ta addresses these gaps by owning its specification, documenting all edge cases, and validating performance through experiments.
 
 ### 1.2 Product Vision
 
-fast-ta is a high-performance technical analysis library for financial markets, implemented in Rust. The library provides a comprehensive set of technical indicators optimized for speed, numerical stability, and memory efficiency.
+liq-ta is a high-performance technical analysis library for financial markets, implemented in Rust. The library provides a comprehensive set of technical indicators optimized for speed, numerical stability, and memory efficiency.
 
 ### 1.3 Goals
 
@@ -50,7 +50,7 @@ fast-ta is a high-performance technical analysis library for financial markets, 
 
 > **Archive Policy**: The `archive/experiments-v1` branch preserves plan mode and fusion kernel code for historical reference only. This code is not planned for production—experiments showed these approaches are slower under current conditions. Reconsidering would require new evidence (compiler improvements, different workloads, etc.) and fresh experiments. The branch exists for audit purposes and may be deleted after v1.0 stable release.
 
-> **Specification Stance (v2.2)**: fast-ta defines its own indicator semantics. TA-Lib is used as a reference for validation but is not a compatibility requirement. Where our behavior differs from TA-Lib, fast-ta's specification is authoritative.
+> **Specification Stance (v2.2)**: liq-ta defines its own indicator semantics. TA-Lib is used as a reference for validation but is not a compatibility requirement. Where our behavior differs from TA-Lib, liq-ta's specification is authoritative.
 
 ### 1.4 Performance Hypotheses
 
@@ -78,7 +78,7 @@ The following performance hypotheses were tested through 7 micro-experiments (E0
 
 ### 1.5 Replacement Strategy
 
-fast-ta aims to be a credible **TA-Lib alternative** for Rust-native projects and, via FFI, for polyglot trading stacks. Replacement viability is defined by coverage, interop, and stability—not just performance.
+liq-ta aims to be a credible **TA-Lib alternative** for Rust-native projects and, via FFI, for polyglot trading stacks. Replacement viability is defined by coverage, interop, and stability—not just performance.
 
 **Coverage Tiers**:
 
@@ -101,7 +101,7 @@ fast-ta aims to be a credible **TA-Lib alternative** for Rust-native projects an
 
 **Completion Gate**: v1.0 ships when:
 1. All Tier 0 indicators pass spec fixtures, reference checks, and real-world regression suite (§7.7)
-2. Python bindings available via `pip install fast-ta` (§12.5)
+2. Python bindings available via `pip install liq-ta` (§12.5)
 3. Beta validation with ≥3 external users confirms no blocking issues
 
 **Interop Strategy**: See §12.5 for bindings roadmap. Python bindings (PyO3 + NumPy) are the primary adoption vector.
@@ -206,7 +206,7 @@ Archived code is preserved in the `archive/experiments-v1` branch.
 
 | Metric | Target | Validation |
 |--------|--------|------------|
-| Spec correctness | Matches fast-ta specification | Spec fixture tests (authoritative) |
+| Spec correctness | Matches liq-ta specification | Spec fixture tests (authoritative) |
 | Numerical stability | Handle extreme values | Rolling sum + sum-of-squares (Bollinger), stable EMA recursion |
 | NaN handling | Propagation policy | Unit tests + property tests |
 | Reference comparison | Sanity check; divergences investigated | Reference checks (informational, non-blocking) |
@@ -261,7 +261,7 @@ All indicators return **full-length outputs with NaN padding**. The output has t
 **Lookback Function (Canonical)**: Each indicator exposes `*_lookback(params) -> usize` as the authoritative definition. These functions are part of the stable public API and follow semver (breaking changes require major version bump).
 
 ```rust
-use fast_ta::indicators::{sma_lookback, macd_lookback};
+use liq_ta::indicators::{sma_lookback, macd_lookback};
 
 let sma_lb = sma_lookback(20);           // Returns 19
 let macd_lb = macd_lookback(12, 26, 9);  // Returns 33 (25 + 8)
@@ -327,7 +327,7 @@ let smoothed = ema(&rsi, 5)?;          // len = rsi.len(), NaN propagates and ad
 **Minimum Input Length**: To avoid `InsufficientData` errors, input length must be at least `lookback + 1`. Each indicator exports a `*_min_len()` function:
 
 ```rust
-use fast_ta::indicators::{sma_min_len, macd_min_len};
+use liq_ta::indicators::{sma_min_len, macd_min_len};
 
 // SMA(20) needs at least 20 values (lookback=19, min=20)
 assert!(prices.len() >= sma_min_len(20));
@@ -352,11 +352,11 @@ Beyond the general numeric policy (§4.3), these indicators have specific edge b
 
 **Bollinger Bands Standard Deviation**: Uses **population stddev** (divide by n, not n-1). Calculated via sum-of-squares method for numerical stability.
 
-> **Note**: Some implementations (including Excel) use sample stddev (n-1). fast-ta uses population stddev, which matches TA-Lib and most financial charting platforms. Users migrating from sample-stddev implementations may see slightly narrower bands.
+> **Note**: Some implementations (including Excel) use sample stddev (n-1). liq-ta uses population stddev, which matches TA-Lib and most financial charting platforms. Users migrating from sample-stddev implementations may see slightly narrower bands.
 
 ### 4.6 Indicator Initialization Rules
 
-These rules define how each indicator seeds its initial state. This is the authoritative specification for fast-ta:
+These rules define how each indicator seeds its initial state. This is the authoritative specification for liq-ta:
 
 | Indicator | Initialization | Description |
 |-----------|----------------|-------------|
@@ -368,7 +368,7 @@ These rules define how each indicator seeds its initial state. This is the autho
 
 **EMA Smoothing Factor**: Standard EMA uses α = 2/(period+1). Wilder smoothing (RSI, ATR) uses α = 1/period.
 
-> **Design Note**: SMA seeding for EMA is chosen for stability and predictability. Some implementations use first-value seeding for streaming scenarios; fast-ta uses SMA seeding for batch computation.
+> **Design Note**: SMA seeding for EMA is chosen for stability and predictability. Some implementations use first-value seeding for streaming scenarios; liq-ta uses SMA seeding for batch computation.
 
 ### 4.7 Code Quality Requirements
 
@@ -454,7 +454,7 @@ The following are **semver-stable** commitments. Breaking changes require a majo
 Simple, low-overhead API for indicator computation:
 
 ```rust
-use fast_ta::prelude::*;
+use liq_ta::prelude::*;
 
 // Single-output indicators (returns trimmed Vec per §4.4)
 let sma_values = sma(&prices, 20)?;  // len = prices.len() - 19
@@ -491,7 +491,7 @@ For indicators with multiple parameters, configuration types implement `Default`
 | `Stochastic` | `d_period` | 3 | SMA period for %D |
 
 ```rust
-use fast_ta::prelude::*;
+use liq_ta::prelude::*;
 
 // MACD with defaults (fast=12, slow=26, signal=9)
 let macd_result = Macd::default().compute(&prices)?;
@@ -522,7 +522,7 @@ let slow_stoch = Stochastic::new()
 For computing derived indicators (composition without plan mode):
 
 ```rust
-use fast_ta::prelude::*;
+use liq_ta::prelude::*;
 
 // RSI of a midrange price
 let mut midrange: Vec<f64> = Vec::with_capacity(high.len());
@@ -561,22 +561,22 @@ The CLI provides a testing interface for indicator computation.
 
 **Invocation**:
 ```bash
-fast-ta <indicator> <input.csv> [params] [-o output.csv] [-c column]
+liq-ta <indicator> <input.csv> [params] [-o output.csv] [-c column]
 ```
 
 **Examples**:
 ```bash
 # SMA with default period (20)
-fast-ta sma prices.csv
+liq-ta sma prices.csv
 
 # SMA with custom period
-fast-ta sma prices.csv 14
+liq-ta sma prices.csv 14
 
 # MACD with custom params, output to file
-fast-ta macd prices.csv 12,26,9 -o macd_output.csv
+liq-ta macd prices.csv 12,26,9 -o macd_output.csv
 
 # Stochastic with slow stochastic (k_slowing=3)
-fast-ta stochastic ohlc.csv 14,3,3
+liq-ta stochastic ohlc.csv 14,3,3
 ```
 
 **Exit Codes**:
@@ -587,7 +587,7 @@ fast-ta stochastic ohlc.csv 14,3,3
 | 2 | Data error (parse failure, insufficient data) |
 | 3 | Computation error (indicator failed) |
 
-> **Note**: Detailed CSV format specification, column mapping rules, and usage examples are documented in `crates/fast-ta-cli/README.md`.
+> **Note**: Detailed CSV format specification, column mapping rules, and usage examples are documented in `crates/liq-ta-cli/README.md`.
 
 ### 5.5 Output Types (Semver Stable)
 
@@ -621,7 +621,7 @@ Field names and types are guaranteed stable under semver. All fields within an o
 
 ### 5.6 API Layers
 
-fast-ta provides two API styles for different use cases:
+liq-ta provides two API styles for different use cases:
 
 **Simple API** (v1.0, current):
 
@@ -661,10 +661,10 @@ These would be additive; Simple and Buffer APIs remain stable.
 ### 6.1 Crate Structure
 
 ```
-fast-ta/
+liq-ta/
 ├── Cargo.toml                     # Workspace configuration
 ├── crates/
-│   ├── fast-ta/                   # Library crate (published)
+│   ├── liq-ta/                   # Library crate (published)
 │   │   ├── src/
 │   │   │   ├── lib.rs             # Library entry point
 │   │   │   ├── prelude.rs         # Common imports
@@ -689,7 +689,7 @@ fast-ta/
 │   │   │   ├── integration.rs     # Public API tests
 │   │   │   └── property_tests.rs  # proptest
 │   │   └── Cargo.toml
-│   └── fast-ta-cli/               # CLI binary (published separately)
+│   └── liq-ta-cli/               # CLI binary (published separately)
 │       ├── src/
 │       │   ├── main.rs
 │       │   ├── args.rs            # CLI argument parsing
@@ -703,20 +703,20 @@ fast-ta/
         └── generate.py            # Golden file generator (dev-only, excluded from package)
 ```
 
-> **Golden file location**: `crates/fast-ta/tests/golden/` is the canonical location. The generator script in `tools/golden/` is excluded from crates.io packaging via `Cargo.toml` exclude patterns.
+> **Golden file location**: `crates/liq-ta/tests/golden/` is the canonical location. The generator script in `tools/golden/` is excluded from crates.io packaging via `Cargo.toml` exclude patterns.
 
 **Crate Responsibilities**:
-- `fast-ta`: Library crate with all indicator implementations, published to crates.io (semver stable)
-- `fast-ta-cli`: Binary for testing indicators against CSV data, published separately
+- `liq-ta`: Library crate with all indicator implementations, published to crates.io (semver stable)
+- `liq-ta-cli`: Binary for testing indicators against CSV data, published separately
 
-> **Design Note**: A single library crate is the idiomatic Rust pattern. There is no separate "core" crate—all implementation lives in `fast-ta`. This simplifies dependency management and versioning.
+> **Design Note**: A single library crate is the idiomatic Rust pattern. There is no separate "core" crate—all implementation lives in `liq-ta`. This simplifies dependency management and versioning.
 
 ### 6.2 Data Flow Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                           User API                                   │
-│                         (fast-ta crate)                              │
+│                         (liq-ta crate)                              │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                     │
 │  ┌─────────────────────┐     ┌─────────────────────────────────┐   │
@@ -809,7 +809,7 @@ pub enum Error {
 
 ### 7.3 Spec Fixture Tests (Authoritative)
 
-Spec fixtures are hand-constructed test cases where expected outputs are derived directly from the initialization rules in §4.6 and the output shape contract in §4.4. These are the authoritative source of truth for fast-ta.
+Spec fixtures are hand-constructed test cases where expected outputs are derived directly from the initialization rules in §4.6 and the output shape contract in §4.4. These are the authoritative source of truth for liq-ta.
 
 | Test Case | Purpose | Location |
 |-----------|---------|----------|
@@ -837,9 +837,9 @@ The `spec_version` field tracks which PRD version the fixture was created agains
 
 ### 7.4 Reference Comparison Tests (Informational)
 
-TA-Lib reference comparisons are used to catch major deviations but are **non-blocking** in CI. These tests validate that fast-ta produces reasonable outputs for common cases but do not define correctness.
+TA-Lib reference comparisons are used to catch major deviations but are **non-blocking** in CI. These tests validate that liq-ta produces reasonable outputs for common cases but do not define correctness.
 
-Golden files are stored in `crates/fast-ta/tests/golden/`:
+Golden files are stored in `crates/liq-ta/tests/golden/`:
 
 | Indicator | Golden File | Tolerance | Notes |
 |-----------|-------------|-----------|-------|
@@ -884,7 +884,7 @@ See [docs/benchmarking-guide.md](./benchmarking-guide.md) for complete methodolo
 
 ### 7.6 User Validation Guidance
 
-For users validating fast-ta outputs against their existing pipelines:
+For users validating liq-ta outputs against their existing pipelines:
 
 **Recommended Comparison Protocol**:
 
@@ -929,24 +929,24 @@ Synthetic fixtures test edge cases, but realistic data tests robustness. We use 
 
 ## 8. Reference Strategy
 
-TA-Lib is used as a **reference check**, not a compatibility requirement. fast-ta defines its own specification (§4.4, §4.5, §4.6) and uses TA-Lib to validate that our outputs are reasonable for typical cases.
+TA-Lib is used as a **reference check**, not a compatibility requirement. liq-ta defines its own specification (§4.4, §4.5, §4.6) and uses TA-Lib to validate that our outputs are reasonable for typical cases.
 
 ### 8.1 Design Philosophy
 
-- **fast-ta owns its specification**: Initialization rules, output shapes, and edge cases are defined in this PRD
-- **TA-Lib is inspiration, not gospel**: Where behaviors differ, fast-ta's documented behavior is correct
+- **liq-ta owns its specification**: Initialization rules, output shapes, and edge cases are defined in this PRD
+- **TA-Lib is inspiration, not gospel**: Where behaviors differ, liq-ta's documented behavior is correct
 - **Reference checks catch regressions**: Large deviations from TA-Lib may indicate bugs worth investigating
 
 ### 8.2 Golden File Workflow
 
 1. **Generation**: Python script (`tools/golden/generate.py`) generates reference outputs from TA-Lib
-2. **Storage**: JSON files in `crates/fast-ta/tests/golden/`
+2. **Storage**: JSON files in `crates/liq-ta/tests/golden/`
 3. **Validation**: Tolerance-based comparison (1e-10 relative error)
 4. **CI Integration**: Golden files checked into repo; generator excluded from package
 
 ### 8.3 Handling Divergences
 
-When fast-ta differs from TA-Lib:
+When liq-ta differs from TA-Lib:
 
 | Scenario | Action |
 |----------|--------|
@@ -966,20 +966,20 @@ When fast-ta differs from TA-Lib:
 
 ## 9. Dependencies
 
-### 9.1 Core Dependencies (fast-ta)
+### 9.1 Core Dependencies (liq-ta)
 
 | Dependency | Version | Purpose |
 |------------|---------|---------|
 | num-traits | 0.2.x | Float trait for generic numerics |
 | thiserror | 1.x | Error derive macros |
 
-### 9.2 CLI Dependencies (fast-ta-cli)
+### 9.2 CLI Dependencies (liq-ta-cli)
 
 | Dependency | Version | Purpose |
 |------------|---------|---------|
 | clap | 4.x | CLI argument parsing |
 | csv | 1.x | CSV reading/writing |
-| fast-ta | workspace | Core indicator library |
+| liq-ta | workspace | Core indicator library |
 
 ### 9.3 Development Dependencies
 
@@ -1089,10 +1089,10 @@ Python bindings are the primary adoption vector for the quant/trading ecosystem.
 |-----------|-----------|-------|
 | Core bindings | PyO3 | Direct Rust→Python without C intermediate |
 | NumPy integration | numpy crate | Zero-copy where possible; accept/return `ndarray` |
-| Package | maturin | Build and publish to PyPI as `fast-ta` |
+| Package | maturin | Build and publish to PyPI as `liq-ta` |
 | Scope | Tier 0 indicators | Minimal viable Python package |
 
-A Rust-only library will not achieve adoption. `pip install fast-ta` must work before v1.0 ships.
+A Rust-only library will not achieve adoption. `pip install liq-ta` must work before v1.0 ships.
 
 **v2.x: C FFI** (deferred):
 
@@ -1163,17 +1163,17 @@ R, Julia, and other bindings will be considered based on community interest post
 
 ### 14.3 Outcome Metrics (v1.0 Success Criteria)
 
-These measure whether fast-ta solves real user problems:
+These measure whether liq-ta solves real user problems:
 
 | Outcome | Target | Validation |
 |---------|--------|------------|
 | **Numerical trust** | Zero production discrepancies reported after 3 months | GitHub issues tracking |
 | **Specification clarity** | Users can validate outputs against PRD without asking questions | Documentation feedback |
 | **Performance satisfaction** | No user complaints about indicator computation speed | GitHub issues, beta feedback |
-| **Adoption signal** | ≥1 credible open-source project using fast-ta | GitHub dependents |
+| **Adoption signal** | ≥1 credible open-source project using liq-ta | GitHub dependents |
 
 **Beta Validation Requirements**:
-- ≥3 external users run fast-ta against their backtesting pipelines
+- ≥3 external users run liq-ta against their backtesting pipelines
 - Document and resolve all blocking issues before v1.0
 - Collect qualitative feedback on specification clarity and API ergonomics
 
@@ -1229,8 +1229,8 @@ Adoption targets will be defined post-v1.0 release based on comparable libraries
 | 2.1 | Dec 2025 | **Specification Tightening**: Output shape contract (trimmed), indicator-specific edge cases, CLI contract, error enum cleanup, golden file location unified, CI vs release gates clarified. |
 | 2.2 | Dec 2025 | **Specification Ownership**: Reframed TA-Lib as reference check, not compatibility requirement. Added §4.6 Indicator Initialization Rules. Split testing into spec fixtures (authoritative) vs reference comparisons (informational). Added lookback() functions. Added multi-output alignment rules. Added CLI NaN row semantics. |
 | 2.3 | Dec 2025 | **Factoring Tightening**: Made lookback() canonical (table is documentation). Added multi-output `_into` buffer contracts. Added precedence rule for edge behaviors vs propagation. Moved CSV details to CLI README. Renamed feature flag to `reference-checks-strict`. Softened TA-Lib match expectations. |
-| 2.4 | Dec 2025 | **Final Polish**: Added semver promise for lookback functions. Clarified multi-output logical time alignment. Added §4.8 Mathematical Conventions (determinism, tolerance, precision). Added §4.9 Non-Goals. (At the time: noted fast-ta-core was workspace-private; superseded by v2.5 merge.) Fixed performance claim to match benchmarks. Unified Config Types API terminology. |
-| 2.5 | Dec 2025 | **Crate Simplification**: Merged fast-ta-core into fast-ta (single library crate). Updated file structure. Moved golden generator to tools/golden/generate.py. This is the idiomatic Rust pattern for library + CLI. |
+| 2.4 | Dec 2025 | **Final Polish**: Added semver promise for lookback functions. Clarified multi-output logical time alignment. Added §4.8 Mathematical Conventions (determinism, tolerance, precision). Added §4.9 Non-Goals. (At the time: noted liq-ta-core was workspace-private; superseded by v2.5 merge.) Fixed performance claim to match benchmarks. Unified Config Types API terminology. |
+| 2.5 | Dec 2025 | **Crate Simplification**: Merged liq-ta-core into liq-ta (single library crate). Updated file structure. Moved golden generator to tools/golden/generate.py. This is the idiomatic Rust pattern for library + CLI. |
 | 2.6 | Dec 2025 | **Specification Clarity**: Added Stochastic variants documentation (Fast/Slow/Full). Documented all config type defaults. Rewrote NaN edge cases as "Indeterminate Operations". Added tolerance hierarchy explanation. Added fixture spec_version for versioning. Added Error Recovery Guidance table. Added Streaming Workaround section. Added population stddev note to Bollinger. Clarified archive branch deletion policy. Removed arbitrary adoption metrics. |
 | 2.7 | Dec 2025 | **API Consistency & Tolerance Fix**: Unified Stochastic naming to `stochastic()` (fast-only in v2.x). Fixed tolerance policy with mixed abs+rel tolerances and split spec/reference thresholds. Made lookback table explicitly non-normative. Added `min_input_len` convention and `align_tail` helper. Added §5.5 Output Types with semver-stable struct schemas. Softened archive policy language. Removed environment-specific perf claims. Fixed v2.4 history to be explicitly historical. |
 | 2.8 | Dec 2025 | **Consistency Cleanup**: Fixed k_slowing docs to acknowledge Slow Stochastic (k_slowing>1). Removed k=25 from pending work (already validated). Marked fusion benefit as invalidated in metrics. Clarified align_tail/min_input_len as patterns not API. Added trait implementations to output types. Added OBV/VWAP to Phase 2 indicators. Improved Stochastic examples. |
@@ -1239,4 +1239,4 @@ Adoption targets will be defined post-v1.0 release based on comparable libraries
 
 ---
 
-*This document serves as the authoritative specification for the fast-ta project.*
+*This document serves as the authoritative specification for the liq-ta project.*

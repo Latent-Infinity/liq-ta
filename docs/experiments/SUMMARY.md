@@ -1,10 +1,10 @@
-# fast-ta Micro-Experiments Summary
+# liq-ta Micro-Experiments Summary
 
 ## Overview
 
-This document consolidates the results from all 7 micro-experiments (E01-E07) conducted to validate performance hypotheses for the fast-ta technical analysis library. Each experiment provides go/no-go decisions based on measured performance data.
+This document consolidates the results from all 7 micro-experiments (E01-E07) conducted to validate performance hypotheses for the liq-ta technical analysis library. Each experiment provides go/no-go decisions based on measured performance data.
 
-**Project**: fast-ta
+**Project**: liq-ta
 **Experiment Framework**: Criterion.rs v0.5.1
 **Date**: December 2025
 **Status**: ✅ All Experiments Completed
@@ -35,7 +35,7 @@ This document consolidates the results from all 7 micro-experiments (E01-E07) co
 - **Category**: Foundation
 - **Status**: ✅ COMPLETED
 - **Report**: [`benches/experiments/E01_baseline/REPORT.md`](../../benches/experiments/E01_baseline/REPORT.md)
-- **Benchmark**: `cargo bench --package fast-ta-experiments --bench e01_baseline`
+- **Benchmark**: `cargo bench --package liq-ta-experiments --bench e01_baseline`
 
 ### Objective
 
@@ -82,7 +82,7 @@ Establish performance baselines for all 7 core technical indicators. These basel
 - **Category**: Kernel Fusion
 - **Status**: ✅ COMPLETED
 - **Report**: [`benches/experiments/E02_running_stat/REPORT.md`](../../benches/experiments/E02_running_stat/REPORT.md)
-- **Benchmark**: `cargo bench --package fast-ta-experiments --bench e02_running_stat`
+- **Benchmark**: `cargo bench --package liq-ta-experiments --bench e02_running_stat`
 
 ### Objective
 
@@ -138,7 +138,7 @@ Fused computation should be faster because:
 - **Category**: Kernel Fusion
 - **Status**: ✅ COMPLETED
 - **Report**: [`benches/experiments/E03_ema_fusion/REPORT.md`](../../benches/experiments/E03_ema_fusion/REPORT.md)
-- **Benchmark**: `cargo bench --package fast-ta-experiments --bench e03_ema_fusion`
+- **Benchmark**: `cargo bench --package liq-ta-experiments --bench e03_ema_fusion`
 
 ### Objective
 
@@ -203,7 +203,7 @@ Fused EMA computation should be faster because:
 - **Category**: Algorithm Optimization
 - **Status**: ✅ COMPLETED
 - **Report**: [`benches/experiments/E04_rolling_extrema/REPORT.md`](../../benches/experiments/E04_rolling_extrema/REPORT.md)
-- **Benchmark**: `cargo bench --package fast-ta-experiments --bench e04_rolling_extrema`
+- **Benchmark**: `cargo bench --package liq-ta-experiments --bench e04_rolling_extrema`
 
 ### Objective
 
@@ -270,7 +270,7 @@ The deque-based algorithm should be dramatically faster because:
 - **Category**: Infrastructure
 - **Status**: ✅ COMPLETED
 - **Report**: [`benches/experiments/E05_plan_overhead/REPORT.md`](../../benches/experiments/E05_plan_overhead/REPORT.md)
-- **Benchmark**: `cargo bench --package fast-ta-experiments --bench e05_plan_overhead`
+- **Benchmark**: `cargo bench --package liq-ta-experiments --bench e05_plan_overhead`
 
 ### Objective
 
@@ -329,7 +329,7 @@ Measure the cost of plan infrastructure (registry, DAG construction, topological
 - **Category**: Memory Optimization
 - **Status**: ✅ COMPLETED
 - **Report**: [`benches/experiments/E06_memory_writes/REPORT.md`](../../benches/experiments/E06_memory_writes/REPORT.md)
-- **Benchmark**: `cargo bench --package fast-ta-experiments --bench e06_memory_writes`
+- **Benchmark**: `cargo bench --package liq-ta-experiments --bench e06_memory_writes`
 
 ### Objective
 
@@ -403,7 +403,7 @@ Determine the optimal memory write pattern for indicator computation by comparin
 - **Category**: End-to-End Validation
 - **Status**: ✅ COMPLETED
 - **Report**: [`benches/experiments/E07_end_to_end/REPORT.md`](../../benches/experiments/E07_end_to_end/REPORT.md)
-- **Benchmark**: `cargo bench --package fast-ta-experiments --bench e07_end_to_end`
+- **Benchmark**: `cargo bench --package liq-ta-experiments --bench e07_end_to_end`
 
 ### Objective
 
@@ -515,35 +515,35 @@ open target/criterion/report/index.html
 
 ```bash
 # E01: Baseline costs
-cargo bench --package fast-ta-experiments --bench e01_baseline
+cargo bench --package liq-ta-experiments --bench e01_baseline
 
 # E02: RunningStat fusion
-cargo bench --package fast-ta-experiments --bench e02_running_stat
+cargo bench --package liq-ta-experiments --bench e02_running_stat
 
 # E03: EMA fusion
-cargo bench --package fast-ta-experiments --bench e03_ema_fusion
+cargo bench --package liq-ta-experiments --bench e03_ema_fusion
 
 # E04: Rolling extrema
-cargo bench --package fast-ta-experiments --bench e04_rolling_extrema
+cargo bench --package liq-ta-experiments --bench e04_rolling_extrema
 
 # E05: Plan overhead
-cargo bench --package fast-ta-experiments --bench e05_plan_overhead
+cargo bench --package liq-ta-experiments --bench e05_plan_overhead
 
 # E06: Memory writes
-cargo bench --package fast-ta-experiments --bench e06_memory_writes
+cargo bench --package liq-ta-experiments --bench e06_memory_writes
 
 # E07: End-to-end
-cargo bench --package fast-ta-experiments --bench e07_end_to_end
+cargo bench --package liq-ta-experiments --bench e07_end_to_end
 ```
 
 ### Quick Decision Benchmarks
 
 ```bash
 # Run only the go/no-go decision benchmarks
-cargo bench --package fast-ta-experiments --bench e02_running_stat -- "comparison"
-cargo bench --package fast-ta-experiments --bench e03_ema_fusion -- "ema_count_scaling"
-cargo bench --package fast-ta-experiments --bench e04_rolling_extrema -- "period_scaling"
-cargo bench --package fast-ta-experiments --bench e07_end_to_end -- "go_no_go"
+cargo bench --package liq-ta-experiments --bench e02_running_stat -- "comparison"
+cargo bench --package liq-ta-experiments --bench e03_ema_fusion -- "ema_count_scaling"
+cargo bench --package liq-ta-experiments --bench e04_rolling_extrema -- "period_scaling"
+cargo bench --package liq-ta-experiments --bench e07_end_to_end -- "go_no_go"
 ```
 
 ---
@@ -585,15 +585,15 @@ All 7 experiments have been completed. The key architectural decision is clear:
 | Category | Path |
 |----------|------|
 | Experiment Reports | `benches/experiments/E0[1-7]_*/REPORT.md` |
-| Benchmark Source | `crates/fast-ta-experiments/benches/e0[1-7]_*.rs` |
-| Core Indicators | `crates/fast-ta-core/src/indicators/` |
-| Fusion Kernels | `crates/fast-ta-core/src/kernels/` |
-| Plan Infrastructure | `crates/fast-ta-core/src/plan/` |
+| Benchmark Source | `crates/liq-ta-experiments/benches/e0[1-7]_*.rs` |
+| Core Indicators | `crates/liq-ta-core/src/indicators/` |
+| Fusion Kernels | `crates/liq-ta-core/src/kernels/` |
+| Plan Infrastructure | `crates/liq-ta-core/src/plan/` |
 | Criterion Output | `target/criterion/` |
 | Decision Documents | `docs/decisions/` |
 
 ---
 
-*Summary generated for fast-ta micro-experiments framework*
+*Summary generated for liq-ta micro-experiments framework*
 *Last updated: December 2025*
 *Version: 2.0 (All Experiments Completed - Results Finalized)*

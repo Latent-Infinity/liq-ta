@@ -1,13 +1,3 @@
-warn = [
-  "clippy::perf",
-  "clippy::nursery",
-  "clippy::needless_collect",
-  "clippy::map_flatten",
-  "clippy::or_fun_call",
-  "clippy::inefficient_to_string",
-  "clippy::unnecessary_wraps",
-  "clippy::useless_conversion",
-]
-allow = [
-  "clippy::module_name_repetitions",
-]
+# Intentionally empty for now.
+# Clippy lint levels are configured via CLI in CI:
+# `cargo clippy --all-targets --all-features -- -D warnings`

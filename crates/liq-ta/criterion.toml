@@ -1,0 +1,23 @@
+# Criterion benchmark configuration for liq-ta
+# See: https://bheisler.github.io/criterion.rs/book/user_guide/command_line_options.html
+
+[default]
+# Warmup period before measurement (ms)
+warm_up_time = 5000
+
+# Time to spend measuring each benchmark (ms)
+# Increased from default 5s to ensure statistical reliability
+measurement_time = 10000
+
+# Number of samples to collect
+# Higher than default (100) for better statistical confidence
+sample_size = 500
+
+# Noise threshold - changes below this are considered noise
+noise_threshold = 0.02
+
+# Confidence level for statistical tests
+confidence_level = 0.95
+
+# Significance level for detecting changes
+significance_level = 0.05

@@ -1,10 +1,10 @@
-# Indicator Standards (fast-ta)
+# Indicator Standards (liq-ta)
 
 ## Purpose
 Define the standards for indicator behavior, API shape, testing, and documentation so new indicators are easy to add and consistent with existing ones. This document is self-contained; it includes the required contracts and references to authoritative sources without assuming prior context.
 
 ## Scope
-Applies to all indicators in `crates/fast-ta/src/indicators`, including single- and multi-output indicators, and any future indicators added to the public API.
+Applies to all indicators in `crates/liq-ta/src/indicators`, including single- and multi-output indicators, and any future indicators added to the public API.
 
 ## Definitions
 - **Lookback**: The number of initial positions in the output that must be NaN due to insufficient prior data.
@@ -12,7 +12,7 @@ Applies to all indicators in `crates/fast-ta/src/indicators`, including single- 
 - **Full-length output**: Output length equals input length with NaN prefix.
 
 ## Indicator API Contract
-- **Module location**: `crates/fast-ta/src/indicators/<indicator>.rs`
+- **Module location**: `crates/liq-ta/src/indicators/<indicator>.rs`
 - **Primary function**: `indicator(data, params...) -> Result<Vec<T>>`
 - **Pre-allocated variant**: `indicator_into(data, params..., output: &mut [T]) -> Result<usize>`
   - Output buffer length must be `>= data.len()` for full-length output with NaN prefix.
@@ -48,7 +48,7 @@ Applies to all indicators in `crates/fast-ta/src/indicators`, including single- 
 
 ## IEEE 754 NaN Propagation Strategy
 
-fast-ta leverages IEEE 754 floating-point semantics for NaN propagation wherever appropriate.
+liq-ta leverages IEEE 754 floating-point semantics for NaN propagation wherever appropriate.
 The IEEE 754 standard guarantees:
 - **Arithmetic propagation**: `NaN + x = NaN`, `NaN - x = NaN`, `NaN * x = NaN`, `NaN / x = NaN`
 - **Comparison behavior**: `NaN < x = false`, `NaN > x = false`, `NaN == x = false`
@@ -246,25 +246,25 @@ the optimal pattern for their use case.
 
 ## Quality Gates (Must-Haves)
 Add or update coverage across these areas:
-- **Spec fixtures**: `crates/fast-ta/tests/fixtures/` with rationale and expected values.
-- **JSON fixture tests**: ensure new indicator is wired into `crates/fast-ta/tests/json_fixture_tests.rs`.
-- **Numeric policy**: extend `crates/fast-ta/tests/numeric_policy_tests.rs` when applicable.
-- **Property tests**: update `crates/fast-ta/tests/property_tests.rs` for shape/NaN guarantees.
-- **Integration**: update `crates/fast-ta/tests/integration.rs` for API presence and basic usage.
-- **Golden/reference checks** (if applicable): `crates/fast-ta/tests/golden/*` and `crates/fast-ta/tests/reference_tests.rs`.
-- **Benchmarks**: add to `crates/fast-ta/benches/indicators.rs` for performance tracking.
+- **Spec fixtures**: `crates/liq-ta/tests/fixtures/` with rationale and expected values.
+- **JSON fixture tests**: ensure new indicator is wired into `crates/liq-ta/tests/json_fixture_tests.rs`.
+- **Numeric policy**: extend `crates/liq-ta/tests/numeric_policy_tests.rs` when applicable.
+- **Property tests**: update `crates/liq-ta/tests/property_tests.rs` for shape/NaN guarantees.
+- **Integration**: update `crates/liq-ta/tests/integration.rs` for API presence and basic usage.
+- **Golden/reference checks** (if applicable): `crates/liq-ta/tests/golden/*` and `crates/liq-ta/tests/reference_tests.rs`.
+- **Benchmarks**: add to `crates/liq-ta/benches/indicators.rs` for performance tracking.
 
-## CLI Contract (fast-ta-cli)
+## CLI Contract (liq-ta-cli)
 If the indicator is CLI-exposed:
-- Add a subcommand in `crates/fast-ta-cli/src/args.rs`.
-- Wire compute logic in `crates/fast-ta-cli/src/main.rs`.
-- Add CSV handling for input columns if needed in `crates/fast-ta-cli/src/csv_parser.rs`.
-- Add CLI integration tests in `crates/fast-ta-cli/tests/cli_integration.rs`.
+- Add a subcommand in `crates/liq-ta-cli/src/args.rs`.
+- Wire compute logic in `crates/liq-ta-cli/src/main.rs`.
+- Add CSV handling for input columns if needed in `crates/liq-ta-cli/src/csv_parser.rs`.
+- Add CLI integration tests in `crates/liq-ta-cli/tests/cli_integration.rs`.
 
 ## Documentation Checklist for New Indicators
-- Add module docs and examples in `crates/fast-ta/src/indicators/<indicator>.rs`.
-- Export from `crates/fast-ta/src/indicators/mod.rs`.
-- Update `crates/fast-ta/src/prelude.rs` if the indicator is part of the prelude surface.
+- Add module docs and examples in `crates/liq-ta/src/indicators/<indicator>.rs`.
+- Export from `crates/liq-ta/src/indicators/mod.rs`.
+- Update `crates/liq-ta/src/prelude.rs` if the indicator is part of the prelude surface.
 - Note any TA-Lib or reference differences in fixtures or docs (if applicable).
 
 ## Minimal Add-Indicator Checklist
@@ -279,7 +279,7 @@ If the indicator is CLI-exposed:
 
 ### Single-output (SMA)
 ```rust
-use fast_ta::indicators::sma::{sma, sma_into, sma_lookback, sma_min_len};
+use liq_ta::indicators::sma::{sma, sma_into, sma_lookback, sma_min_len};
 
 let prices = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0];
 let out = sma(&prices, 3).unwrap();
@@ -294,7 +294,7 @@ sma_into(&prices, 3, &mut buffer).unwrap();
 
 ### Multi-output (Bollinger)
 ```rust
-use fast_ta::indicators::bollinger::{bollinger_into, bollinger_lookback, BollingerOutput};
+use liq_ta::indicators::bollinger::{bollinger_into, bollinger_lookback, BollingerOutput};
 
 let prices = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0];
 let mut out = BollingerOutput {

@@ -1,9 +1,9 @@
-# fast-ta
+# liq-ta — Latent Infinity Quant Technical Analysis
 
-High-performance technical analysis library for Rust.
+liq-ta is Latent Infinity Quant Technical Analysis: a high-performance technical analysis library for Rust.
 
-[![Crates.io](https://img.shields.io/crates/v/fast-ta.svg)](https://crates.io/crates/fast-ta)
-[![Documentation](https://docs.rs/fast-ta/badge.svg)](https://docs.rs/fast-ta)
+[![Crates.io](https://img.shields.io/crates/v/liq-ta.svg)](https://crates.io/crates/liq-ta)
+[![Documentation](https://docs.rs/liq-ta/badge.svg)](https://docs.rs/liq-ta)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ## Features
@@ -20,13 +20,13 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-fast-ta = "0.1"
+liq-ta = "0.1"
 ```
 
 Calculate a simple moving average:
 
 ```rust
-use fast_ta::prelude::*;
+use liq_ta::prelude::*;
 
 let prices = vec![44.0, 44.5, 43.5, 44.0, 44.5, 45.0, 45.5, 46.0, 46.5, 47.0];
 let sma = sma(&prices, 5).unwrap();
@@ -76,7 +76,7 @@ assert!((sma[4] - 44.1).abs() < 0.01);
 The simplest way to use indicators:
 
 ```rust
-use fast_ta::prelude::*;
+use liq_ta::prelude::*;
 
 let prices = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
 
@@ -97,7 +97,7 @@ println!("Histogram: {:?}", macd_output.histogram);
 For high-performance scenarios with pre-allocated buffers:
 
 ```rust
-use fast_ta::prelude::*;
+use liq_ta::prelude::*;
 
 let prices = vec![1.0; 10000];
 let mut output = vec![0.0; 10000];
@@ -115,7 +115,7 @@ ema_into(&prices, 20, &mut output)?;
 For indicators with many parameters:
 
 ```rust
-use fast_ta::prelude::*;
+use liq_ta::prelude::*;
 
 let prices = vec![1.0; 100];
 
@@ -141,7 +141,7 @@ let bands = Bollinger::new()
 Some indicators require OHLC (Open, High, Low, Close) data:
 
 ```rust
-use fast_ta::prelude::*;
+use liq_ta::prelude::*;
 
 let high = vec![45.5, 46.0, 46.5, 47.0, 47.5];
 let low = vec![44.0, 44.5, 45.0, 45.5, 46.0];
@@ -168,7 +168,7 @@ let vwap_result = vwap(&high, &low, &close, &volume)?;
 Every indicator has corresponding `*_lookback()` and `*_min_len()` functions:
 
 ```rust
-use fast_ta::prelude::*;
+use liq_ta::prelude::*;
 
 // How many NaN values at the start of output?
 assert_eq!(sma_lookback(20), 19);
@@ -187,7 +187,7 @@ assert_eq!(macd_min_len(12, 26, 9), 34);
 All functions return `Result<T, Error>` with actionable error messages:
 
 ```rust
-use fast_ta::prelude::*;
+use liq_ta::prelude::*;
 
 // Empty input
 let result = sma(&[], 20);
@@ -208,22 +208,22 @@ A command-line interface is available for quick computations:
 
 ```bash
 # Install
-cargo install fast-ta-cli
+cargo install liq-ta-cli
 
 # Calculate SMA
-fast-ta sma prices.csv 20
+liq-ta sma prices.csv 20
 
 # Calculate MACD with output file
-fast-ta macd prices.csv 12,26,9 -o macd_output.csv
+liq-ta macd prices.csv 12,26,9 -o macd_output.csv
 
 # Calculate Bollinger Bands
-fast-ta bollinger prices.csv 20,2.0
+liq-ta bollinger prices.csv 20,2.0
 
 # Get help
-fast-ta --help
+liq-ta --help
 ```
 
-See [fast-ta-cli README](crates/fast-ta-cli/README.md) for full CLI documentation.
+See [liq-ta-cli README](crates/liq-ta-cli/README.md) for full CLI documentation.
 
 ## Performance
 
@@ -260,7 +260,7 @@ See [docs/benchmarking-guide.md](docs/benchmarking-guide.md) for comprehensive b
 
 ## Numeric Behavior
 
-fast-ta follows strict numeric policies for correctness and performance:
+liq-ta follows strict numeric policies for correctness and performance:
 
 - **IEEE 754 NaN propagation**: Leverages automatic NaN propagation where possible for optimal performance
 - **Infinity handling**: Both NaN and ±Infinity propagate through all indicators

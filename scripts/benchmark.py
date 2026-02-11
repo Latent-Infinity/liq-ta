@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Fast-TA Benchmark Runner
+liq-ta Benchmark Runner
 
-A modern CLI tool for running and comparing fast-ta vs ta-lib benchmarks.
+A modern CLI tool for running and comparing liq-ta vs ta-lib benchmarks.
 Uses Criterion for benchmarking and provides clear, colorful comparison tables.
 """
 
@@ -23,7 +23,7 @@ from rich.text import Text
 
 app = typer.Typer(
     name="benchmark",
-    help="Run and compare fast-ta vs ta-lib benchmarks",
+    help="Run and compare liq-ta vs ta-lib benchmarks",
     add_completion=False,
 )
 
@@ -145,7 +145,7 @@ class BenchmarkRunner:
 
     def detect_latest_baseline(self, indicator: str = "stochastic") -> Optional[str]:
         """Auto-detect the most recent baseline for an indicator."""
-        indicator_dir = self.results_dir / indicator / "fast-ta" / "100000"
+        indicator_dir = self.results_dir / indicator / "liq-ta" / "100000"
 
         if not indicator_dir.exists():
             return None
@@ -182,7 +182,7 @@ class BenchmarkRunner:
         Returns structure:
         {
             "indicator_name": {
-                "fast-ta": {"p5": 123.4, "p21": 125.6, ..., "overall": 124.5},
+                "liq-ta": {"p5": 123.4, "p21": 125.6, ..., "overall": 124.5},
                 "ta-lib": {"p5": 200.1, "p21": 202.3, ..., "overall": 201.2}
             }
         }
@@ -200,12 +200,12 @@ class BenchmarkRunner:
         results = {}
 
         for indicator in indicators:
-            fast_ta = self.get_period_times(indicator, "fast-ta", size, baseline)
+            liq_ta = self.get_period_times(indicator, "liq-ta", size, baseline)
             ta_lib = self.get_period_times(indicator, "ta-lib", size, baseline)
 
-            if fast_ta and ta_lib:
+            if liq_ta and ta_lib:
                 results[indicator] = {
-                    "fast-ta": fast_ta,
+                    "liq-ta": liq_ta,
                     "ta-lib": ta_lib,
                 }
 
@@ -228,7 +228,7 @@ def create_comparison_table(
     results: Dict[str, Dict[str, Dict[str, float]]],
     sort_by: str = "ratio"
 ) -> Table:
-    """Create a rich table comparing fast-ta vs ta-lib with per-period analysis."""
+    """Create a rich table comparing liq-ta vs ta-lib with per-period analysis."""
 
     # Determine which periods are present
     all_periods = set()
@@ -240,7 +240,7 @@ def create_comparison_table(
     periods = sorted(all_periods, key=lambda p: int(p[1:]) if p[1:].isdigit() else 0)
 
     table = Table(
-        title="Fast-TA vs TA-Lib Benchmark Comparison (100k elements)",
+        title="liq-ta vs TA-Lib Benchmark Comparison (100k elements)",
         box=box.ROUNDED,
         show_header=True,
         header_style="bold cyan",
@@ -258,17 +258,17 @@ def create_comparison_table(
     # Compute statistics
     comparisons = []
     for indicator, data in results.items():
-        fast_ta = data["fast-ta"]
+        liq_ta = data["liq-ta"]
         ta_lib = data["ta-lib"]
 
         # Calculate ratios for each period
         period_ratios = {}
         for period in periods:
-            if period in fast_ta and period in ta_lib:
-                period_ratios[period] = fast_ta[period] / ta_lib[period]
+            if period in liq_ta and period in ta_lib:
+                period_ratios[period] = liq_ta[period] / ta_lib[period]
 
         # Overall ratio
-        overall_ratio = fast_ta.get("overall", 0) / ta_lib.get("overall", 1)
+        overall_ratio = liq_ta.get("overall", 0) / ta_lib.get("overall", 1)
 
         # Analyze period-dependency
         if period_ratios:
@@ -369,9 +369,9 @@ def print_summary(results: Dict[str, Dict[str, Dict[str, float]]]):
 
     comparisons = []
     for data in results.values():
-        fast_ta = data["fast-ta"].get("overall", 0)
+        liq_ta = data["liq-ta"].get("overall", 0)
         ta_lib = data["ta-lib"].get("overall", 1)
-        ratio = fast_ta / ta_lib
+        ratio = liq_ta / ta_lib
         comparisons.append(ratio)
 
     faster = sum(1 for r in comparisons if r < 0.98)
@@ -419,7 +419,7 @@ def run(
     ),
 ):
     """
-    Run benchmarks and compare fast-ta vs ta-lib performance.
+    Run benchmarks and compare liq-ta vs ta-lib performance.
 
     Examples:
         # Run all benchmarks
@@ -553,7 +553,7 @@ def results(
     if not results:
         console.print(f"[yellow]No results found for baseline '{baseline}'[/yellow]")
         console.print("\nTip: Check available baselines:")
-        console.print(f"  ls {results_dir}/*/fast-ta/100000/")
+        console.print(f"  ls {results_dir}/*/liq-ta/100000/")
         raise typer.Exit(1)
 
     print_summary(results)

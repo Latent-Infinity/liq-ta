@@ -1,7 +1,7 @@
 # HOSF Indicator API Draft
 
 ## Overview
-High Order Statistical Features (HOSF) are rolling-window indicators that follow the standard fast-ta API:
+High Order Statistical Features (HOSF) are rolling-window indicators that follow the standard liq-ta API:
 - `indicator(...) -> Result<Vec<T>>`
 - `indicator_into(...) -> Result<usize>`
 - `indicator_lookback(...) -> usize`
@@ -10,16 +10,16 @@ High Order Statistical Features (HOSF) are rolling-window indicators that follow
 All outputs are full-length with NaN prefix of length `lookback`.
 
 ## Proposed Modules
-- `crates/fast-ta/src/indicators/skew.rs`
-- `crates/fast-ta/src/indicators/kurtosis.rs`
-- `crates/fast-ta/src/indicators/moment3.rs`
-- `crates/fast-ta/src/indicators/moment4.rs`
+- `crates/liq-ta/src/indicators/skew.rs`
+- `crates/liq-ta/src/indicators/kurtosis.rs`
+- `crates/liq-ta/src/indicators/moment3.rs`
+- `crates/liq-ta/src/indicators/moment4.rs`
 
 ## API Signatures
 
 ```rust
-use fast_ta::traits::SeriesElement;
-use fast_ta::error::Result;
+use liq_ta::traits::SeriesElement;
+use liq_ta::error::Result;
 
 // Rolling skewness (third standardized moment)
 pub fn skew<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>>;
@@ -59,4 +59,4 @@ pub const fn moment4_min_len(period: usize) -> usize;
   - `kurtosis = m4 / m2^2 - 3`
 
 ## Exports
-Add to `crates/fast-ta/src/indicators/mod.rs` and `crates/fast-ta/src/prelude.rs`.
+Add to `crates/liq-ta/src/indicators/mod.rs` and `crates/liq-ta/src/prelude.rs`.

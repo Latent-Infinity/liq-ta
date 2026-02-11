@@ -1,6 +1,6 @@
-# fast-ta Optimization Guide
+# liq-ta Optimization Guide
 
-This document is the **optimization playbook** for fast-ta indicators. It defines:
+This document is the **optimization playbook** for liq-ta indicators. It defines:
 - the **performance contract** (what “faster” means in this repo),
 - the **correctness contract** (NaN/Inf behavior),
 - a **decision framework** for algorithm selection and micro-optimizations,
@@ -152,7 +152,7 @@ Do **not** guess thresholds. Bench them and document the crossover.
 ## 3) Correctness Contract (NaN/Inf)
 
 ### 3.1 Default policy
-fast-ta defaults to **strict IEEE 754 propagation** unless documented otherwise.
+liq-ta defaults to **strict IEEE 754 propagation** unless documented otherwise.
 
 ### 3.2 Indicator classes: NaN behavior
 - **Windowed indicators**: any NaN/Inf inside the active window yields NaN output at that position; outputs **recover** once NaN exits the window.
@@ -340,7 +340,7 @@ For T3 (6 stages): 6 × 2 cycles saved = ~12 cycles saved per element
 **Inf/NaN Considerations**
 - For finite inputs: Mathematically identical
 - For Inf inputs: `x - e` can produce `Inf - Inf = NaN` (differs from standard form)
-- **fast-ta policy**: Accept finite-domain equivalence; non-finite inputs are invalid
+- **liq-ta policy**: Accept finite-domain equivalence; non-finite inputs are invalid
 - Alternative: Add rare-path guard `if !x.is_finite() || !e.is_finite()` (costs performance)
 
 **When to Apply**

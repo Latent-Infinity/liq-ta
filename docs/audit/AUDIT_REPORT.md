@@ -1,6 +1,6 @@
 # Rust Codebase Standards Compliance Audit Report
 
-**Project:** fast-ta (Fast Technical Analysis Library)
+**Project:** liq-ta (Fast Technical Analysis Library)
 **Audit Date:** 2025-12-31
 **Spec ID:** 011-audit-codebase-for-rust-standards-compliance
 **Standards Document:** `docs/rust-code-standards.md`
@@ -9,7 +9,7 @@
 
 ## Executive Summary
 
-A comprehensive standards compliance audit was conducted on the fast-ta Rust codebase, covering 60+ source files across the core library (fast-ta) and CLI crate (fast-ta-cli). The audit evaluated all code against the established `rust-code-standards.md` document, focusing on SOLID, DRY, and KISS principles while maintaining zero performance regression.
+A comprehensive standards compliance audit was conducted on the liq-ta Rust codebase, covering 60+ source files across the core library (liq-ta) and CLI crate (liq-ta-cli). The audit evaluated all code against the established `rust-code-standards.md` document, focusing on SOLID, DRY, and KISS principles while maintaining zero performance regression.
 
 ### Key Findings
 
@@ -34,8 +34,8 @@ The codebase demonstrates excellent adherence to Rust best practices. The majori
 
 | Crate | Role | Files Audited |
 |-------|------|---------------|
-| fast-ta | Core library | 50+ indicator implementations, kernels, traits, utils |
-| fast-ta-cli | CLI interface | main.rs, args.rs, csv_parser.rs, csv_writer.rs, error.rs |
+| liq-ta | Core library | 50+ indicator implementations, kernels, traits, utils |
+| liq-ta-cli | CLI interface | main.rs, args.rs, csv_parser.rs, csv_writer.rs, error.rs |
 
 ### Standards Sections Evaluated
 
@@ -86,7 +86,7 @@ The codebase demonstrates excellent adherence to Rust best practices. The majori
 
 ### 2. KISS Violation: Unnecessary Iterator Pattern
 
-**Location:** `crates/fast-ta/src/kernels/rolling_extrema.rs`
+**Location:** `crates/liq-ta/src/kernels/rolling_extrema.rs`
 **Violation Type:** KISS (Unnecessary complexity)
 **Standards Section:** Section 3 (Iterator Chains)
 
@@ -114,7 +114,7 @@ for i in 0..n {
 
 ### 3. KISS Violation: Redundant Conditionals
 
-**Location:** `crates/fast-ta/src/indicators/mama.rs`
+**Location:** `crates/liq-ta/src/indicators/mama.rs`
 **Violation Type:** KISS (Dead code, redundant checks)
 **Standards Section:** General code quality
 
@@ -145,7 +145,7 @@ for i in 6..n {
 
 ### 4. KISS Violation: Redundant Conditionals in HT Core
 
-**Location:** `crates/fast-ta/src/indicators/ht_core.rs`
+**Location:** `crates/liq-ta/src/indicators/ht_core.rs`
 **Violation Type:** KISS (Redundant checks)
 **Standards Section:** General code quality
 
@@ -191,7 +191,7 @@ data.validate_min_length(min_len, "indicator")?;
 
 ### 6. DRY Violation: Hilbert Transform Code
 
-**Location:** `crates/fast-ta/src/indicators/ht_trendline.rs`
+**Location:** `crates/liq-ta/src/indicators/ht_trendline.rs`
 **Violation Type:** DRY (Significant duplication)
 **Standards Section:** General code quality
 
@@ -205,7 +205,7 @@ data.validate_min_length(min_len, "indicator")?;
 
 ### 7. DRY Violation: Candlestick Pattern Helpers
 
-**Location:** `crates/fast-ta/src/indicators/candlestick/*.rs`
+**Location:** `crates/liq-ta/src/indicators/candlestick/*.rs`
 **Violation Type:** DRY (Duplicate helper functions)
 **Standards Section:** General code quality
 
@@ -219,7 +219,7 @@ data.validate_min_length(min_len, "indicator")?;
 
 ### 8. Performance: Constants in Hot Loop
 
-**Location:** `crates/fast-ta/src/indicators/ultosc.rs`
+**Location:** `crates/liq-ta/src/indicators/ultosc.rs`
 **Violation Type:** Performance (Unnecessary computation in loop)
 **Standards Section:** Section 16 (Hot Paths)
 
@@ -249,7 +249,7 @@ for i in lookback..n {
 
 ### 9. Missing Documentation: Clippy Allow Directives
 
-**Location:** `crates/fast-ta/src/lib.rs`
+**Location:** `crates/liq-ta/src/lib.rs`
 **Violation Type:** Standards Compliance (Section 17)
 **Standards Section:** Section 17 (Tooling & Lints)
 
@@ -263,7 +263,7 @@ for i in lookback..n {
 
 ### 10. CLI: HashMap Capacity
 
-**Location:** `crates/fast-ta-cli/src/csv_parser.rs`
+**Location:** `crates/liq-ta-cli/src/csv_parser.rs`
 **Violation Type:** Section 2 (Pre-allocation)
 **Standards Section:** Section 2 (Collections)
 
@@ -453,10 +453,10 @@ Performance verification requires manual execution of:
 
 ```bash
 # Capture baseline (if not already done)
-cargo +nightly bench -p fast-ta -- --save-baseline audit-baseline
+cargo +nightly bench -p liq-ta -- --save-baseline audit-baseline
 
 # Compare after audit
-cargo +nightly bench -p fast-ta -- --baseline audit-baseline
+cargo +nightly bench -p liq-ta -- --baseline audit-baseline
 ```
 
 ### Expected Outcome
@@ -510,7 +510,7 @@ All tests should pass. Changes were semantically equivalent:
 
 1. **Run Manual Verification**
    - Execute `cargo test --workspace` to verify all tests pass
-   - Execute `cargo +nightly bench -p fast-ta -- --baseline audit-baseline` to verify no regression
+   - Execute `cargo +nightly bench -p liq-ta -- --baseline audit-baseline` to verify no regression
    - Execute `cargo clippy --workspace -- -D warnings` to verify no new warnings
 
 2. **Update Benchmark Documentation**

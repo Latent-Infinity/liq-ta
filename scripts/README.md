@@ -1,6 +1,6 @@
-# Fast-TA Benchmark Scripts
+# liq-ta Benchmark Scripts
 
-Modern Python CLI for running and comparing fast-ta vs ta-lib benchmarks with beautiful output.
+Modern Python CLI for running and comparing liq-ta vs ta-lib benchmarks with beautiful output.
 
 ## Installation
 
@@ -15,7 +15,7 @@ pip install -r scripts/requirements.txt
 # List all available indicators
 ./scripts/benchmark.py list
 
-# Run a quick benchmark comparing fast-ta vs ta-lib
+# Run a quick benchmark comparing liq-ta vs ta-lib
 ./scripts/benchmark.py run stochastic
 
 # Run benchmarks for multiple indicators
@@ -44,12 +44,12 @@ pip install -r scripts/requirements.txt
 ## Understanding Output
 
 The script shows a color-coded comparison table:
-- 🟢 **Green**: fast-ta is faster (ratio < 0.98)  
+- 🟢 **Green**: liq-ta is faster (ratio < 0.98)  
 - 🟡 **Yellow**: Competitive, within ±2%
-- 🔴 **Red**: fast-ta is slower (ratio > 1.02)
+- 🔴 **Red**: liq-ta is slower (ratio > 1.02)
 
-**Ratio** = fast-ta time / ta-lib time  
-- < 1.0 means fast-ta is faster
+**Ratio** = liq-ta time / ta-lib time  
+- < 1.0 means liq-ta is faster
 - > 1.0 means ta-lib is faster
 
 For your stochastic benchmark question, just run:

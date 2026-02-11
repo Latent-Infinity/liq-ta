@@ -20,14 +20,14 @@ ls target/criterion/*/audit-baseline/
 Execute this command to compare current performance against the audit baseline:
 
 ```bash
-cargo +nightly bench -p fast-ta -- --baseline audit-baseline
+cargo +nightly bench -p liq-ta -- --baseline audit-baseline
 ```
 
 This will run all benchmark suites and compare against the baseline saved at audit start.
 
 ## Benchmark Suites
 
-### 1. Core Indicators (`crates/fast-ta/benches/indicators.rs`)
+### 1. Core Indicators (`crates/liq-ta/benches/indicators.rs`)
 
 **Benchmarks**: SMA, EMA, RSI, MACD, Bollinger, ATR, Stochastic, ADX, Williams%R, Donchian, OBV, VWAP
 
@@ -48,13 +48,13 @@ This will run all benchmark suites and compare against the baseline saved at aud
 | OBV (100K)  | - | - | - | - |
 | VWAP (100K) | - | - | - | - |
 
-### 2. TA-Lib Comparison (`crates/fast-ta/benches/talib_comparison.rs`)
+### 2. TA-Lib Comparison (`crates/liq-ta/benches/talib_comparison.rs`)
 
 **Categories**: Moving Averages, Momentum, Trend, Volatility, Stochastic, Volume, Statistics
 
 **Input Size**: 100,000 elements
 
-| Category | Indicator | fast-ta Time | TA-Lib Time | Speedup | Change vs Baseline |
+| Category | Indicator | liq-ta Time | TA-Lib Time | Speedup | Change vs Baseline |
 |----------|-----------|--------------|-------------|---------|-------------------|
 | Moving Averages | SMA | - | - | - | - |
 | Moving Averages | EMA | - | - | - | - |
@@ -92,7 +92,7 @@ This will run all benchmark suites and compare against the baseline saved at aud
 | Other | MIDPRICE | - | - | - | - |
 | Other | BOP | - | - | - | - |
 
-### 3. Workload Simulation (`crates/fast-ta/benches/workload.rs`)
+### 3. Workload Simulation (`crates/liq-ta/benches/workload.rs`)
 
 **Scenario**: Realistic backtesting workload with 12 indicators (SMA, EMA, RSI, MACD, ATR, Bollinger, Stochastic, ADX, OBV, VWAP)
 
@@ -157,18 +157,18 @@ Since cargo commands are blocked in the automation environment, the user must:
 
 1. **Navigate to project root**:
    ```bash
-   cd /path/to/fast-ta
+   cd /path/to/liq-ta
    ```
 
 2. **Verify baseline exists**:
    ```bash
    ls target/criterion/*/audit-baseline/
    ```
-   If missing, run: `cargo +nightly bench -p fast-ta -- --save-baseline audit-baseline`
+   If missing, run: `cargo +nightly bench -p liq-ta -- --save-baseline audit-baseline`
 
 3. **Run comparison benchmarks**:
    ```bash
-   cargo +nightly bench -p fast-ta -- --baseline audit-baseline
+   cargo +nightly bench -p liq-ta -- --baseline audit-baseline
    ```
 
 4. **Check for regressions**:

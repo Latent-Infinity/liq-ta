@@ -1,4 +1,4 @@
-# Benchmarking Guide (fast-ta)
+# Benchmarking Guide (liq-ta)
 
 This guide explains how to run benchmarks effectively with variance control and proper statistical analysis.
 
@@ -46,7 +46,7 @@ cargo bench --bench talib_comparison -- "sma/100000"
 ### Benchmark Suites
 
 **1. `talib_comparison.rs`** (35 indicators)
-- Compares fast-ta vs TA-Lib performance
+- Compares liq-ta vs TA-Lib performance
 - Default: 100,000 elements
 - Purpose: Production performance validation
 
@@ -418,7 +418,7 @@ fn bench_my_indicator(c: &mut Criterion) {
         let data = generate_test_data(size);
 
         group.bench_with_input(
-            BenchmarkId::new("fast_ta", size),
+            BenchmarkId::new("liq_ta", size),
             &size,
             |b, _| {
                 b.iter(|| {
