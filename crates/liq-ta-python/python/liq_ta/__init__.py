@@ -38,9 +38,26 @@ from liq_ta._liq_ta import (
     ht_trendline,
     mama,
     mavp,
+    hma,
+    gaussian_filter,
+    gaussian_channel,
     # Momentum
     rsi,
     macd,
+    qqe,
+    ao,
+    bulls_power,
+    bears_power,
+    demarker,
+    osma,
+    vortex,
+    rvi,
+    dpo,
+    connors_rsi,
+    stc,
+    laguerre_rsi,
+    dss_bressert,
+    supertrend,
     mom,
     roc,
     rocp,
@@ -66,12 +83,22 @@ from liq_ta._liq_ta import (
     stochastic_slow,
     williams_r,
     adx,
+    ichimoku,
     # Volatility
     atr,
     true_range,
     bollinger,
     donchian,
+    keltner_channel,
     rolling_stddev,
+    chop,
+    ulcer_index,
+    hurst,
+    autocorr,
+    hma_atr_bands,
+    hma_bollinger_bands,
+    vwap_atr_bands,
+    vwap_bollinger_bands,
     # Volume
     obv,
     vwap,
@@ -161,9 +188,38 @@ from liq_ta._liq_ta import (
     cdl_rise_fall_3methods,
     cdl_concealing_baby_swallow,
     cdl_xside_gap_3methods,
+    get_indicator_registry,
 )
 
-__version__ = "0.1.0"
+class LiqTaError(ValueError):
+    """Base class for user-facing liq-ta API errors."""
+
+
+class IndicatorNotFoundError(LiqTaError):
+    """Raised when an indicator name cannot be resolved."""
+
+
+class IndicatorArgumentError(LiqTaError):
+    """Raised when indicator arguments or argument shapes are invalid."""
+
+
+class IndicatorMetadataError(LiqTaError):
+    """Raised when runtime indicator metadata is inconsistent."""
+
+
+_RUNTIME_INDICATOR_METADATA = {
+    name: {
+        "name": name,
+        "category": category,
+        "input_shape": input_shape,
+        "inputs": list(inputs),
+        "params": list(params),
+        "outputs": list(outputs),
+        "supports_out": supports_out,
+    }
+    for name, category, input_shape, inputs, params, outputs, supports_out in get_indicator_registry()
+}
+
 
 # Indicator metadata registry
 INDICATORS = {
@@ -441,6 +497,14 @@ INDICATORS = {
         "outputs": ["macd_line", "signal_line", "histogram"],
         "supports_out": False,
     },
+    "qqe": {
+        "name": "Quantitative Qualitative Estimation",
+        "category": "momentum",
+        "inputs": ["data"],
+        "params": ["rsi_period", "smoothing_period", "wilders_period", "factor"],
+        "outputs": ["qqe", "upper_band", "lower_band"],
+        "supports_out": False,
+    },
     "stochastic": {
         "name": "Stochastic Oscillator",
         "category": "momentum",
@@ -479,6 +543,14 @@ INDICATORS = {
         "inputs": ["high", "low", "close"],
         "params": ["period"],
         "outputs": ["adx", "plus_di", "minus_di"],
+        "supports_out": False,
+    },
+    "ichimoku": {
+        "name": "Ichimoku Kinko Hyo",
+        "category": "trend",
+        "inputs": ["high", "low", "close"],
+        "params": ["tenkan_period", "kijun_period", "senkou_b_period", "displacement"],
+        "outputs": ["tenkan", "kijun", "senkou_a", "senkou_b", "chikou"],
         "supports_out": False,
     },
     "adxr": {
@@ -543,6 +615,14 @@ INDICATORS = {
         "category": "volatility",
         "inputs": ["high", "low"],
         "params": ["period"],
+        "outputs": ["upper", "middle", "lower"],
+        "supports_out": False,
+    },
+    "keltner_channel": {
+        "name": "Keltner Channel",
+        "category": "volatility",
+        "inputs": ["high", "low", "close"],
+        "params": ["period", "atr_multiplier"],
         "outputs": ["upper", "middle", "lower"],
         "supports_out": False,
     },
@@ -728,6 +808,44 @@ INDICATORS = {
     },
 }
 
+# Auto-merge indicators from Rust registry not already in INDICATORS
+for _name, _meta in _RUNTIME_INDICATOR_METADATA.items():
+    if _name not in INDICATORS:
+        INDICATORS[_name] = {
+            "name": _meta["name"],
+            "category": _meta["category"],
+            "inputs": _meta["inputs"],
+            "params": _meta["params"],
+            "outputs": _meta["outputs"],
+            "supports_out": _meta["supports_out"],
+        }
+
+
+def _combined_indicator_metadata():
+    merged = dict(INDICATORS)
+    for name, meta in _RUNTIME_INDICATOR_METADATA.items():
+        base = merged.pop(name, None)
+        if base is None:
+            merged[name] = meta
+        else:
+            merged[name] = {**base, **meta}
+    return merged
+
+
+def _normalize_indicator_name(name):
+    if not isinstance(name, str):
+        raise IndicatorArgumentError(
+            f"indicator name must be a string, got {type(name).__name__}"
+        )
+    normalized = name.strip()
+    if not normalized:
+        raise IndicatorArgumentError("indicator name must not be empty")
+    return normalized
+
+
+def _known_categories(metadata):
+    return sorted({meta["category"] for meta in metadata.values()})
+
 
 def list_indicators(category=None):
     """List available indicators with metadata.
@@ -756,8 +874,23 @@ def list_indicators(category=None):
         >>> momentum = liq_ta.list_indicators(category='momentum')
     """
     result = []
-    for func_name, meta in INDICATORS.items():
-        if category is None or meta["category"] == category:
+    combined = _combined_indicator_metadata()
+    normalized_category = None
+
+    if category is not None:
+        if not isinstance(category, str):
+            raise IndicatorArgumentError(
+                f"category must be a string, got {type(category).__name__}"
+            )
+        normalized_category = category.strip().lower()
+        categories = _known_categories(combined)
+        if normalized_category not in categories:
+            raise IndicatorArgumentError(
+                f"unknown category '{category}'. valid categories: {', '.join(categories)}"
+            )
+
+    for func_name, meta in combined.items():
+        if normalized_category is None or meta["category"] == normalized_category:
             result.append({"function": func_name, **meta})
     return result
 
@@ -776,9 +909,124 @@ def get_indicator_info(name):
         >>> info = liq_ta.get_indicator_info('macd')
         >>> print(info['outputs'])  # ['macd_line', 'signal_line', 'histogram']
     """
-    if name in INDICATORS:
-        return {"function": name, **INDICATORS[name]}
+    if not isinstance(name, str):
+        return None
+    normalized = name.strip()
+    if not normalized:
+        return None
+
+    combined = _combined_indicator_metadata()
+    if normalized in combined:
+        return {"function": normalized, **combined[normalized]}
     return None
+
+
+def require_indicator_info(name):
+    """Get indicator metadata or raise a deterministic user-facing error."""
+    normalized = _normalize_indicator_name(name)
+    info = get_indicator_info(normalized)
+    if info is not None:
+        return info
+
+    available = ", ".join(sorted(_combined_indicator_metadata().keys()))
+    raise IndicatorNotFoundError(
+        f"unknown indicator '{normalized}'. available indicators: {available}"
+    )
+
+
+def validate_indicator_metadata(raise_on_error=True):
+    """Validate merged indicator metadata registry integrity.
+
+    Args:
+        raise_on_error: If True, raise `IndicatorMetadataError` on first failure set.
+
+    Returns:
+        A list of validation error messages. Empty list means metadata is valid.
+    """
+    combined = _combined_indicator_metadata()
+    diagnostics = []
+
+    runtime_names = set(_RUNTIME_INDICATOR_METADATA.keys())
+
+    for indicator_name, meta in combined.items():
+        for required_key in (
+            "category",
+            "inputs",
+            "params",
+            "outputs",
+            "supports_out",
+        ):
+            if required_key not in meta:
+                diagnostics.append(
+                    f"indicator '{indicator_name}' missing required key '{required_key}'"
+                )
+
+        inputs = meta.get("inputs")
+        params = meta.get("params")
+        outputs = meta.get("outputs")
+        input_shape = meta.get("input_shape")
+        supports_out = meta.get("supports_out")
+
+        if indicator_name in runtime_names:
+            if "input_shape" not in meta:
+                diagnostics.append(
+                    f"indicator '{indicator_name}' missing required key 'input_shape'"
+                )
+            elif not isinstance(input_shape, str) or not input_shape:
+                diagnostics.append(
+                    f"indicator '{indicator_name}' has invalid input_shape metadata"
+                )
+
+        if not isinstance(inputs, list):
+            diagnostics.append(f"indicator '{indicator_name}' has non-list inputs metadata")
+        if not isinstance(params, list):
+            diagnostics.append(f"indicator '{indicator_name}' has non-list params metadata")
+        if not isinstance(outputs, list) or len(outputs) == 0:
+            diagnostics.append(
+                f"indicator '{indicator_name}' has invalid outputs metadata (must be non-empty list)"
+            )
+        if not isinstance(supports_out, bool):
+            diagnostics.append(
+                f"indicator '{indicator_name}' has non-boolean supports_out metadata"
+            )
+
+        function_target = globals().get(indicator_name)
+        if not callable(function_target):
+            diagnostics.append(
+                f"indicator '{indicator_name}' metadata exists but callable is not exported"
+            )
+
+    if diagnostics and raise_on_error:
+        raise IndicatorMetadataError("; ".join(diagnostics))
+    return diagnostics
+
+
+def compute_indicator(name, *args, debug=False, **kwargs):
+    """Compute an indicator dynamically by name.
+
+    This helper provides a single indicator-selection surface that maps:
+    - unknown indicator selection -> `IndicatorNotFoundError`
+    - malformed arg counts/shapes -> `IndicatorArgumentError`
+    """
+    info = require_indicator_info(name)
+    function_name = info["function"]
+    indicator_fn = globals().get(function_name)
+
+    if not callable(indicator_fn):
+        raise IndicatorMetadataError(
+            f"indicator '{function_name}' is registered but not callable"
+        )
+
+    try:
+        return indicator_fn(*args, **kwargs)
+    except TypeError as exc:
+        message = f"invalid argument shape for indicator '{function_name}': {exc}"
+        if debug:
+            message += (
+                f" | expected_inputs={info.get('inputs', [])}"
+                f" expected_params={info.get('params', [])}"
+            )
+        raise IndicatorArgumentError(message) from exc
 
 
 __all__ = [
@@ -799,7 +1047,23 @@ __all__ = [
     "ht_trendline",
     "mama",
     "mavp",
+    "hma",
+    "gaussian_filter",
+    "gaussian_channel",
     # Momentum
+    "ao",
+    "bulls_power",
+    "bears_power",
+    "demarker",
+    "osma",
+    "vortex",
+    "rvi",
+    "dpo",
+    "connors_rsi",
+    "stc",
+    "laguerre_rsi",
+    "dss_bressert",
+    "supertrend",
     "mom",
     "roc",
     "rocp",
@@ -818,11 +1082,13 @@ __all__ = [
     "ultosc",
     "rsi",
     "macd",
+    "qqe",
     "stochastic",
     "stochastic_fast",
     "stochastic_slow",
     "williams_r",
     "adx",
+    "ichimoku",
     "adxr",
     "dx",
     "plus_dm",
@@ -832,7 +1098,16 @@ __all__ = [
     "true_range",
     "bollinger",
     "donchian",
+    "keltner_channel",
     "rolling_stddev",
+    "chop",
+    "ulcer_index",
+    "hurst",
+    "autocorr",
+    "hma_atr_bands",
+    "hma_bollinger_bands",
+    "vwap_atr_bands",
+    "vwap_bollinger_bands",
     # Volume
     "obv",
     "vwap",
@@ -923,7 +1198,15 @@ __all__ = [
     "cdl_concealing_baby_swallow",
     "cdl_xside_gap_3methods",
     # Metadata
+    "LiqTaError",
+    "IndicatorNotFoundError",
+    "IndicatorArgumentError",
+    "IndicatorMetadataError",
     "INDICATORS",
     "list_indicators",
     "get_indicator_info",
+    "require_indicator_info",
+    "validate_indicator_metadata",
+    "compute_indicator",
+    "get_indicator_registry",
 ]

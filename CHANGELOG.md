@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (2026-02-25: SQX parity + Python binding architecture)
+
+- Completed SQX parity/core extension delivery in `liq-ta`:
+  - P1: `keltner_channel`, `ichimoku`, `qqe`
+  - P2+: `hma`, `supertrend`, `ao`, `bulls_power`, `bears_power`, `demarker`, `osma`,
+    `vortex`, `rvi`, `dpo`, `connors_rsi`, `stc`, `laguerre_rsi`, `dss_bressert`,
+    `chop`, `ulcer_index`, `hurst`, `autocorr`
+  - Gaussian strategy path: `gaussian_filter`, `gaussian_channel`
+  - Composite bands: `hma_atr_bands`, `hma_bollinger_bands`, `vwap_atr_bands`, `vwap_bollinger_bands`
+- Added Python hardening API helpers:
+  - `compute_indicator(name, *args, **kwargs)`
+  - `require_indicator_info(name)`
+  - `validate_indicator_metadata(raise_on_error=...)`
+- Added explicit Python error taxonomy for deterministic failure handling:
+  - `LiqTaError`, `IndicatorNotFoundError`, `IndicatorArgumentError`, `IndicatorMetadataError`
+- Added migration/onboarding documentation:
+  - `docs/python-binding-migration-guide.md`
+
+### Changed (2026-02-25: compatibility and diagnostics)
+
+- Standardized CLI error-class output with stable tags:
+  - `io_error`, `csv_parse_error`, `indicator_error`, `invalid_argument`
+- Added optional CLI debug diagnostics:
+  - `--debug-errors`
+  - `LIQ_TA_DEBUG_ERRORS=1` environment toggle
+- Preserved backward compatibility for existing manual Python wrappers while moving
+  new additions to registry-first onboarding.
+
+### Documentation (2026-02-25)
+
+- Updated `docs/sqx-indicator-gap-analysis.md` with implementation status and
+  remaining lower-priority gap scope.
+- Expanded `docs/python-binding-architecture-stage0.md` with extension examples,
+  deterministic error contracts, and migration guidance.
+
 ### Fixed
 
 - **CRITICAL: ADX Wilder Smoothing Math Bug** (2025-12-28)

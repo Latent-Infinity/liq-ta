@@ -17,109 +17,152 @@
 use numpy::{PyArray1, PyArrayMethods, PyReadonlyArray1};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+use pyo3::types::PyModule;
+
+mod registry;
 
 /// Convert liq-ta error to Python `ValueError`
 fn to_py_err(e: liq_ta::Error) -> PyErr {
     PyValueError::new_err(e.to_string())
 }
 
+macro_rules! single_output_indicator {
+    ($name:ident, $rust_fn:path, $rust_fn_into:path, $doc:expr) => {
+        #[doc = $doc]
+        #[pyfunction]
+        #[pyo3(signature = (data, period, out=None))]
+        fn $name<'py>(
+            py: Python<'py>,
+            data: PyReadonlyArray1<'py, f64>,
+            period: usize,
+            out: Option<Bound<'py, PyArray1<f64>>>,
+        ) -> PyResult<Bound<'py, PyArray1<f64>>> {
+            let input = data.as_slice()?;
+
+            match out {
+                Some(output) => {
+                    let slice = unsafe { output.as_slice_mut()? };
+                    $rust_fn_into(input, period, slice).map_err(to_py_err)?;
+                    Ok(output)
+                }
+                None => {
+                    let result = $rust_fn(input, period).map_err(to_py_err)?;
+                    Ok(PyArray1::from_vec(py, result))
+                }
+            }
+        }
+    };
+}
+
+macro_rules! single_output_series_indicator {
+    ($name:ident, $rust_fn:path, $rust_fn_into:path, $doc:expr) => {
+        single_output_indicator!($name, $rust_fn, $rust_fn_into, $doc);
+    };
+}
+
+macro_rules! multi_output_indicator {
+    (
+        $name:ident,
+        $doc:expr,
+        |$py:ident, $data:ident, $fast_period:ident, $slow_period:ident, $signal_period:ident| $call:block
+    ) => {
+        #[doc = $doc]
+        #[pyfunction]
+        #[pyo3(signature = (data, fast_period=12, slow_period=26, signal_period=9))]
+        fn $name<'py>(
+            py: Python<'py>,
+            data: PyReadonlyArray1<'py, f64>,
+            fast_period: usize,
+            slow_period: usize,
+            signal_period: usize,
+        ) -> PyResult<(
+            Bound<'py, PyArray1<f64>>,
+            Bound<'py, PyArray1<f64>>,
+            Bound<'py, PyArray1<f64>>,
+        )> {
+            let $py = py;
+            let $data = data;
+            let $fast_period = fast_period;
+            let $slow_period = slow_period;
+            let $signal_period = signal_period;
+            $call
+        }
+    };
+}
+
+macro_rules! ohlc_indicator {
+    ($name:ident, $rust_fn:path, $rust_fn_into:path, $doc:expr) => {
+        #[doc = $doc]
+        #[pyfunction]
+        #[pyo3(signature = (high, low, close, period, out=None))]
+        fn $name<'py>(
+            py: Python<'py>,
+            high: PyReadonlyArray1<'py, f64>,
+            low: PyReadonlyArray1<'py, f64>,
+            close: PyReadonlyArray1<'py, f64>,
+            period: usize,
+            out: Option<Bound<'py, PyArray1<f64>>>,
+        ) -> PyResult<Bound<'py, PyArray1<f64>>> {
+            let h = high.as_slice()?;
+            let l = low.as_slice()?;
+            let c = close.as_slice()?;
+
+            if let Some(output) = out {
+                let slice = unsafe { output.as_slice_mut()? };
+                $rust_fn_into(h, l, c, period, slice).map_err(to_py_err)?;
+                Ok(output)
+            } else {
+                let result = $rust_fn(h, l, c, period).map_err(to_py_err)?;
+                Ok(PyArray1::from_vec(py, result))
+            }
+        }
+    };
+}
+
+macro_rules! register_pyfunction_list {
+    ($module:ident, [$($name:ident),* $(,)?]) => {{
+        $(
+            $module.add_function(wrap_pyfunction!($name, $module)?)?;
+        )*
+        Ok(())
+    }};
+}
+
 // =============================================================================
 // Moving Averages
 // =============================================================================
 
-/// Simple Moving Average (SMA)
-///
-/// Calculates the arithmetic mean of prices over a rolling window.
-///
-/// Args:
-///     data: Input price array (`NumPy` array of f64)
-///     period: The number of periods for the moving average
-///     out: Optional pre-allocated output array for zero-copy writes
-///
-/// Returns:
-///     `NumPy` array with SMA values (first period-1 values are NaN)
-#[pyfunction]
-#[pyo3(signature = (data, period, out=None))]
-fn sma<'py>(
-    py: Python<'py>,
-    data: PyReadonlyArray1<'py, f64>,
-    period: usize,
-    out: Option<Bound<'py, PyArray1<f64>>>,
-) -> PyResult<Bound<'py, PyArray1<f64>>> {
-    let input = data.as_slice()?;
+// Simple Moving Average (SMA)
+//
+// Calculates the arithmetic mean of prices over a rolling window.
+//
+// Args:
+//     data: Input price array (`NumPy` array of f64)
+//     period: The number of periods for the moving average
+//     out: Optional pre-allocated output array for zero-copy writes
+//
+// Returns:
+//     `NumPy` array with SMA values (first period-1 values are NaN)
+single_output_series_indicator!(
+    sma,
+    liq_ta::indicators::sma,
+    liq_ta::indicators::sma_into,
+    "Simple Moving Average (SMA).\n\nCalculates the arithmetic mean of prices over a rolling window."
+);
 
-    if let Some(output) = out {
-        // SAFETY: We have exclusive access during this function call
-        let slice = unsafe { output.as_slice_mut()? };
-        liq_ta::indicators::sma_into(input, period, slice).map_err(to_py_err)?;
-        Ok(output)
-    } else {
-        let result = liq_ta::indicators::sma(input, period).map_err(to_py_err)?;
-        Ok(PyArray1::from_vec(py, result))
-    }
-}
+single_output_series_indicator!(
+    ema,
+    liq_ta::indicators::ema,
+    liq_ta::indicators::ema_into,
+    "Exponential Moving Average (EMA).\n\nCalculates an exponentially weighted average that gives more weight to recent prices."
+);
 
-/// Exponential Moving Average (EMA)
-///
-/// Calculates an exponentially weighted average that gives more weight to recent prices.
-///
-/// Args:
-///     data: Input price array (`NumPy` array of f64)
-///     period: The number of periods for calculating the smoothing factor
-///     out: Optional pre-allocated output array for zero-copy writes
-///
-/// Returns:
-///     `NumPy` array with EMA values (first period-1 values are NaN)
-#[pyfunction]
-#[pyo3(signature = (data, period, out=None))]
-fn ema<'py>(
-    py: Python<'py>,
-    data: PyReadonlyArray1<'py, f64>,
-    period: usize,
-    out: Option<Bound<'py, PyArray1<f64>>>,
-) -> PyResult<Bound<'py, PyArray1<f64>>> {
-    let input = data.as_slice()?;
-
-    if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
-        liq_ta::indicators::ema_into(input, period, slice).map_err(to_py_err)?;
-        Ok(output)
-    } else {
-        let result = liq_ta::indicators::ema(input, period).map_err(to_py_err)?;
-        Ok(PyArray1::from_vec(py, result))
-    }
-}
-
-/// Wilder's Exponential Moving Average
-///
-/// Uses smoothing factor α = 1/period (Wilder's method).
-///
-/// Args:
-///     data: Input price array (`NumPy` array of f64)
-///     period: The number of periods
-///     out: Optional pre-allocated output array for zero-copy writes
-///
-/// Returns:
-///     `NumPy` array with Wilder's EMA values
-#[pyfunction]
-#[pyo3(signature = (data, period, out=None))]
-fn ema_wilder<'py>(
-    py: Python<'py>,
-    data: PyReadonlyArray1<'py, f64>,
-    period: usize,
-    out: Option<Bound<'py, PyArray1<f64>>>,
-) -> PyResult<Bound<'py, PyArray1<f64>>> {
-    let input = data.as_slice()?;
-
-    if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
-        liq_ta::indicators::ema_wilder_into(input, period, slice).map_err(to_py_err)?;
-        Ok(output)
-    } else {
-        let result = liq_ta::indicators::ema_wilder(input, period).map_err(to_py_err)?;
-        Ok(PyArray1::from_vec(py, result))
-    }
-}
+single_output_series_indicator!(
+    ema_wilder,
+    liq_ta::indicators::ema_wilder,
+    liq_ta::indicators::ema_wilder_into,
+    "Wilder's Exponential Moving Average (EMA).\n\nUses smoothing factor α = 1/period (Wilder's method)."
+);
 
 /// Weighted Moving Average (WMA)
 ///
@@ -591,73 +634,78 @@ fn mavp<'py>(
 // Momentum Indicators
 // =============================================================================
 
-/// Relative Strength Index (RSI)
-///
-/// Momentum oscillator measuring speed and magnitude of price changes.
-/// Values range from 0 to 100.
-///
-/// Args:
-///     data: Input price array (`NumPy` array of f64)
-///     period: The number of periods (typically 14)
-///     out: Optional pre-allocated output array for zero-copy writes
-///
-/// Returns:
-///     `NumPy` array with RSI values (0-100 range)
-#[pyfunction]
-#[pyo3(signature = (data, period, out=None))]
-fn rsi<'py>(
-    py: Python<'py>,
-    data: PyReadonlyArray1<'py, f64>,
-    period: usize,
-    out: Option<Bound<'py, PyArray1<f64>>>,
-) -> PyResult<Bound<'py, PyArray1<f64>>> {
-    let input = data.as_slice()?;
+single_output_indicator!(
+    rsi,
+    liq_ta::indicators::rsi,
+    liq_ta::indicators::rsi_into,
+    "Relative Strength Index (RSI).\n\nMomentum oscillator measuring speed and magnitude of price changes.\nValues range from 0 to 100.\n\nArgs:\n    data: Input price array (`NumPy` array of f64)\n    period: The number of periods (typically 14)\n    out: Optional pre-allocated output array for zero-copy writes\n\nReturns:\n    `NumPy` array with RSI values (0-100 range)"
+);
 
-    if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
-        liq_ta::indicators::rsi_into(input, period, slice).map_err(to_py_err)?;
-        Ok(output)
-    } else {
-        let result = liq_ta::indicators::rsi(input, period).map_err(to_py_err)?;
-        Ok(PyArray1::from_vec(py, result))
+// Moving Average Convergence Divergence (MACD).
+//
+// Trend-following momentum indicator showing the relationship between two EMAs.
+//
+// Args:
+//     data: Input price array (`NumPy` array of f64)
+//     `fast_period`: Fast EMA period (default: 12)
+//     `slow_period`: Slow EMA period (default: 26)
+//     `signal_period`: Signal line period (default: 9)
+//
+// Returns:
+//     Tuple of (`macd_line`, `signal_line`, histogram) `NumPy` arrays
+multi_output_indicator!(
+    macd,
+    "Moving Average Convergence Divergence (MACD).\n\nTrend-following momentum indicator showing the relationship between two EMAs.\n\nArgs:\n    data: Input price array (`NumPy` array of f64)\n    `fast_period`: Fast EMA period (default: 12)\n    `slow_period`: Slow EMA period (default: 26)\n    `signal_period`: Signal line period (default: 9)\n\nReturns:\n    Tuple of (`macd_line`, `signal_line`, histogram) `NumPy` arrays",
+    |py, data, fast_period, slow_period, signal_period| {
+        let input = data.as_slice()?;
+        let config = liq_ta::indicators::Macd::new()
+            .with_fast_period(fast_period)
+            .with_slow_period(slow_period)
+            .with_signal_period(signal_period);
+        let result = config.compute(input).map_err(to_py_err)?;
+        Ok((
+            PyArray1::from_vec(py, result.macd_line),
+            PyArray1::from_vec(py, result.signal_line),
+            PyArray1::from_vec(py, result.histogram),
+        ))
     }
-}
+);
 
-/// Moving Average Convergence Divergence (MACD)
+/// Quantitative Qualitative Estimation (QQE)
 ///
-/// Trend-following momentum indicator showing the relationship between two EMAs.
+/// Smoothed RSI with adaptive volatility bands.
 ///
 /// Args:
 ///     data: Input price array (`NumPy` array of f64)
-///     `fast_period`: Fast EMA period (default: 12)
-///     `slow_period`: Slow EMA period (default: 26)
-///     `signal_period`: Signal line period (default: 9)
+///     `rsi_period`: RSI period (default: 14)
+///     `smoothing_period`: RSI smoothing EMA period (default: 5)
+///     `wilders_period`: Volatility smoothing period (default: 14)
+///     factor: Band multiplier (default: 4.236)
 ///
 /// Returns:
-///     Tuple of (`macd_line`, `signal_line`, histogram) `NumPy` arrays
+///     Tuple of (qqe, upper_band, lower_band) `NumPy` arrays
 #[pyfunction]
-#[pyo3(signature = (data, fast_period=12, slow_period=26, signal_period=9))]
-fn macd<'py>(
+#[pyo3(signature = (data, rsi_period=14, smoothing_period=5, wilders_period=14, factor=4.236))]
+fn qqe<'py>(
     py: Python<'py>,
     data: PyReadonlyArray1<'py, f64>,
-    fast_period: usize,
-    slow_period: usize,
-    signal_period: usize,
+    rsi_period: usize,
+    smoothing_period: usize,
+    wilders_period: usize,
+    factor: f64,
 ) -> PyResult<(
     Bound<'py, PyArray1<f64>>,
     Bound<'py, PyArray1<f64>>,
     Bound<'py, PyArray1<f64>>,
 )> {
     let input = data.as_slice()?;
-    let config = liq_ta::indicators::Macd::new()
-        .with_fast_period(fast_period)
-        .with_slow_period(slow_period)
-        .with_signal_period(signal_period);
-    let result = config.compute(input).map_err(to_py_err)?;
+    let result =
+        liq_ta::indicators::qqe(input, rsi_period, smoothing_period, wilders_period, factor)
+            .map_err(to_py_err)?;
     Ok((
-        PyArray1::from_vec(py, result.macd_line),
-        PyArray1::from_vec(py, result.signal_line),
-        PyArray1::from_vec(py, result.histogram),
+        PyArray1::from_vec(py, result.qqe),
+        PyArray1::from_vec(py, result.upper_band),
+        PyArray1::from_vec(py, result.lower_band),
     ))
 }
 
@@ -1510,42 +1558,12 @@ fn minus_dm<'py>(
 // Volatility Indicators
 // =============================================================================
 
-/// Average True Range (ATR)
-///
-/// Measures market volatility using the true range of price movements.
-///
-/// Args:
-///     high: High prices (`NumPy` array of f64)
-///     low: Low prices (`NumPy` array of f64)
-///     close: Close prices (`NumPy` array of f64)
-///     period: The number of periods (typically 14)
-///     out: Optional pre-allocated output array for zero-copy writes
-///
-/// Returns:
-///     `NumPy` array with ATR values
-#[pyfunction]
-#[pyo3(signature = (high, low, close, period, out=None))]
-fn atr<'py>(
-    py: Python<'py>,
-    high: PyReadonlyArray1<'py, f64>,
-    low: PyReadonlyArray1<'py, f64>,
-    close: PyReadonlyArray1<'py, f64>,
-    period: usize,
-    out: Option<Bound<'py, PyArray1<f64>>>,
-) -> PyResult<Bound<'py, PyArray1<f64>>> {
-    let h = high.as_slice()?;
-    let l = low.as_slice()?;
-    let c = close.as_slice()?;
-
-    if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
-        liq_ta::indicators::atr_into(h, l, c, period, slice).map_err(to_py_err)?;
-        Ok(output)
-    } else {
-        let result = liq_ta::indicators::atr(h, l, c, period).map_err(to_py_err)?;
-        Ok(PyArray1::from_vec(py, result))
-    }
-}
+ohlc_indicator!(
+    atr,
+    liq_ta::indicators::atr,
+    liq_ta::indicators::atr_into,
+    "Average True Range (ATR)\n\nMeasures market volatility using the true range of price movements.\n\nArgs:\n    high: High prices (`NumPy` array of f64)\n    low: Low prices (`NumPy` array of f64)\n    close: Close prices (`NumPy` array of f64)\n    period: The number of periods (typically 14)\n    out: Optional pre-allocated output array for zero-copy writes\n\nReturns:\n    `NumPy` array with ATR values"
+);
 
 /// True Range
 ///
@@ -1647,6 +1665,98 @@ fn donchian<'py>(
         PyArray1::from_vec(py, result.upper),
         PyArray1::from_vec(py, result.middle),
         PyArray1::from_vec(py, result.lower),
+    ))
+}
+
+/// Keltner Channel
+///
+/// EMA-based channel with ATR width.
+///
+/// Args:
+///     high: High prices (`NumPy` array of f64)
+///     low: Low prices (`NumPy` array of f64)
+///     close: Close prices (`NumPy` array of f64)
+///     period: EMA/ATR period (default: 20)
+///     `atr_multiplier`: ATR multiplier (default: 2.0)
+///
+/// Returns:
+///     Tuple of (upper, middle, lower) `NumPy` arrays
+#[pyfunction]
+#[pyo3(signature = (high, low, close, period=20, atr_multiplier=2.0))]
+fn keltner_channel<'py>(
+    py: Python<'py>,
+    high: PyReadonlyArray1<'py, f64>,
+    low: PyReadonlyArray1<'py, f64>,
+    close: PyReadonlyArray1<'py, f64>,
+    period: usize,
+    atr_multiplier: f64,
+) -> PyResult<(
+    Bound<'py, PyArray1<f64>>,
+    Bound<'py, PyArray1<f64>>,
+    Bound<'py, PyArray1<f64>>,
+)> {
+    let h = high.as_slice()?;
+    let l = low.as_slice()?;
+    let c = close.as_slice()?;
+    let result =
+        liq_ta::indicators::keltner_channel(h, l, c, period, atr_multiplier).map_err(to_py_err)?;
+    Ok((
+        PyArray1::from_vec(py, result.upper),
+        PyArray1::from_vec(py, result.middle),
+        PyArray1::from_vec(py, result.lower),
+    ))
+}
+
+/// Ichimoku Kinko Hyo
+///
+/// Args:
+///     high: High prices (`NumPy` array of f64)
+///     low: Low prices (`NumPy` array of f64)
+///     close: Close prices (`NumPy` array of f64)
+///     `tenkan_period`: Conversion line period (default: 9)
+///     `kijun_period`: Base line period (default: 26)
+///     `senkou_b_period`: Leading span B period (default: 52)
+///     displacement: Forward/backward shift (default: 26)
+///
+/// Returns:
+///     Tuple of (tenkan, kijun, senkou_a, senkou_b, chikou) `NumPy` arrays
+#[pyfunction]
+#[pyo3(signature = (high, low, close, tenkan_period=9, kijun_period=26, senkou_b_period=52, displacement=26))]
+fn ichimoku<'py>(
+    py: Python<'py>,
+    high: PyReadonlyArray1<'py, f64>,
+    low: PyReadonlyArray1<'py, f64>,
+    close: PyReadonlyArray1<'py, f64>,
+    tenkan_period: usize,
+    kijun_period: usize,
+    senkou_b_period: usize,
+    displacement: usize,
+) -> PyResult<(
+    Bound<'py, PyArray1<f64>>,
+    Bound<'py, PyArray1<f64>>,
+    Bound<'py, PyArray1<f64>>,
+    Bound<'py, PyArray1<f64>>,
+    Bound<'py, PyArray1<f64>>,
+)> {
+    let h = high.as_slice()?;
+    let l = low.as_slice()?;
+    let c = close.as_slice()?;
+    let result = liq_ta::indicators::ichimoku(
+        h,
+        l,
+        c,
+        tenkan_period,
+        kijun_period,
+        senkou_b_period,
+        displacement,
+    )
+    .map_err(to_py_err)?;
+    Ok((
+        PyArray1::from_vec(py, result.tenkan),
+        PyArray1::from_vec(py, result.kijun),
+        PyArray1::from_vec(py, result.senkou_a),
+        PyArray1::from_vec(py, result.senkou_b),
+        PyArray1::from_vec(py, result.chikou),
     ))
 }
 
@@ -2789,8 +2899,492 @@ candlestick_fn!(
 );
 
 // =============================================================================
+// Stage 2 indicators
+// =============================================================================
+
+single_output_series_indicator!(
+    hma,
+    liq_ta::indicators::hma,
+    liq_ta::indicators::hma_into,
+    "Hull Moving Average (HMA)."
+);
+
+#[pyfunction]
+#[pyo3(signature = (data, period=20, sigma=0.5, out=None))]
+fn gaussian_filter<'py>(
+    py: Python<'py>,
+    data: PyReadonlyArray1<'py, f64>,
+    period: usize,
+    sigma: f64,
+    out: Option<Bound<'py, PyArray1<f64>>>,
+) -> PyResult<Bound<'py, PyArray1<f64>>> {
+    let input = data.as_slice()?;
+    if let Some(output) = out {
+        let slice = unsafe { output.as_slice_mut()? };
+        liq_ta::indicators::gaussian_filter_into(input, period, sigma, slice).map_err(to_py_err)?;
+        Ok(output)
+    } else {
+        let result =
+            liq_ta::indicators::gaussian_filter(input, period, sigma).map_err(to_py_err)?;
+        Ok(PyArray1::from_vec(py, result))
+    }
+}
+
+#[pyfunction]
+#[pyo3(signature = (data, period=20, sigma=0.5, multiplier=2.0))]
+fn gaussian_channel<'py>(
+    py: Python<'py>,
+    data: PyReadonlyArray1<'py, f64>,
+    period: usize,
+    sigma: f64,
+    multiplier: f64,
+) -> PyResult<(
+    Bound<'py, PyArray1<f64>>,
+    Bound<'py, PyArray1<f64>>,
+    Bound<'py, PyArray1<f64>>,
+    Bound<'py, PyArray1<f64>>,
+)> {
+    let input = data.as_slice()?;
+    let result = liq_ta::indicators::gaussian_channel(input, period, sigma, multiplier)
+        .map_err(to_py_err)?;
+    Ok((
+        PyArray1::from_vec(py, result.center),
+        PyArray1::from_vec(py, result.upper),
+        PyArray1::from_vec(py, result.lower),
+        PyArray1::from_vec(py, result.trend),
+    ))
+}
+
+#[pyfunction]
+#[pyo3(signature = (high, low))]
+fn ao<'py>(
+    py: Python<'py>,
+    high: PyReadonlyArray1<'py, f64>,
+    low: PyReadonlyArray1<'py, f64>,
+) -> PyResult<Bound<'py, PyArray1<f64>>> {
+    let h = high.as_slice()?;
+    let l = low.as_slice()?;
+    let result = liq_ta::indicators::ao(h, l).map_err(to_py_err)?;
+    Ok(PyArray1::from_vec(py, result))
+}
+
+ohlc_indicator!(
+    bulls_power,
+    liq_ta::indicators::bulls_power,
+    liq_ta::indicators::bulls_power_into,
+    "Bulls Power."
+);
+
+ohlc_indicator!(
+    bears_power,
+    liq_ta::indicators::bears_power,
+    liq_ta::indicators::bears_power_into,
+    "Bears Power."
+);
+
+#[pyfunction]
+#[pyo3(signature = (high, low, period=14, out=None))]
+fn demarker<'py>(
+    py: Python<'py>,
+    high: PyReadonlyArray1<'py, f64>,
+    low: PyReadonlyArray1<'py, f64>,
+    period: usize,
+    out: Option<Bound<'py, PyArray1<f64>>>,
+) -> PyResult<Bound<'py, PyArray1<f64>>> {
+    let h = high.as_slice()?;
+    let l = low.as_slice()?;
+    if let Some(output) = out {
+        let slice = unsafe { output.as_slice_mut()? };
+        liq_ta::indicators::demarker_into(h, l, period, slice).map_err(to_py_err)?;
+        Ok(output)
+    } else {
+        let result = liq_ta::indicators::demarker(h, l, period).map_err(to_py_err)?;
+        Ok(PyArray1::from_vec(py, result))
+    }
+}
+
+#[pyfunction]
+#[pyo3(signature = (data, fast_period=12, slow_period=26, signal_period=9, out=None))]
+fn osma<'py>(
+    py: Python<'py>,
+    data: PyReadonlyArray1<'py, f64>,
+    fast_period: usize,
+    slow_period: usize,
+    signal_period: usize,
+    out: Option<Bound<'py, PyArray1<f64>>>,
+) -> PyResult<Bound<'py, PyArray1<f64>>> {
+    let input = data.as_slice()?;
+    if let Some(output) = out {
+        let slice = unsafe { output.as_slice_mut()? };
+        liq_ta::indicators::osma_into(input, fast_period, slow_period, signal_period, slice)
+            .map_err(to_py_err)?;
+        Ok(output)
+    } else {
+        let result = liq_ta::indicators::osma(input, fast_period, slow_period, signal_period)
+            .map_err(to_py_err)?;
+        Ok(PyArray1::from_vec(py, result))
+    }
+}
+
+#[pyfunction]
+#[pyo3(signature = (high, low, close, period=14))]
+fn vortex<'py>(
+    py: Python<'py>,
+    high: PyReadonlyArray1<'py, f64>,
+    low: PyReadonlyArray1<'py, f64>,
+    close: PyReadonlyArray1<'py, f64>,
+    period: usize,
+) -> PyResult<(Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>)> {
+    let h = high.as_slice()?;
+    let l = low.as_slice()?;
+    let c = close.as_slice()?;
+    let result = liq_ta::indicators::vortex(h, l, c, period).map_err(to_py_err)?;
+    Ok((
+        PyArray1::from_vec(py, result.plus_vi),
+        PyArray1::from_vec(py, result.minus_vi),
+    ))
+}
+
+#[pyfunction]
+#[pyo3(signature = (open, high, low, close, period=10, out=None))]
+fn rvi<'py>(
+    py: Python<'py>,
+    open: PyReadonlyArray1<'py, f64>,
+    high: PyReadonlyArray1<'py, f64>,
+    low: PyReadonlyArray1<'py, f64>,
+    close: PyReadonlyArray1<'py, f64>,
+    period: usize,
+    out: Option<Bound<'py, PyArray1<f64>>>,
+) -> PyResult<Bound<'py, PyArray1<f64>>> {
+    let o = open.as_slice()?;
+    let h = high.as_slice()?;
+    let l = low.as_slice()?;
+    let c = close.as_slice()?;
+    if let Some(output) = out {
+        let slice = unsafe { output.as_slice_mut()? };
+        liq_ta::indicators::rvi_into(o, h, l, c, period, slice).map_err(to_py_err)?;
+        Ok(output)
+    } else {
+        let result = liq_ta::indicators::rvi(o, h, l, c, period).map_err(to_py_err)?;
+        Ok(PyArray1::from_vec(py, result))
+    }
+}
+
+single_output_series_indicator!(
+    dpo,
+    liq_ta::indicators::dpo,
+    liq_ta::indicators::dpo_into,
+    "Detrended Price Oscillator (DPO)."
+);
+
+#[pyfunction]
+#[pyo3(signature = (data, rsi_period=3, streak_period=2, rank_period=100, out=None))]
+fn connors_rsi<'py>(
+    py: Python<'py>,
+    data: PyReadonlyArray1<'py, f64>,
+    rsi_period: usize,
+    streak_period: usize,
+    rank_period: usize,
+    out: Option<Bound<'py, PyArray1<f64>>>,
+) -> PyResult<Bound<'py, PyArray1<f64>>> {
+    let input = data.as_slice()?;
+    if let Some(output) = out {
+        let slice = unsafe { output.as_slice_mut()? };
+        liq_ta::indicators::connors_rsi_into(input, rsi_period, streak_period, rank_period, slice)
+            .map_err(to_py_err)?;
+        Ok(output)
+    } else {
+        let result = liq_ta::indicators::connors_rsi(input, rsi_period, streak_period, rank_period)
+            .map_err(to_py_err)?;
+        Ok(PyArray1::from_vec(py, result))
+    }
+}
+
+#[pyfunction]
+#[pyo3(signature = (data, fast_period=23, slow_period=50, cycle_period=10, smooth_period=3, out=None))]
+fn stc<'py>(
+    py: Python<'py>,
+    data: PyReadonlyArray1<'py, f64>,
+    fast_period: usize,
+    slow_period: usize,
+    cycle_period: usize,
+    smooth_period: usize,
+    out: Option<Bound<'py, PyArray1<f64>>>,
+) -> PyResult<Bound<'py, PyArray1<f64>>> {
+    let input = data.as_slice()?;
+    if let Some(output) = out {
+        let slice = unsafe { output.as_slice_mut()? };
+        liq_ta::indicators::stc_into(
+            input,
+            fast_period,
+            slow_period,
+            cycle_period,
+            smooth_period,
+            slice,
+        )
+        .map_err(to_py_err)?;
+        Ok(output)
+    } else {
+        let result =
+            liq_ta::indicators::stc(input, fast_period, slow_period, cycle_period, smooth_period)
+                .map_err(to_py_err)?;
+        Ok(PyArray1::from_vec(py, result))
+    }
+}
+
+#[pyfunction]
+#[pyo3(signature = (data, gamma=0.5, out=None))]
+fn laguerre_rsi<'py>(
+    py: Python<'py>,
+    data: PyReadonlyArray1<'py, f64>,
+    gamma: f64,
+    out: Option<Bound<'py, PyArray1<f64>>>,
+) -> PyResult<Bound<'py, PyArray1<f64>>> {
+    let input = data.as_slice()?;
+    if let Some(output) = out {
+        let slice = unsafe { output.as_slice_mut()? };
+        liq_ta::indicators::laguerre_rsi_into(input, gamma, slice).map_err(to_py_err)?;
+        Ok(output)
+    } else {
+        let result = liq_ta::indicators::laguerre_rsi(input, gamma).map_err(to_py_err)?;
+        Ok(PyArray1::from_vec(py, result))
+    }
+}
+
+#[pyfunction]
+#[pyo3(signature = (high, low, close, stochastic_period=14, ema_period=5, out=None))]
+fn dss_bressert<'py>(
+    py: Python<'py>,
+    high: PyReadonlyArray1<'py, f64>,
+    low: PyReadonlyArray1<'py, f64>,
+    close: PyReadonlyArray1<'py, f64>,
+    stochastic_period: usize,
+    ema_period: usize,
+    out: Option<Bound<'py, PyArray1<f64>>>,
+) -> PyResult<Bound<'py, PyArray1<f64>>> {
+    let h = high.as_slice()?;
+    let l = low.as_slice()?;
+    let c = close.as_slice()?;
+    if let Some(output) = out {
+        let slice = unsafe { output.as_slice_mut()? };
+        liq_ta::indicators::dss_bressert_into(h, l, c, stochastic_period, ema_period, slice)
+            .map_err(to_py_err)?;
+        Ok(output)
+    } else {
+        let result = liq_ta::indicators::dss_bressert(h, l, c, stochastic_period, ema_period)
+            .map_err(to_py_err)?;
+        Ok(PyArray1::from_vec(py, result))
+    }
+}
+
+ohlc_indicator!(
+    chop,
+    liq_ta::indicators::chop,
+    liq_ta::indicators::chop_into,
+    "Choppiness Index (CHOP)."
+);
+
+single_output_series_indicator!(
+    ulcer_index,
+    liq_ta::indicators::ulcer_index,
+    liq_ta::indicators::ulcer_index_into,
+    "Ulcer Index."
+);
+
+single_output_series_indicator!(
+    hurst,
+    liq_ta::indicators::hurst,
+    liq_ta::indicators::hurst_into,
+    "Hurst Exponent."
+);
+
+#[pyfunction]
+#[pyo3(signature = (data, period=32, lag=1, out=None))]
+fn autocorr<'py>(
+    py: Python<'py>,
+    data: PyReadonlyArray1<'py, f64>,
+    period: usize,
+    lag: usize,
+    out: Option<Bound<'py, PyArray1<f64>>>,
+) -> PyResult<Bound<'py, PyArray1<f64>>> {
+    let input = data.as_slice()?;
+    if let Some(output) = out {
+        let slice = unsafe { output.as_slice_mut()? };
+        liq_ta::indicators::autocorr_into(input, period, lag, slice).map_err(to_py_err)?;
+        Ok(output)
+    } else {
+        let result = liq_ta::indicators::autocorr(input, period, lag).map_err(to_py_err)?;
+        Ok(PyArray1::from_vec(py, result))
+    }
+}
+
+#[pyfunction]
+#[pyo3(signature = (high, low, close, period=10, multiplier=3.0))]
+fn supertrend<'py>(
+    py: Python<'py>,
+    high: PyReadonlyArray1<'py, f64>,
+    low: PyReadonlyArray1<'py, f64>,
+    close: PyReadonlyArray1<'py, f64>,
+    period: usize,
+    multiplier: f64,
+) -> PyResult<(
+    Bound<'py, PyArray1<f64>>,
+    Bound<'py, PyArray1<f64>>,
+    Bound<'py, PyArray1<f64>>,
+    Bound<'py, PyArray1<f64>>,
+)> {
+    let h = high.as_slice()?;
+    let l = low.as_slice()?;
+    let c = close.as_slice()?;
+    let result = liq_ta::indicators::supertrend(h, l, c, period, multiplier).map_err(to_py_err)?;
+    Ok((
+        PyArray1::from_vec(py, result.supertrend),
+        PyArray1::from_vec(py, result.upper_band),
+        PyArray1::from_vec(py, result.lower_band),
+        PyArray1::from_vec(py, result.trend),
+    ))
+}
+
+#[pyfunction]
+#[pyo3(signature = (high, low, close, hma_period=21, atr_period=14, atr_multiplier=2.0))]
+fn hma_atr_bands<'py>(
+    py: Python<'py>,
+    high: PyReadonlyArray1<'py, f64>,
+    low: PyReadonlyArray1<'py, f64>,
+    close: PyReadonlyArray1<'py, f64>,
+    hma_period: usize,
+    atr_period: usize,
+    atr_multiplier: f64,
+) -> PyResult<(
+    Bound<'py, PyArray1<f64>>,
+    Bound<'py, PyArray1<f64>>,
+    Bound<'py, PyArray1<f64>>,
+)> {
+    let h = high.as_slice()?;
+    let l = low.as_slice()?;
+    let c = close.as_slice()?;
+    let result = liq_ta::indicators::hma_atr_bands(h, l, c, hma_period, atr_period, atr_multiplier)
+        .map_err(to_py_err)?;
+    Ok((
+        PyArray1::from_vec(py, result.upper),
+        PyArray1::from_vec(py, result.middle),
+        PyArray1::from_vec(py, result.lower),
+    ))
+}
+
+#[pyfunction]
+#[pyo3(signature = (data, hma_period=21, std_period=20, std_multiplier=2.0))]
+fn hma_bollinger_bands<'py>(
+    py: Python<'py>,
+    data: PyReadonlyArray1<'py, f64>,
+    hma_period: usize,
+    std_period: usize,
+    std_multiplier: f64,
+) -> PyResult<(
+    Bound<'py, PyArray1<f64>>,
+    Bound<'py, PyArray1<f64>>,
+    Bound<'py, PyArray1<f64>>,
+)> {
+    let input = data.as_slice()?;
+    let result =
+        liq_ta::indicators::hma_bollinger_bands(input, hma_period, std_period, std_multiplier)
+            .map_err(to_py_err)?;
+    Ok((
+        PyArray1::from_vec(py, result.upper),
+        PyArray1::from_vec(py, result.middle),
+        PyArray1::from_vec(py, result.lower),
+    ))
+}
+
+#[pyfunction]
+#[pyo3(signature = (high, low, close, volume, atr_period=14, atr_multiplier=2.0))]
+fn vwap_atr_bands<'py>(
+    py: Python<'py>,
+    high: PyReadonlyArray1<'py, f64>,
+    low: PyReadonlyArray1<'py, f64>,
+    close: PyReadonlyArray1<'py, f64>,
+    volume: PyReadonlyArray1<'py, f64>,
+    atr_period: usize,
+    atr_multiplier: f64,
+) -> PyResult<(
+    Bound<'py, PyArray1<f64>>,
+    Bound<'py, PyArray1<f64>>,
+    Bound<'py, PyArray1<f64>>,
+)> {
+    let h = high.as_slice()?;
+    let l = low.as_slice()?;
+    let c = close.as_slice()?;
+    let v = volume.as_slice()?;
+    let result = liq_ta::indicators::vwap_atr_bands(h, l, c, v, atr_period, atr_multiplier)
+        .map_err(to_py_err)?;
+    Ok((
+        PyArray1::from_vec(py, result.upper),
+        PyArray1::from_vec(py, result.middle),
+        PyArray1::from_vec(py, result.lower),
+    ))
+}
+
+#[pyfunction]
+#[pyo3(signature = (high, low, close, volume, std_period=20, std_multiplier=2.0))]
+fn vwap_bollinger_bands<'py>(
+    py: Python<'py>,
+    high: PyReadonlyArray1<'py, f64>,
+    low: PyReadonlyArray1<'py, f64>,
+    close: PyReadonlyArray1<'py, f64>,
+    volume: PyReadonlyArray1<'py, f64>,
+    std_period: usize,
+    std_multiplier: f64,
+) -> PyResult<(
+    Bound<'py, PyArray1<f64>>,
+    Bound<'py, PyArray1<f64>>,
+    Bound<'py, PyArray1<f64>>,
+)> {
+    let h = high.as_slice()?;
+    let l = low.as_slice()?;
+    let c = close.as_slice()?;
+    let v = volume.as_slice()?;
+    let result = liq_ta::indicators::vwap_bollinger_bands(h, l, c, v, std_period, std_multiplier)
+        .map_err(to_py_err)?;
+    Ok((
+        PyArray1::from_vec(py, result.upper),
+        PyArray1::from_vec(py, result.middle),
+        PyArray1::from_vec(py, result.lower),
+    ))
+}
+
+// =============================================================================
 // Module Definition
 // =============================================================================
+
+fn register_foundation_py_bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    register_pyfunction_list!(m, [sma, ema, ema_wilder, rsi, macd])
+}
+
+#[pyfunction]
+fn get_indicator_registry() -> Vec<(
+    String,
+    String,
+    String,
+    Vec<String>,
+    Vec<String>,
+    Vec<String>,
+    bool,
+)> {
+    registry::entries()
+        .iter()
+        .map(|entry| {
+            (
+                entry.name.to_string(),
+                entry.category.to_string(),
+                entry.input_shape.to_string(),
+                entry.inputs.iter().map(|item| item.to_string()).collect(),
+                entry.params.iter().map(|item| item.to_string()).collect(),
+                entry.outputs.iter().map(|item| item.to_string()).collect(),
+                entry.supports_out,
+            )
+        })
+        .collect()
+}
 
 /// liq-ta Python module
 ///
@@ -2798,10 +3392,12 @@ candlestick_fn!(
 /// All functions support optional `out=` parameter for zero-copy output.
 #[pymodule]
 fn _liq_ta(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    registry::validate().map_err(PyValueError::new_err)?;
+
+    // Foundation functions are now registered through the new binding list and helper.
+    register_foundation_py_bindings(m)?;
+
     // Moving averages
-    m.add_function(wrap_pyfunction!(sma, m)?)?;
-    m.add_function(wrap_pyfunction!(ema, m)?)?;
-    m.add_function(wrap_pyfunction!(ema_wilder, m)?)?;
     m.add_function(wrap_pyfunction!(wma, m)?)?;
     m.add_function(wrap_pyfunction!(dema, m)?)?;
     m.add_function(wrap_pyfunction!(tema, m)?)?;
@@ -2817,8 +3413,6 @@ fn _liq_ta(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(mavp, m)?)?;
 
     // Momentum indicators
-    m.add_function(wrap_pyfunction!(rsi, m)?)?;
-    m.add_function(wrap_pyfunction!(macd, m)?)?;
     m.add_function(wrap_pyfunction!(stochastic, m)?)?;
     m.add_function(wrap_pyfunction!(stochastic_fast, m)?)?;
     m.add_function(wrap_pyfunction!(stochastic_slow, m)?)?;
@@ -2844,13 +3438,40 @@ fn _liq_ta(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(dx, m)?)?;
     m.add_function(wrap_pyfunction!(plus_dm, m)?)?;
     m.add_function(wrap_pyfunction!(minus_dm, m)?)?;
+    m.add_function(wrap_pyfunction!(qqe, m)?)?;
+    m.add_function(wrap_pyfunction!(ao, m)?)?;
+    m.add_function(wrap_pyfunction!(bulls_power, m)?)?;
+    m.add_function(wrap_pyfunction!(bears_power, m)?)?;
+    m.add_function(wrap_pyfunction!(demarker, m)?)?;
+    m.add_function(wrap_pyfunction!(osma, m)?)?;
+    m.add_function(wrap_pyfunction!(vortex, m)?)?;
+    m.add_function(wrap_pyfunction!(rvi, m)?)?;
+    m.add_function(wrap_pyfunction!(dpo, m)?)?;
+    m.add_function(wrap_pyfunction!(connors_rsi, m)?)?;
+    m.add_function(wrap_pyfunction!(stc, m)?)?;
+    m.add_function(wrap_pyfunction!(laguerre_rsi, m)?)?;
+    m.add_function(wrap_pyfunction!(dss_bressert, m)?)?;
+    m.add_function(wrap_pyfunction!(supertrend, m)?)?;
 
     // Volatility indicators
     m.add_function(wrap_pyfunction!(atr, m)?)?;
     m.add_function(wrap_pyfunction!(true_range, m)?)?;
     m.add_function(wrap_pyfunction!(bollinger, m)?)?;
     m.add_function(wrap_pyfunction!(donchian, m)?)?;
+    m.add_function(wrap_pyfunction!(keltner_channel, m)?)?;
+    m.add_function(wrap_pyfunction!(ichimoku, m)?)?;
     m.add_function(wrap_pyfunction!(rolling_stddev, m)?)?;
+    m.add_function(wrap_pyfunction!(chop, m)?)?;
+    m.add_function(wrap_pyfunction!(ulcer_index, m)?)?;
+    m.add_function(wrap_pyfunction!(hma, m)?)?;
+    m.add_function(wrap_pyfunction!(gaussian_filter, m)?)?;
+    m.add_function(wrap_pyfunction!(gaussian_channel, m)?)?;
+    m.add_function(wrap_pyfunction!(hurst, m)?)?;
+    m.add_function(wrap_pyfunction!(autocorr, m)?)?;
+    m.add_function(wrap_pyfunction!(hma_atr_bands, m)?)?;
+    m.add_function(wrap_pyfunction!(hma_bollinger_bands, m)?)?;
+    m.add_function(wrap_pyfunction!(vwap_atr_bands, m)?)?;
+    m.add_function(wrap_pyfunction!(vwap_bollinger_bands, m)?)?;
 
     // Volume indicators
     m.add_function(wrap_pyfunction!(obv, m)?)?;
@@ -2946,6 +3567,250 @@ fn _liq_ta(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(cdl_rise_fall_3methods, m)?)?;
     m.add_function(wrap_pyfunction!(cdl_concealing_baby_swallow, m)?)?;
     m.add_function(wrap_pyfunction!(cdl_xside_gap_3methods, m)?)?;
+    m.add_function(wrap_pyfunction!(get_indicator_registry, m)?)?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pyo3::types::PyDict;
+    use std::ffi::CString;
+
+    #[test]
+    fn test_foundation_registry_validation() {
+        registry::validate().expect("Foundation registry should be valid");
+    }
+
+    #[test]
+    fn test_foundation_registry_lookup() {
+        let sma = registry::lookup("sma").expect("sma should be registered");
+        assert_eq!(sma.outputs, ["sma"]);
+        assert!(sma.supports_out);
+
+        let macd = registry::lookup("macd").expect("macd should be registered");
+        assert_eq!(macd.outputs, ["macd_line", "signal_line", "histogram"]);
+        assert!(!macd.supports_out);
+    }
+
+    #[test]
+    fn test_registry_rejects_duplicate_names() {
+        let invalid = [
+            registry::IndicatorBindingDescriptor {
+                name: "dup",
+                category: "test",
+                input_shape: "Series<f64>",
+                inputs: &["data"],
+                params: &["period"],
+                outputs: &["value"],
+                supports_out: false,
+                callable_target: "dup",
+            },
+            registry::IndicatorBindingDescriptor {
+                name: "dup",
+                category: "test",
+                input_shape: "Series<f64>",
+                inputs: &["data"],
+                params: &["period"],
+                outputs: &["value"],
+                supports_out: false,
+                callable_target: "dup",
+            },
+        ];
+
+        assert!(registry::validate_entries(&invalid).is_err());
+    }
+
+    #[test]
+    fn test_registry_rejects_invalid_inputs() {
+        let invalid = [registry::IndicatorBindingDescriptor {
+            name: "bad_shape",
+            category: "momentum",
+            input_shape: "UnsupportedShape",
+            inputs: &["data"],
+            params: &["period"],
+            outputs: &["value"],
+            supports_out: false,
+            callable_target: "bad_shape",
+        }];
+
+        assert!(registry::validate_entries(&invalid).is_err());
+    }
+
+    #[test]
+    fn test_python_bindings_are_callable() {
+        let failures = Python::with_gil(|py| {
+            let module = PyModule::new(py, "_liq_ta")
+                .expect("Python module should be created for binding smoke test");
+            _liq_ta(&module).expect("Python module should register all binding functions");
+
+            if PyModule::import(py, "numpy").is_err() {
+                return Vec::<(String, String)>::new();
+            }
+
+            let globals = PyDict::new(py);
+            let payload_values: Vec<f64> = (1..=128).map(|value| value as f64).collect();
+            let payload_i32_values: Vec<i32> = (1..=128).collect();
+            let payload_f64 = PyArray1::from_vec(py, payload_values);
+            let payload_i32 = PyArray1::from_vec(py, payload_i32_values);
+            globals
+                .set_item("module", module)
+                .expect("module should be inserted into Python globals");
+            globals
+                .set_item("_payload_f64", payload_f64)
+                .expect("payload should be inserted into Python globals");
+            globals
+                .set_item("_payload_i32", payload_i32)
+                .expect("payload should be inserted into Python globals");
+
+            let script = r#"import inspect
+
+def _sample_value(name: str):
+    key = name.lower()
+    if key == "periods":
+        return _payload_f64
+    if key.startswith("data") or key.startswith("in"):
+        return _payload_f64
+    if key in {
+        "data",
+        "price",
+        "prices",
+        "series",
+        "input",
+        "input_a",
+        "input_b",
+        "input_c",
+        "in1",
+        "in2",
+        "in3",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+    }:
+        return _payload_f64
+
+    if key in {
+        "out",
+    }:
+        return None
+
+    if key in {
+        "period",
+        "timeperiod",
+        "fast_period",
+        "slow_period",
+        "signal_period",
+        "lookback_period",
+        "nbdev",
+        "n1",
+        "n2",
+        "lookback",
+        "window",
+        "window_size",
+    }:
+        return 5
+
+    if key in {
+        "af",
+        "af_step",
+        "af_max",
+        "start",
+        "step",
+        "max",
+        "vfactor",
+        "factor",
+    }:
+        return 0.5
+
+    return 3
+
+
+def _build_args(sig):
+    args = []
+    kwargs = {}
+
+    for param in sig.parameters.values():
+        if param.kind in (
+            inspect.Parameter.VAR_POSITIONAL,
+            inspect.Parameter.VAR_KEYWORD,
+        ):
+            continue
+        if param.name == "out":
+            continue
+        if param.default is inspect._empty:
+            value = _sample_value(param.name)
+            if param.kind in (
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            ):
+                args.append(value)
+            else:
+                kwargs[param.name] = value
+
+    return args, kwargs
+
+
+def _call_with_out(name, sig):
+    if "out" not in sig.parameters:
+        return None, []
+
+    args, kwargs = _build_args(sig)
+    if name.startswith("cdl_"):
+        kwargs["out"] = _payload_i32.copy()
+    else:
+        kwargs["out"] = _payload_f64.copy()
+    return args, kwargs
+
+
+failures = []
+
+for name in dir(module):
+    if not name or name.startswith("_"):
+        continue
+
+    fn = getattr(module, name)
+    if not callable(fn):
+        continue
+
+    try:
+        signature = inspect.signature(fn)
+    except (TypeError, ValueError) as exc:
+        failures.append((name, f"signature_inspect_failed:{type(exc).__name__}:{exc}"))
+        continue
+
+    args, kwargs = _build_args(signature)
+    try:
+        fn(*args, **kwargs)
+    except Exception as exc:
+        failures.append((name, f"call_default_failed:{type(exc).__name__}:{exc}"))
+
+    out_args, out_kwargs = _call_with_out(name, signature)
+    if out_args is not None:
+        try:
+            fn(*out_args, **out_kwargs)
+        except Exception as exc:
+            failures.append((name, f"call_out_failed:{type(exc).__name__}:{exc}"))
+"#;
+
+            let code = CString::new(script).expect("script should be valid c-string");
+            py.run(&code, Some(&globals), Some(&globals))
+                .expect("Python smoke script should execute");
+            globals
+                .get_item("failures")
+                .expect("failures list should be present")
+                .expect("failures list should be convertible")
+                .extract::<Vec<(String, String)>>()
+                .expect("failures should be extractable")
+        });
+
+        assert!(
+            failures.is_empty(),
+            "binding smoke test failures ({}): {:?}",
+            failures.len(),
+            failures
+        );
+    }
 }

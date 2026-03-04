@@ -1112,4 +1112,89 @@ mod tests {
         assert!(result.is_ok());
         assert_eq!(result.unwrap().len(), 5);
     }
+
+    #[test]
+    fn test_trima_min_len_zero_period_surface() {
+        assert_eq!(trima_min_len(0), 1);
+    }
+
+    #[test]
+    fn test_trima_internal_generic_inline_nan_surface_f64() {
+        let data: Vec<f64> = (1..=24).map(|x| x as f64).collect();
+
+        let p_odd = 5;
+        let lb_odd = trima_lookback(p_odd);
+        let mut gen_odd = vec![f64::NAN; data.len()];
+        let mut fast_odd = vec![f64::NAN; data.len()];
+        trima_into_generic_inline_nan(&data, p_odd, &mut gen_odd, lb_odd).unwrap();
+        trima_into_fast_f64_inline_nan(&data, p_odd, &mut fast_odd, lb_odd).unwrap();
+        assert!(gen_odd.iter().take(lb_odd).all(|v| v.is_nan()));
+        assert!(fast_odd.iter().take(lb_odd).all(|v| v.is_nan()));
+        assert!(gen_odd.iter().skip(lb_odd).all(|v| v.is_finite()));
+        assert!(fast_odd.iter().skip(lb_odd).all(|v| v.is_finite()));
+
+        let p_even = 6;
+        let lb_even = trima_lookback(p_even);
+        let mut gen_even = vec![f64::NAN; data.len()];
+        let mut fast_even = vec![f64::NAN; data.len()];
+        trima_into_generic_inline_nan(&data, p_even, &mut gen_even, lb_even).unwrap();
+        trima_into_fast_f64_inline_nan(&data, p_even, &mut fast_even, lb_even).unwrap();
+        assert!(gen_even.iter().take(lb_even).all(|v| v.is_nan()));
+        assert!(fast_even.iter().take(lb_even).all(|v| v.is_nan()));
+        assert!(gen_even.iter().skip(lb_even).any(|v| v.is_finite()));
+        assert!(fast_even.iter().skip(lb_even).any(|v| v.is_finite()));
+    }
+
+    #[test]
+    fn test_trima_internal_inline_nan_non_finite_windows_f64_f32() {
+        let data_f64 = vec![
+            1.0_f64,
+            2.0,
+            3.0,
+            f64::NAN,
+            5.0,
+            f64::INFINITY,
+            7.0,
+            8.0,
+            9.0,
+            10.0,
+            11.0,
+            12.0,
+            13.0,
+            14.0,
+        ];
+        let period_f64 = 5;
+        let lb_f64 = trima_lookback(period_f64);
+
+        let mut out_generic = vec![f64::NAN; data_f64.len()];
+        let mut out_fast = vec![f64::NAN; data_f64.len()];
+        trima_into_generic_inline_nan(&data_f64, period_f64, &mut out_generic, lb_f64).unwrap();
+        trima_into_fast_f64_inline_nan(&data_f64, period_f64, &mut out_fast, lb_f64).unwrap();
+        assert!(out_generic[lb_f64].is_nan());
+        assert!(out_fast[lb_f64].is_nan());
+        assert!(out_generic.iter().skip(lb_f64 + 6).any(|v| v.is_finite()));
+
+        let data_f32 = vec![
+            1.0_f32,
+            2.0,
+            3.0,
+            f32::NAN,
+            5.0,
+            6.0,
+            7.0,
+            f32::INFINITY,
+            9.0,
+            10.0,
+            11.0,
+            12.0,
+            13.0,
+            14.0,
+        ];
+        let period_f32 = 4;
+        let lb_f32 = trima_lookback(period_f32);
+        let mut out_f32 = vec![f32::NAN; data_f32.len()];
+        trima_into_fast_f32_inline_nan(&data_f32, period_f32, &mut out_f32, lb_f32).unwrap();
+        assert!(out_f32[lb_f32].is_nan());
+        assert!(out_f32.iter().skip(lb_f32 + 6).any(|v| v.is_finite()));
+    }
 }

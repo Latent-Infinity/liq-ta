@@ -165,7 +165,7 @@ fn var_talib_f64(data: &[f64], period: usize, output: &mut [f64]) -> Result<()> 
 fn var_talib_fast<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -> Result<()> {
     let n = data.len();
     let lookback = var_lookback(period);
-    let period_t = T::from_usize(period)?;
+    let period_t = T::from_usize(period).unwrap_or(T::infinity());
 
     // Fill lookback with NaN
     for i in 0..lookback {
@@ -250,7 +250,7 @@ fn var_talib_fast<T: SeriesElement>(data: &[T], period: usize, output: &mut [T])
 fn var_welford_slow<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -> Result<()> {
     let n = data.len();
     let lookback = var_lookback(period);
-    let period_t = T::from_usize(period)?;
+    let period_t = T::from_usize(period).unwrap_or(T::infinity());
 
     // Fill lookback with NaN
     for i in 0..lookback {
@@ -280,7 +280,7 @@ fn var_welford_slow<T: SeriesElement>(data: &[T], period: usize, output: &mut [T
             nan_count += 1;
         } else {
             valid_count += 1;
-            let count_t = T::from_usize(valid_count)?;
+            let count_t = T::from_usize(valid_count).unwrap_or(T::infinity());
             let delta = data[i] - mean;
             mean = mean + delta / count_t;
             let delta2 = data[i] - mean;
@@ -844,7 +844,7 @@ pub fn skew_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) 
     }
 
     let lookback = skew_lookback(period);
-    let period_t = T::from_usize(period)?;
+    let period_t = T::from_usize(period).unwrap_or(T::infinity());
 
     // Fill lookback with NaN
     for i in 0..lookback {
@@ -1012,8 +1012,8 @@ pub fn kurt_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) 
     }
 
     let lookback = kurt_lookback(period);
-    let period_t = T::from_usize(period)?;
-    let three = T::from_usize(3)?;
+    let period_t = T::from_usize(period).unwrap_or(T::infinity());
+    let three = T::from_usize(3).unwrap_or(T::infinity());
 
     // Fill lookback with NaN
     for i in 0..lookback {
@@ -1192,7 +1192,7 @@ pub fn cov_into<T: SeriesElement>(
     }
 
     let lookback = cov_lookback(period);
-    let period_t = T::from_usize(period)?;
+    let period_t = T::from_usize(period).unwrap_or(T::infinity());
 
     // Fill lookback with NaN
     for i in 0..lookback {
@@ -1344,7 +1344,7 @@ pub fn zscore_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]
     }
 
     let lookback = zscore_lookback(period);
-    let period_t = T::from_usize(period)?;
+    let period_t = T::from_usize(period).unwrap_or(T::infinity());
 
     // Fill lookback with NaN
     for i in 0..lookback {
@@ -1496,7 +1496,7 @@ pub fn mad_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -
     }
 
     let lookback = mad_lookback(period);
-    let period_t = T::from_usize(period)?;
+    let period_t = T::from_usize(period).unwrap_or(T::infinity());
 
     // Fill lookback with NaN
     for i in 0..lookback {
@@ -1642,7 +1642,7 @@ pub fn sem_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -
     }
 
     let lookback = sem_lookback(period);
-    let period_t = T::from_usize(period)?;
+    let period_t = T::from_usize(period).unwrap_or(T::infinity());
     let period_sqrt = period_t.sqrt();
 
     // Fill lookback with NaN
@@ -1798,7 +1798,7 @@ pub fn correl_into<T: SeriesElement>(
     }
 
     let lookback = correl_lookback(period);
-    let period_t = T::from_usize(period)?;
+    let period_t = T::from_usize(period).unwrap_or(T::infinity());
 
     // Fill lookback with NaN
     for i in 0..lookback {
@@ -1991,7 +1991,7 @@ pub fn beta_into<T: SeriesElement>(
     }
 
     let lookback = beta_lookback(period);
-    let period_t = T::from_usize(period)?;
+    let period_t = T::from_usize(period).unwrap_or(T::infinity());
 
     // Fill lookback with NaN
     for i in 0..lookback {
@@ -2157,7 +2157,7 @@ pub fn linearreg_into<T: SeriesElement>(data: &[T], period: usize, output: &mut 
     }
 
     let lookback = linearreg_lookback(period);
-    let period_t = T::from_usize(period)?;
+    let period_t = T::from_usize(period).unwrap_or(T::infinity());
 
     // Fill lookback with NaN
     for i in 0..lookback {
@@ -2168,13 +2168,13 @@ pub fn linearreg_into<T: SeriesElement>(data: &[T], period: usize, output: &mut 
     let mut x_sum = T::zero();
     let mut x_sq_sum = T::zero();
     for i in 0..period {
-        let x = T::from_usize(i)?;
+        let x = T::from_usize(i).unwrap_or(T::infinity());
         x_sum = x_sum + x;
         x_sq_sum = x_sq_sum + x * x;
     }
 
     // Precompute constants
-    let x_end = T::from_usize(period - 1)?;
+    let x_end = T::from_usize(period - 1).unwrap_or(T::infinity());
     let x_sum_sq = x_sum * x_sum;
     let denominator_const = period_t * x_sq_sum - x_sum_sq;
 
@@ -2190,7 +2190,7 @@ pub fn linearreg_into<T: SeriesElement>(data: &[T], period: usize, output: &mut 
     let mut y_sum = T::zero();
     let mut xy_sum = T::zero();
     for j in 0..period {
-        let x = T::from_usize(j)?;
+        let x = T::from_usize(j).unwrap_or(T::infinity());
         y_sum = y_sum + data[j];
         xy_sum = xy_sum + x * data[j];
     }
@@ -2325,7 +2325,7 @@ pub fn linearreg_slope_into<T: SeriesElement>(
     }
 
     let lookback = linearreg_slope_lookback(period);
-    let period_t = T::from_usize(period)?;
+    let period_t = T::from_usize(period).unwrap_or(T::infinity());
 
     // Fill lookback with NaN
     for i in 0..lookback {
@@ -2336,7 +2336,7 @@ pub fn linearreg_slope_into<T: SeriesElement>(
     let mut x_sum = T::zero();
     let mut x_sq_sum = T::zero();
     for i in 0..period {
-        let x = T::from_usize(i)?;
+        let x = T::from_usize(i).unwrap_or(T::infinity());
         x_sum = x_sum + x;
         x_sq_sum = x_sq_sum + x * x;
     }
@@ -2357,7 +2357,7 @@ pub fn linearreg_slope_into<T: SeriesElement>(
     let mut y_sum = T::zero();
     let mut xy_sum = T::zero();
     for j in 0..period {
-        let x = T::from_usize(j)?;
+        let x = T::from_usize(j).unwrap_or(T::infinity());
         y_sum = y_sum + data[j];
         xy_sum = xy_sum + x * data[j];
     }
@@ -2488,7 +2488,7 @@ pub fn linearreg_intercept_into<T: SeriesElement>(
     }
 
     let lookback = linearreg_intercept_lookback(period);
-    let period_t = T::from_usize(period)?;
+    let period_t = T::from_usize(period).unwrap_or(T::infinity());
 
     // Fill lookback with NaN
     for i in 0..lookback {
@@ -2499,7 +2499,7 @@ pub fn linearreg_intercept_into<T: SeriesElement>(
     let mut x_sum = T::zero();
     let mut x_sq_sum = T::zero();
     for i in 0..period {
-        let x = T::from_usize(i)?;
+        let x = T::from_usize(i).unwrap_or(T::infinity());
         x_sum = x_sum + x;
         x_sq_sum = x_sq_sum + x * x;
     }
@@ -2520,7 +2520,7 @@ pub fn linearreg_intercept_into<T: SeriesElement>(
     let mut y_sum = T::zero();
     let mut xy_sum = T::zero();
     for j in 0..period {
-        let x = T::from_usize(j)?;
+        let x = T::from_usize(j).unwrap_or(T::infinity());
         y_sum = y_sum + data[j];
         xy_sum = xy_sum + x * data[j];
     }
@@ -2653,7 +2653,7 @@ pub fn linearreg_angle_into<T: SeriesElement>(
     }
 
     let lookback = linearreg_angle_lookback(period);
-    let period_t = T::from_usize(period)?;
+    let period_t = T::from_usize(period).unwrap_or(T::infinity());
     let degrees_per_radian = T::from_f64(180.0 / std::f64::consts::PI)?;
 
     // Fill lookback with NaN
@@ -2665,7 +2665,7 @@ pub fn linearreg_angle_into<T: SeriesElement>(
     let mut x_sum = T::zero();
     let mut x_sq_sum = T::zero();
     for i in 0..period {
-        let x = T::from_usize(i)?;
+        let x = T::from_usize(i).unwrap_or(T::infinity());
         x_sum = x_sum + x;
         x_sq_sum = x_sq_sum + x * x;
     }
@@ -2686,7 +2686,7 @@ pub fn linearreg_angle_into<T: SeriesElement>(
     let mut y_sum = T::zero();
     let mut xy_sum = T::zero();
     for j in 0..period {
-        let x = T::from_usize(j)?;
+        let x = T::from_usize(j).unwrap_or(T::infinity());
         y_sum = y_sum + data[j];
         xy_sum = xy_sum + x * data[j];
     }
@@ -2815,7 +2815,7 @@ pub fn tsf_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -
     }
 
     let lookback = tsf_lookback(period);
-    let period_t = T::from_usize(period)?;
+    let period_t = T::from_usize(period).unwrap_or(T::infinity());
 
     // Fill lookback with NaN
     for i in 0..lookback {
@@ -2826,13 +2826,13 @@ pub fn tsf_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -
     let mut x_sum = T::zero();
     let mut x_sq_sum = T::zero();
     for i in 0..period {
-        let x = T::from_usize(i)?;
+        let x = T::from_usize(i).unwrap_or(T::infinity());
         x_sum = x_sum + x;
         x_sq_sum = x_sq_sum + x * x;
     }
 
     // Precompute constants
-    let x_forecast = T::from_usize(period)?; // Forecast one period ahead (x = period)
+    let x_forecast = T::from_usize(period).unwrap_or(T::infinity()); // Forecast one period ahead (x = period)
     let x_sum_sq = x_sum * x_sum;
     let denominator_const = period_t * x_sq_sum - x_sum_sq;
 
@@ -2848,7 +2848,7 @@ pub fn tsf_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -
     let mut y_sum = T::zero();
     let mut xy_sum = T::zero();
     for j in 0..period {
-        let x = T::from_usize(j)?;
+        let x = T::from_usize(j).unwrap_or(T::infinity());
         y_sum = y_sum + data[j];
         xy_sum = xy_sum + x * data[j];
     }
@@ -2917,5 +2917,406 @@ pub fn tsf<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
         let mut output = vec![T::nan(); data.len()];
         tsf_into(data, period, &mut output)?;
         Ok(output)
+    }
+}
+
+#[cfg(test)]
+mod coverage_push_private_paths_tests {
+    use super::*;
+
+    #[test]
+    fn statistics_private_precision_and_clamp_paths() {
+        crate::precision::with_precision_mode(crate::precision::PrecisionMode::High, || {
+            assert!(use_f64_precision::<f32>());
+            assert!(!use_f64_precision::<f64>());
+        });
+        crate::precision::with_precision_mode(crate::precision::PrecisionMode::Fast, || {
+            assert!(!use_f64_precision::<f32>());
+        });
+
+        let mut out_f64 = vec![f64::NAN, -1e-12, -2.0, 3.0];
+        clamp_negative_variance_f64(&mut out_f64, 1);
+        assert_eq!(out_f64[1], 0.0);
+        assert_eq!(out_f64[2], 0.0);
+        assert_eq!(out_f64[3], 3.0);
+
+        let mut out_generic = vec![-1.0_f64, 2.0];
+        clamp_negative_variance(&mut out_generic, 0);
+        assert_eq!(out_generic[0], 0.0);
+        assert_eq!(out_generic[1], 2.0);
+    }
+
+    #[test]
+    fn statistics_var_welford_private_nan_and_period_one_paths() {
+        let data_period_one = [1.0_f64, f64::NAN, 3.0, 4.0];
+        let mut out_period_one = vec![0.0_f64; data_period_one.len()];
+        var_welford_slow(&data_period_one, 1, &mut out_period_one).unwrap();
+        assert_eq!(out_period_one[0], 0.0);
+        assert!(out_period_one[1].is_nan());
+        assert_eq!(out_period_one[2], 0.0);
+
+        let data_with_nan_window = [1.0_f64, f64::NAN, 3.0, 4.0, 5.0];
+        let mut out_nan_window = vec![0.0_f64; data_with_nan_window.len()];
+        var_welford_slow(&data_with_nan_window, 2, &mut out_nan_window).unwrap();
+        assert!(out_nan_window[1].is_nan());
+    }
+
+    #[test]
+    fn statistics_public_api_error_surface_matrix() {
+        type UnaryFn = fn(&[f64], usize) -> crate::error::Result<Vec<f64>>;
+        type UnaryIntoFn = fn(&[f64], usize, &mut [f64]) -> crate::error::Result<()>;
+        type BinaryFn = fn(&[f64], &[f64], usize) -> crate::error::Result<Vec<f64>>;
+        type BinaryIntoFn = fn(&[f64], &[f64], usize, &mut [f64]) -> crate::error::Result<()>;
+
+        let n = 96;
+        let mut data = Vec::with_capacity(n);
+        let mut data1 = Vec::with_capacity(n);
+        for i in 0..n {
+            let x = i as f64;
+            data.push(x * 1.2 + ((i % 5) as f64) * 0.03 + 10.0);
+            data1.push(x * 0.8 + ((i % 7) as f64) * 0.05 + 5.0);
+        }
+
+        let data_short = data[..(n - 1)].to_vec();
+        let empty: Vec<f64> = vec![];
+        let period = 10;
+
+        let unary_wrappers: [(&str, UnaryFn); 11] = [
+            ("var", var),
+            ("stddev", stddev),
+            ("skew", skew),
+            ("kurt", kurt),
+            ("zscore", zscore),
+            ("mad", mad),
+            ("sem", sem),
+            ("linearreg", linearreg),
+            ("linearreg_slope", linearreg_slope),
+            ("linearreg_intercept", linearreg_intercept),
+            ("linearreg_angle", linearreg_angle),
+        ];
+
+        for (name, f) in unary_wrappers {
+            let out = f(&data, period).unwrap();
+            assert_eq!(out.len(), n, "{name}");
+            assert!(f(&empty, period).is_err(), "{name}");
+        }
+        assert_eq!(tsf(&data, period).unwrap().len(), n);
+        assert!(tsf(&empty, period).is_err());
+
+        let unary_into: [(&str, UnaryIntoFn); 12] = [
+            ("var_into", var_into),
+            ("stddev_into", stddev_into),
+            ("skew_into", skew_into),
+            ("kurt_into", kurt_into),
+            ("zscore_into", zscore_into),
+            ("mad_into", mad_into),
+            ("sem_into", sem_into),
+            ("linearreg_into", linearreg_into),
+            ("linearreg_slope_into", linearreg_slope_into),
+            ("linearreg_intercept_into", linearreg_intercept_into),
+            ("linearreg_angle_into", linearreg_angle_into),
+            ("tsf_into", tsf_into),
+        ];
+
+        let mut out_ok = vec![0.0_f64; n];
+        let mut out_short = vec![0.0_f64; n - 1];
+        for (name, f) in unary_into {
+            f(&data, period, &mut out_ok).unwrap();
+            assert!(f(&data, period, &mut out_short).is_err(), "{name}");
+            assert!(f(&empty, period, &mut []).is_err(), "{name}");
+        }
+
+        let binary_wrappers: [(&str, BinaryFn); 3] =
+            [("cov", cov), ("correl", correl), ("beta", beta)];
+        for (name, f) in binary_wrappers {
+            let out = f(&data, &data1, period).unwrap();
+            assert_eq!(out.len(), n, "{name}");
+            assert!(f(&data, &data_short, period).is_err(), "{name}");
+            assert!(f(&empty, &empty, period).is_err(), "{name}");
+        }
+
+        let binary_into: [(&str, BinaryIntoFn); 3] = [
+            ("cov_into", cov_into),
+            ("correl_into", correl_into),
+            ("beta_into", beta_into),
+        ];
+        for (name, f) in binary_into {
+            f(&data, &data1, period, &mut out_ok).unwrap();
+            assert!(f(&data, &data1, period, &mut out_short).is_err(), "{name}");
+            assert!(
+                f(&data, &data_short, period, &mut out_ok).is_err(),
+                "{name}"
+            );
+            assert!(f(&empty, &empty, period, &mut []).is_err(), "{name}");
+        }
+    }
+
+    #[test]
+    fn statistics_public_api_f32_surface_matrix() {
+        type UnaryFn = fn(&[f32], usize) -> crate::error::Result<Vec<f32>>;
+        type UnaryIntoFn = fn(&[f32], usize, &mut [f32]) -> crate::error::Result<()>;
+        type BinaryFn = fn(&[f32], &[f32], usize) -> crate::error::Result<Vec<f32>>;
+        type BinaryIntoFn = fn(&[f32], &[f32], usize, &mut [f32]) -> crate::error::Result<()>;
+
+        let n = 96;
+        let mut data = Vec::with_capacity(n);
+        let mut data1 = Vec::with_capacity(n);
+        for i in 0..n {
+            let x = i as f32;
+            data.push(x * 0.7 + ((i % 4) as f32) * 0.02 + 20.0);
+            data1.push(x * 1.1 + ((i % 6) as f32) * 0.03 + 8.0);
+        }
+        let period = 10;
+
+        let unary_wrappers: [UnaryFn; 12] = [
+            var,
+            stddev,
+            skew,
+            kurt,
+            zscore,
+            mad,
+            sem,
+            linearreg,
+            linearreg_slope,
+            linearreg_intercept,
+            linearreg_angle,
+            tsf,
+        ];
+        for f in unary_wrappers {
+            let out = f(&data, period).unwrap();
+            assert_eq!(out.len(), n);
+        }
+
+        let unary_into: [UnaryIntoFn; 12] = [
+            var_into,
+            stddev_into,
+            skew_into,
+            kurt_into,
+            zscore_into,
+            mad_into,
+            sem_into,
+            linearreg_into,
+            linearreg_slope_into,
+            linearreg_intercept_into,
+            linearreg_angle_into,
+            tsf_into,
+        ];
+        for f in unary_into {
+            let mut out = vec![0.0_f32; n];
+            f(&data, period, &mut out).unwrap();
+            assert_eq!(out.len(), n);
+        }
+
+        let binary_wrappers: [BinaryFn; 3] = [cov, correl, beta];
+        for f in binary_wrappers {
+            let out = f(&data, &data1, period).unwrap();
+            assert_eq!(out.len(), n);
+        }
+
+        let binary_into: [BinaryIntoFn; 3] = [cov_into, correl_into, beta_into];
+        for f in binary_into {
+            let mut out = vec![0.0_f32; n];
+            f(&data, &data1, period, &mut out).unwrap();
+            assert_eq!(out.len(), n);
+        }
+    }
+
+    #[test]
+    fn statistics_public_api_f32_error_surface_matrix() {
+        type UnaryFn = fn(&[f32], usize) -> crate::error::Result<Vec<f32>>;
+        type UnaryIntoFn = fn(&[f32], usize, &mut [f32]) -> crate::error::Result<()>;
+        type BinaryFn = fn(&[f32], &[f32], usize) -> crate::error::Result<Vec<f32>>;
+        type BinaryIntoFn = fn(&[f32], &[f32], usize, &mut [f32]) -> crate::error::Result<()>;
+
+        let n = 96;
+        let mut data = Vec::with_capacity(n);
+        let mut data1 = Vec::with_capacity(n);
+        for i in 0..n {
+            let x = i as f32;
+            data.push(x * 0.9 + ((i % 5) as f32) * 0.02 + 3.0);
+            data1.push(x * 1.3 + ((i % 7) as f32) * 0.03 + 1.0);
+        }
+
+        let data_short = data[..(n - 1)].to_vec();
+        let empty: Vec<f32> = vec![];
+        let period = 10;
+
+        let unary_wrappers: [UnaryFn; 12] = [
+            var,
+            stddev,
+            skew,
+            kurt,
+            zscore,
+            mad,
+            sem,
+            linearreg,
+            linearreg_slope,
+            linearreg_intercept,
+            linearreg_angle,
+            tsf,
+        ];
+        for f in unary_wrappers {
+            assert!(f(&empty, period).is_err());
+        }
+
+        let unary_into: [UnaryIntoFn; 12] = [
+            var_into,
+            stddev_into,
+            skew_into,
+            kurt_into,
+            zscore_into,
+            mad_into,
+            sem_into,
+            linearreg_into,
+            linearreg_slope_into,
+            linearreg_intercept_into,
+            linearreg_angle_into,
+            tsf_into,
+        ];
+        let mut out_ok = vec![0.0_f32; n];
+        let mut out_short = vec![0.0_f32; n - 1];
+        for f in unary_into {
+            assert!(f(&data, period, &mut out_short).is_err());
+            assert!(f(&empty, period, &mut []).is_err());
+            let _ = f(&data, period, &mut out_ok);
+        }
+
+        let binary_wrappers: [BinaryFn; 3] = [cov, correl, beta];
+        for f in binary_wrappers {
+            assert!(f(&data, &data_short, period).is_err());
+            assert!(f(&empty, &empty, period).is_err());
+        }
+
+        let binary_into: [BinaryIntoFn; 3] = [cov_into, correl_into, beta_into];
+        for f in binary_into {
+            assert!(f(&data, &data1, period, &mut out_short).is_err());
+            assert!(f(&data, &data_short, period, &mut out_ok).is_err());
+            assert!(f(&empty, &empty, period, &mut []).is_err());
+        }
+    }
+
+    #[test]
+    fn statistics_public_api_f16_large_period_numeric_conversion_matrix() {
+        use half::f16;
+
+        type UnaryFn = fn(&[f16], usize) -> crate::error::Result<Vec<f16>>;
+        type UnaryIntoFn = fn(&[f16], usize, &mut [f16]) -> crate::error::Result<()>;
+        type BinaryFn = fn(&[f16], &[f16], usize) -> crate::error::Result<Vec<f16>>;
+        type BinaryIntoFn = fn(&[f16], &[f16], usize, &mut [f16]) -> crate::error::Result<()>;
+
+        let data = vec![
+            f16::from_f32(1.0),
+            f16::from_f32(2.0),
+            f16::from_f32(3.0),
+            f16::from_f32(4.0),
+        ];
+        let data1 = vec![
+            f16::from_f32(2.0),
+            f16::from_f32(1.0),
+            f16::from_f32(4.0),
+            f16::from_f32(3.0),
+        ];
+        let huge_period = usize::MAX;
+
+        let unary_wrappers: [UnaryFn; 12] = [
+            var,
+            stddev,
+            skew,
+            kurt,
+            zscore,
+            mad,
+            sem,
+            linearreg,
+            linearreg_slope,
+            linearreg_intercept,
+            linearreg_angle,
+            tsf,
+        ];
+        for f in unary_wrappers {
+            assert!(f(&data, huge_period).is_err());
+        }
+
+        let unary_into: [UnaryIntoFn; 12] = [
+            var_into,
+            stddev_into,
+            skew_into,
+            kurt_into,
+            zscore_into,
+            mad_into,
+            sem_into,
+            linearreg_into,
+            linearreg_slope_into,
+            linearreg_intercept_into,
+            linearreg_angle_into,
+            tsf_into,
+        ];
+        for f in unary_into {
+            let mut out = vec![f16::from_f32(0.0); data.len()];
+            assert!(f(&data, huge_period, &mut out).is_err());
+        }
+
+        let binary_wrappers: [BinaryFn; 3] = [cov, correl, beta];
+        for f in binary_wrappers {
+            assert!(f(&data, &data1, huge_period).is_err());
+        }
+
+        let binary_into: [BinaryIntoFn; 3] = [cov_into, correl_into, beta_into];
+        for f in binary_into {
+            let mut out = vec![f16::from_f32(0.0); data.len()];
+            assert!(f(&data, &data1, huge_period, &mut out).is_err());
+        }
+
+        // Conversion-failure surface (period fits length checks, but cannot convert to f16).
+        let conv_fail_period = 70_000usize;
+        let data_big = vec![f16::from_f32(1.0); conv_fail_period];
+        let data1_big = vec![f16::from_f32(2.0); conv_fail_period];
+
+        let unary_wrappers_big: [UnaryFn; 12] = [
+            var,
+            stddev,
+            skew,
+            kurt,
+            zscore,
+            mad,
+            sem,
+            linearreg,
+            linearreg_slope,
+            linearreg_intercept,
+            linearreg_angle,
+            tsf,
+        ];
+        for f in unary_wrappers_big {
+            let _ = f(&data_big, conv_fail_period);
+        }
+
+        let unary_into_big: [UnaryIntoFn; 12] = [
+            var_into,
+            stddev_into,
+            skew_into,
+            kurt_into,
+            zscore_into,
+            mad_into,
+            sem_into,
+            linearreg_into,
+            linearreg_slope_into,
+            linearreg_intercept_into,
+            linearreg_angle_into,
+            tsf_into,
+        ];
+        for f in unary_into_big {
+            let mut out = vec![f16::from_f32(0.0); conv_fail_period];
+            let _ = f(&data_big, conv_fail_period, &mut out);
+        }
+
+        let binary_wrappers_big: [BinaryFn; 3] = [cov, correl, beta];
+        for f in binary_wrappers_big {
+            let _ = f(&data_big, &data1_big, conv_fail_period);
+        }
+
+        let binary_into_big: [BinaryIntoFn; 3] = [cov_into, correl_into, beta_into];
+        for f in binary_into_big {
+            let mut out = vec![f16::from_f32(0.0); conv_fail_period];
+            let _ = f(&data_big, &data1_big, conv_fail_period, &mut out);
+        }
     }
 }

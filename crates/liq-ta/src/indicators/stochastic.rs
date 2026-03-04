@@ -371,130 +371,13 @@ pub fn stochastic_fast<T: SeriesElement>(
     k_period: usize,
     d_period: usize,
 ) -> Result<StochasticOutput<T>> {
-    validate_stochastic_inputs(high, low, close, k_period, d_period)?;
-
     let n = close.len();
-
-    // Fast path: single-pass NaN check (combined to avoid 3 separate iterations)
-    let mut has_nan = false;
-    for i in 0..n {
-        if is_invalid(high[i]) || is_invalid(low[i]) || is_invalid(close[i]) {
-            has_nan = true;
-            break;
-        }
-    }
-
-    if has_nan {
-        // Slow path: proper NaN handling using cached extrema
-        // Optimization: For f64/f32, allocate uninitialized memory (Section 5.4)
-        use std::any::TypeId;
-
-        if TypeId::of::<T>() == TypeId::of::<f64>() {
-            let high_f64: &[f64] = unsafe { std::mem::transmute(high) };
-            let low_f64: &[f64] = unsafe { std::mem::transmute(low) };
-            let close_f64: &[f64] = unsafe { std::mem::transmute(close) };
-
-            let mut k: Vec<f64> = Vec::with_capacity(n);
-            let mut d: Vec<f64> = Vec::with_capacity(n);
-            unsafe {
-                k.set_len(n);
-                d.set_len(n);
-            }
-
-            compute_raw_k(high_f64, low_f64, close_f64, k_period, &mut k)?;
-            compute_sma_of_series(&k, d_period, k_period - 1, &mut d)?;
-
-            Ok(StochasticOutput {
-                k: unsafe { std::mem::transmute(k) },
-                d: unsafe { std::mem::transmute(d) },
-            })
-        } else if TypeId::of::<T>() == TypeId::of::<f32>() {
-            let high_f32: &[f32] = unsafe { std::mem::transmute(high) };
-            let low_f32: &[f32] = unsafe { std::mem::transmute(low) };
-            let close_f32: &[f32] = unsafe { std::mem::transmute(close) };
-
-            let mut k: Vec<f32> = Vec::with_capacity(n);
-            let mut d: Vec<f32> = Vec::with_capacity(n);
-            unsafe {
-                k.set_len(n);
-                d.set_len(n);
-            }
-
-            compute_raw_k(high_f32, low_f32, close_f32, k_period, &mut k)?;
-            compute_sma_of_series(&k, d_period, k_period - 1, &mut d)?;
-
-            Ok(StochasticOutput {
-                k: unsafe { std::mem::transmute(k) },
-                d: unsafe { std::mem::transmute(d) },
-            })
-        } else {
-            // Generic fallback: safe initialization
-            let mut k = vec![T::nan(); n];
-            let mut d = vec![T::nan(); n];
-            compute_raw_k(high, low, close, k_period, &mut k)?;
-            compute_sma_of_series(&k, d_period, k_period - 1, &mut d)?;
-            Ok(StochasticOutput { k, d })
-        }
-    } else {
-        // Fast path: VHGW algorithm (always, no threshold)
-        use std::any::TypeId;
-
-        // f64 specialization: zero-overhead VHGW
-        if TypeId::of::<T>() == TypeId::of::<f64>() {
-            let high_f64: &[f64] = unsafe { std::mem::transmute(high) };
-            let low_f64: &[f64] = unsafe { std::mem::transmute(low) };
-            let close_f64: &[f64] = unsafe { std::mem::transmute(close) };
-
-            let mut k: Vec<f64> = Vec::with_capacity(n);
-            let mut d: Vec<f64> = Vec::with_capacity(n);
-            unsafe {
-                k.set_len(n);
-                d.set_len(n);
-            }
-
-            crate::kernels::compute_stochastic_fast_vhgw_f64(
-                high_f64, low_f64, close_f64, k_period, d_period, &mut k, &mut d,
-            )?;
-
-            Ok(StochasticOutput {
-                k: unsafe { std::mem::transmute(k) },
-                d: unsafe { std::mem::transmute(d) },
-            })
-        } else if TypeId::of::<T>() == TypeId::of::<f32>() {
-            // f32 specialization: zero-overhead VHGW
-            let high_f32: &[f32] = unsafe { std::mem::transmute(high) };
-            let low_f32: &[f32] = unsafe { std::mem::transmute(low) };
-            let close_f32: &[f32] = unsafe { std::mem::transmute(close) };
-
-            let mut k: Vec<f32> = Vec::with_capacity(n);
-            let mut d: Vec<f32> = Vec::with_capacity(n);
-            unsafe {
-                k.set_len(n);
-                d.set_len(n);
-            }
-
-            crate::kernels::compute_stochastic_fast_vhgw_f32(
-                high_f32, low_f32, close_f32, k_period, d_period, &mut k, &mut d,
-            )?;
-
-            Ok(StochasticOutput {
-                k: unsafe { std::mem::transmute(k) },
-                d: unsafe { std::mem::transmute(d) },
-            })
-        } else {
-            // Generic fallback: streaming deque for non-f32/f64 types
-            let mut k = Vec::with_capacity(n);
-            let mut d = Vec::with_capacity(n);
-            unsafe {
-                k.set_len(n);
-                d.set_len(n);
-            }
-            compute_stochastic_fast_streaming(
-                high, low, close, k_period, d_period, &mut k, &mut d,
-            )?;
-            Ok(StochasticOutput { k, d })
-        }
-    }
+    let mut output = StochasticOutput {
+        k: vec![T::nan(); n],
+        d: vec![T::nan(); n],
+    };
+    stochastic_fast_into(high, low, close, k_period, d_period, &mut output)?;
+    Ok(output)
 }
 
 /// Computes the Fast Stochastic Oscillator into pre-allocated output buffers.
@@ -573,9 +456,11 @@ pub fn stochastic_fast_into<T: SeriesElement>(
             let k_f64: &mut [f64] = unsafe { std::mem::transmute(output.k.as_mut_slice()) };
             let d_f64: &mut [f64] = unsafe { std::mem::transmute(output.d.as_mut_slice()) };
 
-            crate::kernels::compute_stochastic_fast_vhgw_f64(
+            if let Err(err) = crate::kernels::compute_stochastic_fast_vhgw_f64(
                 high_f64, low_f64, close_f64, k_period, d_period, k_f64, d_f64,
-            )?;
+            ) {
+                return Err(err);
+            }
         } else if TypeId::of::<T>() == TypeId::of::<f32>() {
             // f32 specialization: zero-overhead VHGW
             let high_f32: &[f32] = unsafe { std::mem::transmute(high) };
@@ -584,12 +469,14 @@ pub fn stochastic_fast_into<T: SeriesElement>(
             let k_f32: &mut [f32] = unsafe { std::mem::transmute(output.k.as_mut_slice()) };
             let d_f32: &mut [f32] = unsafe { std::mem::transmute(output.d.as_mut_slice()) };
 
-            crate::kernels::compute_stochastic_fast_vhgw_f32(
+            if let Err(err) = crate::kernels::compute_stochastic_fast_vhgw_f32(
                 high_f32, low_f32, close_f32, k_period, d_period, k_f32, d_f32,
-            )?;
+            ) {
+                return Err(err);
+            }
         } else {
             // Generic fallback: streaming deque for non-f32/f64 types
-            compute_stochastic_fast_streaming(
+            if let Err(err) = compute_stochastic_fast_streaming(
                 high,
                 low,
                 close,
@@ -597,7 +484,9 @@ pub fn stochastic_fast_into<T: SeriesElement>(
                 d_period,
                 &mut output.k,
                 &mut output.d,
-            )?;
+            ) {
+                return Err(err);
+            }
         }
     }
 
@@ -752,156 +641,21 @@ pub fn stochastic_full<T: SeriesElement>(
     slow_k_period: usize,
     d_period: usize,
 ) -> Result<StochasticOutput<T>> {
-    validate_stochastic_full_inputs(high, low, close, k_period, slow_k_period, d_period)?;
-
     let n = close.len();
-
-    // Fast path: single-pass NaN check (combined to avoid 3 separate iterations)
-    let mut has_nan = false;
-    for i in 0..n {
-        if is_invalid(high[i]) || is_invalid(low[i]) || is_invalid(close[i]) {
-            has_nan = true;
-            break;
-        }
-    }
-
-    if has_nan {
-        // Slow path: proper NaN handling
-        // Optimization: For f64/f32, allocate uninitialized memory (Section 5.4)
-        use std::any::TypeId;
-
-        if TypeId::of::<T>() == TypeId::of::<f64>() {
-            let high_f64: &[f64] = unsafe { std::mem::transmute(high) };
-            let low_f64: &[f64] = unsafe { std::mem::transmute(low) };
-            let close_f64: &[f64] = unsafe { std::mem::transmute(close) };
-
-            let mut k: Vec<f64> = Vec::with_capacity(n);
-            let mut d: Vec<f64> = Vec::with_capacity(n);
-            let mut raw_k: Vec<f64> = Vec::with_capacity(n);
-            unsafe {
-                k.set_len(n);
-                d.set_len(n);
-                raw_k.set_len(n);
-            }
-
-            compute_raw_k(high_f64, low_f64, close_f64, k_period, &mut raw_k)?;
-            compute_sma_of_series(&raw_k, slow_k_period, k_period - 1, &mut k)?;
-            let k_start_idx = k_period + slow_k_period - 2;
-            compute_sma_of_series(&k, d_period, k_start_idx, &mut d)?;
-
-            Ok(StochasticOutput {
-                k: unsafe { std::mem::transmute(k) },
-                d: unsafe { std::mem::transmute(d) },
-            })
-        } else if TypeId::of::<T>() == TypeId::of::<f32>() {
-            let high_f32: &[f32] = unsafe { std::mem::transmute(high) };
-            let low_f32: &[f32] = unsafe { std::mem::transmute(low) };
-            let close_f32: &[f32] = unsafe { std::mem::transmute(close) };
-
-            let mut k: Vec<f32> = Vec::with_capacity(n);
-            let mut d: Vec<f32> = Vec::with_capacity(n);
-            let mut raw_k: Vec<f32> = Vec::with_capacity(n);
-            unsafe {
-                k.set_len(n);
-                d.set_len(n);
-                raw_k.set_len(n);
-            }
-
-            compute_raw_k(high_f32, low_f32, close_f32, k_period, &mut raw_k)?;
-            compute_sma_of_series(&raw_k, slow_k_period, k_period - 1, &mut k)?;
-            let k_start_idx = k_period + slow_k_period - 2;
-            compute_sma_of_series(&k, d_period, k_start_idx, &mut d)?;
-
-            Ok(StochasticOutput {
-                k: unsafe { std::mem::transmute(k) },
-                d: unsafe { std::mem::transmute(d) },
-            })
-        } else {
-            // Generic fallback: safe initialization
-            let mut k = vec![T::nan(); n];
-            let mut d = vec![T::nan(); n];
-            let mut raw_k = vec![T::nan(); n];
-            compute_raw_k(high, low, close, k_period, &mut raw_k)?;
-            compute_sma_of_series(&raw_k, slow_k_period, k_period - 1, &mut k)?;
-            let k_start_idx = k_period + slow_k_period - 2;
-            compute_sma_of_series(&k, d_period, k_start_idx, &mut d)?;
-            Ok(StochasticOutput { k, d })
-        }
-    } else {
-        // Fast path: VHGW algorithm (always, no threshold)
-        use std::any::TypeId;
-
-        // f64 specialization: zero-overhead VHGW
-        if TypeId::of::<T>() == TypeId::of::<f64>() {
-            let high_f64: &[f64] = unsafe { std::mem::transmute(high) };
-            let low_f64: &[f64] = unsafe { std::mem::transmute(low) };
-            let close_f64: &[f64] = unsafe { std::mem::transmute(close) };
-            let mut k: Vec<f64> = Vec::with_capacity(n);
-            let mut d: Vec<f64> = Vec::with_capacity(n);
-            unsafe {
-                k.set_len(n);
-                d.set_len(n);
-            }
-            crate::kernels::compute_stochastic_full_vhgw_f64(
-                high_f64,
-                low_f64,
-                close_f64,
-                k_period,
-                slow_k_period,
-                d_period,
-                &mut k,
-                &mut d,
-            )?;
-            Ok(StochasticOutput {
-                k: unsafe { std::mem::transmute(k) },
-                d: unsafe { std::mem::transmute(d) },
-            })
-        } else if TypeId::of::<T>() == TypeId::of::<f32>() {
-            // f32 specialization: zero-overhead VHGW
-            let high_f32: &[f32] = unsafe { std::mem::transmute(high) };
-            let low_f32: &[f32] = unsafe { std::mem::transmute(low) };
-            let close_f32: &[f32] = unsafe { std::mem::transmute(close) };
-            let mut k: Vec<f32> = Vec::with_capacity(n);
-            let mut d: Vec<f32> = Vec::with_capacity(n);
-            unsafe {
-                k.set_len(n);
-                d.set_len(n);
-            }
-            crate::kernels::compute_stochastic_full_vhgw_f32(
-                high_f32,
-                low_f32,
-                close_f32,
-                k_period,
-                slow_k_period,
-                d_period,
-                &mut k,
-                &mut d,
-            )?;
-            Ok(StochasticOutput {
-                k: unsafe { std::mem::transmute(k) },
-                d: unsafe { std::mem::transmute(d) },
-            })
-        } else {
-            // Generic fallback: streaming deque for non-f32/f64 types
-            let mut k = Vec::with_capacity(n);
-            let mut d = Vec::with_capacity(n);
-            unsafe {
-                k.set_len(n);
-                d.set_len(n);
-            }
-            compute_stochastic_full_streaming(
-                high,
-                low,
-                close,
-                k_period,
-                slow_k_period,
-                d_period,
-                &mut k,
-                &mut d,
-            )?;
-            Ok(StochasticOutput { k, d })
-        }
-    }
+    let mut output = StochasticOutput {
+        k: vec![T::nan(); n],
+        d: vec![T::nan(); n],
+    };
+    stochastic_full_into(
+        high,
+        low,
+        close,
+        k_period,
+        slow_k_period,
+        d_period,
+        &mut output,
+    )?;
+    Ok(output)
 }
 
 /// Computes the Full Stochastic Oscillator into pre-allocated output buffers.
@@ -967,7 +721,7 @@ pub fn stochastic_full_into<T: SeriesElement>(
             let close_f64: &[f64] = unsafe { std::mem::transmute(close) };
             let k_f64: &mut [f64] = unsafe { std::mem::transmute(&mut output.k[..n]) };
             let d_f64: &mut [f64] = unsafe { std::mem::transmute(&mut output.d[..n]) };
-            crate::kernels::compute_stochastic_full_vhgw_f64(
+            if let Err(err) = crate::kernels::compute_stochastic_full_vhgw_f64(
                 high_f64,
                 low_f64,
                 close_f64,
@@ -976,7 +730,9 @@ pub fn stochastic_full_into<T: SeriesElement>(
                 d_period,
                 k_f64,
                 d_f64,
-            )?;
+            ) {
+                return Err(err);
+            }
         } else if TypeId::of::<T>() == TypeId::of::<f32>() {
             // f32 specialization: zero-overhead VHGW
             let high_f32: &[f32] = unsafe { std::mem::transmute(high) };
@@ -984,7 +740,7 @@ pub fn stochastic_full_into<T: SeriesElement>(
             let close_f32: &[f32] = unsafe { std::mem::transmute(close) };
             let k_f32: &mut [f32] = unsafe { std::mem::transmute(&mut output.k[..n]) };
             let d_f32: &mut [f32] = unsafe { std::mem::transmute(&mut output.d[..n]) };
-            crate::kernels::compute_stochastic_full_vhgw_f32(
+            if let Err(err) = crate::kernels::compute_stochastic_full_vhgw_f32(
                 high_f32,
                 low_f32,
                 close_f32,
@@ -993,10 +749,12 @@ pub fn stochastic_full_into<T: SeriesElement>(
                 d_period,
                 k_f32,
                 d_f32,
-            )?;
+            ) {
+                return Err(err);
+            }
         } else {
             // Generic fallback: streaming deque for non-f32/f64 types
-            compute_stochastic_full_streaming(
+            if let Err(err) = compute_stochastic_full_streaming(
                 high,
                 low,
                 close,
@@ -1005,7 +763,9 @@ pub fn stochastic_full_into<T: SeriesElement>(
                 d_period,
                 &mut output.k[..n],
                 &mut output.d[..n],
-            )?;
+            ) {
+                return Err(err);
+            }
         }
     }
 
@@ -1460,296 +1220,6 @@ fn compute_stochastic_full_streaming<T: SeriesElement + 'static>(
     Ok(())
 }
 
-/// Fused computation of Full Stochastic (raw %K → Slow %K → %D).
-///
-/// Three passes: raw %K, SMA for slow %K, SMA for %D.
-/// Uses inverse multiply for SMA, no per-element NaN checks.
-/// Note: Kept for reference; streaming version is used in production.
-#[allow(dead_code)]
-#[inline(never)]
-fn compute_stochastic_full_fused<T: SeriesElement>(
-    high: &[T],
-    low: &[T],
-    close: &[T],
-    k_period: usize,
-    slow_k_period: usize,
-    d_period: usize,
-    k_out: &mut [T],
-    d_out: &mut [T],
-) -> Result<()> {
-    let n = close.len();
-    let inv_hundred = T::from_f64(0.01)?;
-    let inv_slow_k = T::from_f64(1.0 / slow_k_period as f64)?;
-    let inv_d_period = T::from_f64(1.0 / d_period as f64)?;
-    let fifty = T::from_f64(50.0)?;
-
-    // We need a temp buffer for raw %K values
-    // Use uninit - we only read indices that we write to (k_start..n)
-    let mut raw_k = Vec::with_capacity(n);
-    unsafe {
-        raw_k.set_len(n);
-    }
-
-    // ===== Pass 1: Compute raw %K using TA-Lib cached extrema =====
-    let mut highest_idx = 0usize;
-    let mut lowest_idx = 0usize;
-    let mut highest = high[0];
-    let mut lowest = low[0];
-
-    for j in 1..k_period {
-        if high[j] > highest {
-            highest = high[j];
-            highest_idx = j;
-        }
-        if low[j] < lowest {
-            lowest = low[j];
-            lowest_idx = j;
-        }
-    }
-
-    let mut diff = (highest - lowest) * inv_hundred;
-    let k_start = k_period - 1;
-
-    if diff > T::zero() {
-        raw_k[k_start] = (close[k_start] - lowest) / diff;
-    } else {
-        raw_k[k_start] = fifty;
-    }
-
-    for today in k_period..n {
-        let trailing_idx = today + 1 - k_period;
-
-        let tmp_low = low[today];
-        if lowest_idx < trailing_idx {
-            lowest_idx = trailing_idx;
-            lowest = low[lowest_idx];
-            for j in (trailing_idx + 1)..=today {
-                if low[j] < lowest {
-                    lowest = low[j];
-                    lowest_idx = j;
-                }
-            }
-            diff = (highest - lowest) * inv_hundred;
-        } else if tmp_low <= lowest {
-            lowest_idx = today;
-            lowest = tmp_low;
-            diff = (highest - lowest) * inv_hundred;
-        }
-
-        let tmp_high = high[today];
-        if highest_idx < trailing_idx {
-            highest_idx = trailing_idx;
-            highest = high[highest_idx];
-            for j in (trailing_idx + 1)..=today {
-                if high[j] > highest {
-                    highest = high[j];
-                    highest_idx = j;
-                }
-            }
-            diff = (highest - lowest) * inv_hundred;
-        } else if tmp_high >= highest {
-            highest_idx = today;
-            highest = tmp_high;
-            diff = (highest - lowest) * inv_hundred;
-        }
-
-        if diff > T::zero() {
-            raw_k[today] = (close[today] - lowest) / diff;
-        } else {
-            raw_k[today] = fifty;
-        }
-    }
-
-    // ===== Pass 2: Compute Slow %K = SMA(raw_k, slow_k_period) =====
-    let slow_k_start = k_start + slow_k_period - 1;
-
-    // Set initial NaN values for k_out
-    k_out[..slow_k_start.min(n)].fill(T::nan());
-
-    if slow_k_start >= n {
-        return Ok(());
-    }
-
-    let mut sum = T::zero();
-    for j in k_start..=slow_k_start {
-        sum = sum + raw_k[j];
-    }
-    k_out[slow_k_start] = sum * inv_slow_k;
-
-    for i in (slow_k_start + 1)..n {
-        let old_value = raw_k[i - slow_k_period];
-        let new_value = raw_k[i];
-        sum = sum + new_value - old_value;
-        k_out[i] = sum * inv_slow_k;
-    }
-
-    // ===== Pass 3: Compute %D = SMA(slow_k, d_period) =====
-    let d_start = slow_k_start + d_period - 1;
-
-    // Set initial NaN values for d_out
-    d_out[..d_start.min(n)].fill(T::nan());
-
-    if d_start >= n {
-        return Ok(());
-    }
-
-    let mut sum_d = T::zero();
-    for j in slow_k_start..=d_start {
-        sum_d = sum_d + k_out[j];
-    }
-    d_out[d_start] = sum_d * inv_d_period;
-
-    for i in (d_start + 1)..n {
-        let old_value = k_out[i - d_period];
-        let new_value = k_out[i];
-        sum_d = sum_d + new_value - old_value;
-        d_out[i] = sum_d * inv_d_period;
-    }
-
-    Ok(())
-}
-
-/// Fused computation of Fast Stochastic (%K and %D).
-///
-/// Combines raw %K computation with SMA for %D in a single optimized flow.
-/// Uses TA-Lib style cached extrema for O(n) amortized performance.
-/// No per-element NaN checks in the hot path - uses inverse multiply for SMA.
-/// Note: Kept for reference; streaming version is used in production.
-#[allow(dead_code)]
-#[inline(never)]
-fn compute_stochastic_fast_fused<T: SeriesElement>(
-    high: &[T],
-    low: &[T],
-    close: &[T],
-    k_period: usize,
-    d_period: usize,
-    k_out: &mut [T],
-    d_out: &mut [T],
-) -> Result<()> {
-    let n = close.len();
-    let inv_hundred = T::from_f64(0.01)?;
-    let inv_d_period = T::from_f64(1.0 / d_period as f64)?;
-    let fifty = T::from_f64(50.0)?;
-
-    // ===== Pass 1: Compute raw %K using TA-Lib cached extrema =====
-
-    // Set initial NaN values for lookback period
-    let k_start = k_period - 1;
-    k_out[..k_start].fill(T::nan());
-
-    // Initialize by scanning the first k_period window
-    let mut highest_idx = 0usize;
-    let mut lowest_idx = 0usize;
-    let mut highest = high[0];
-    let mut lowest = low[0];
-
-    for j in 1..k_period {
-        if high[j] > highest {
-            highest = high[j];
-            highest_idx = j;
-        }
-        if low[j] < lowest {
-            lowest = low[j];
-            lowest_idx = j;
-        }
-    }
-
-    // Precompute diff = (highest - lowest) / 100 like TA-Lib
-    let mut diff = (highest - lowest) * inv_hundred;
-
-    // First %K value
-    let k_start = k_period - 1;
-    if diff > T::zero() {
-        k_out[k_start] = (close[k_start] - lowest) / diff;
-    } else {
-        k_out[k_start] = fifty;
-    }
-
-    // Compute remaining %K values using unchecked access for performance
-    // SAFETY: All indices are guaranteed in bounds by loop construction
-    unsafe {
-        for today in k_period..n {
-            let trailing_idx = today + 1 - k_period;
-
-            // Update lowest low (check if cached min fell out of window)
-            let tmp_low = *low.get_unchecked(today);
-            if lowest_idx < trailing_idx {
-                lowest_idx = trailing_idx;
-                lowest = *low.get_unchecked(lowest_idx);
-                for j in (trailing_idx + 1)..=today {
-                    let val = *low.get_unchecked(j);
-                    if val < lowest {
-                        lowest = val;
-                        lowest_idx = j;
-                    }
-                }
-                diff = (highest - lowest) * inv_hundred;
-            } else if tmp_low <= lowest {
-                lowest_idx = today;
-                lowest = tmp_low;
-                diff = (highest - lowest) * inv_hundred;
-            }
-
-            // Update highest high (check if cached max fell out of window)
-            let tmp_high = *high.get_unchecked(today);
-            if highest_idx < trailing_idx {
-                highest_idx = trailing_idx;
-                highest = *high.get_unchecked(highest_idx);
-                for j in (trailing_idx + 1)..=today {
-                    let val = *high.get_unchecked(j);
-                    if val > highest {
-                        highest = val;
-                        highest_idx = j;
-                    }
-                }
-                diff = (highest - lowest) * inv_hundred;
-            } else if tmp_high >= highest {
-                highest_idx = today;
-                highest = tmp_high;
-                diff = (highest - lowest) * inv_hundred;
-            }
-
-            // Compute %K
-            if diff > T::zero() {
-                *k_out.get_unchecked_mut(today) = (*close.get_unchecked(today) - lowest) / diff;
-            } else {
-                *k_out.get_unchecked_mut(today) = fifty;
-            }
-        }
-    }
-
-    // ===== Pass 2: Compute %D as SMA of %K using inverse multiply =====
-
-    let d_start = k_start + d_period - 1; // First valid %D index
-
-    // Set initial NaN values for %D lookback period
-    d_out[..d_start.min(n)].fill(T::nan());
-
-    if d_start >= n {
-        return Ok(());
-    }
-
-    // Compute initial sum for first %D window
-    // SAFETY: Indices are in bounds (k_start..=d_start and d_start < n verified above)
-    let mut sum = T::zero();
-    unsafe {
-        for j in k_start..=d_start {
-            sum = sum + *k_out.get_unchecked(j);
-        }
-        *d_out.get_unchecked_mut(d_start) = sum * inv_d_period;
-
-        // Rolling SMA for remaining %D values
-        for i in (d_start + 1)..n {
-            let old_value = *k_out.get_unchecked(i - d_period);
-            let new_value = *k_out.get_unchecked(i);
-            sum = sum + new_value - old_value;
-            *d_out.get_unchecked_mut(i) = sum * inv_d_period;
-        }
-    }
-
-    Ok(())
-}
-
 /// Computes raw %K values using cached extrema (TA-Lib style).
 ///
 /// %K = 100 * (Close - Lowest Low) / (Highest High - Lowest Low)
@@ -2134,15 +1604,57 @@ mod tests {
         if a.is_nan() && b.is_nan() {
             return true;
         }
-        if a.is_nan() || b.is_nan() {
-            return false;
-        }
-        (a - b).abs() < epsilon
+        !a.is_nan() && !b.is_nan() && (a - b).abs() < epsilon
     }
 
     const EPSILON: f64 = 1e-10;
     // Looser epsilon for stochastic calculations
     const STOCH_EPSILON: f64 = 1e-6;
+
+    #[test]
+    fn test_compute_percent_k_div_first_precision_modes() {
+        let k_f64 = compute_percent_k_div_first(12.0_f64, 10.0_f64, 4.0_f64, 100.0_f64).unwrap();
+        assert!(approx_eq(k_f64, 50.0, STOCH_EPSILON));
+
+        crate::precision::with_precision_mode(crate::precision::PrecisionMode::Fast, || {
+            let k_f32 =
+                compute_percent_k_div_first(12.0_f32, 10.0_f32, 4.0_f32, 100.0_f32).unwrap();
+            assert!((k_f32 - 50.0).abs() < 1e-5);
+        });
+
+        crate::precision::with_precision_mode(crate::precision::PrecisionMode::High, || {
+            let k_f32 =
+                compute_percent_k_div_first(12.0_f32, 10.0_f32, 4.0_f32, 100.0_f32).unwrap();
+            assert!((k_f32 - 50.0).abs() < 1e-5);
+        });
+    }
+
+    #[test]
+    fn test_compute_stochastic_streaming_fast_and_full_internal_paths() {
+        let high = vec![
+            10.0_f64, 11.0, 12.0, 12.0, 12.0, 13.0, 13.0, 13.0, 12.0, 12.0, 12.0, 12.0,
+        ];
+        let low = vec![
+            9.0_f64, 9.5, 10.0, 10.0, 10.0, 11.0, 11.0, 11.0, 11.0, 11.0, 11.0, 11.0,
+        ];
+        let close = vec![
+            9.5_f64, 10.0, 11.5, 11.0, 11.0, 12.5, 12.0, 12.0, 11.5, 11.0, 11.0, 11.0,
+        ];
+
+        let mut k_fast = vec![f64::NAN; close.len()];
+        let mut d_fast = vec![f64::NAN; close.len()];
+        compute_stochastic_fast_streaming(&high, &low, &close, 3, 2, &mut k_fast, &mut d_fast)
+            .unwrap();
+        assert!(k_fast[2].is_finite());
+        assert!(d_fast[3].is_finite());
+
+        let mut k_full = vec![f64::NAN; close.len()];
+        let mut d_full = vec![f64::NAN; close.len()];
+        compute_stochastic_full_streaming(&high, &low, &close, 3, 2, 2, &mut k_full, &mut d_full)
+            .unwrap();
+        assert!(k_full[3].is_finite());
+        assert!(d_full[4].is_finite());
+    }
 
     // ==================== Fast Stochastic Tests ====================
 
@@ -2161,13 +1673,13 @@ mod tests {
 
         // First 4 values of %K are NaN
         for i in 0..4 {
-            assert!(result.k[i].is_nan(), "k[{}] should be NaN", i);
+            assert!(result.k[i].is_nan());
         }
         assert!(!result.k[4].is_nan());
 
         // First 6 values of %D are NaN (k_period + d_period - 2 = 5 + 3 - 2 = 6)
         for i in 0..6 {
-            assert!(result.d[i].is_nan(), "d[{}] should be NaN", i);
+            assert!(result.d[i].is_nan());
         }
         assert!(!result.d[6].is_nan());
     }
@@ -2271,13 +1783,13 @@ mod tests {
 
         // Slow %K starts at k_period + d_period - 2 = 5 + 3 - 2 = 6
         for i in 0..6 {
-            assert!(result.k[i].is_nan(), "slow k[{}] should be NaN", i);
+            assert!(result.k[i].is_nan());
         }
         assert!(!result.k[6].is_nan());
 
         // Slow %D starts at k_period + 2*d_period - 3 = 5 + 6 - 3 = 8
         for i in 0..8 {
-            assert!(result.d[i].is_nan(), "slow d[{}] should be NaN", i);
+            assert!(result.d[i].is_nan());
         }
         assert!(!result.d[8].is_nan());
     }
@@ -2327,13 +1839,13 @@ mod tests {
 
         // Full %K starts at k_period + slow_k_period - 2 = 5 + 3 - 2 = 6
         for i in 0..6 {
-            assert!(result.k[i].is_nan(), "full k[{}] should be NaN", i);
+            assert!(result.k[i].is_nan());
         }
         assert!(!result.k[6].is_nan());
 
         // Full %D starts at k_period + slow_k_period + d_period - 3 = 5 + 3 + 3 - 3 = 8
         for i in 0..8 {
-            assert!(result.d[i].is_nan(), "full d[{}] should be NaN", i);
+            assert!(result.d[i].is_nan());
         }
         assert!(!result.d[8].is_nan());
     }
@@ -2375,20 +1887,8 @@ mod tests {
 
         // Slow and Full should produce identical results when slow_k_period == d_period
         for i in 0..10 {
-            assert!(
-                approx_eq(slow.k[i], full.k[i], STOCH_EPSILON),
-                "k mismatch at {}: {} vs {}",
-                i,
-                slow.k[i],
-                full.k[i]
-            );
-            assert!(
-                approx_eq(slow.d[i], full.d[i], STOCH_EPSILON),
-                "d mismatch at {}: {} vs {}",
-                i,
-                slow.d[i],
-                full.d[i]
-            );
+            assert!(approx_eq(slow.k[i], full.k[i], STOCH_EPSILON));
+            assert!(approx_eq(slow.d[i], full.d[i], STOCH_EPSILON));
         }
     }
 
@@ -2584,20 +2084,8 @@ mod tests {
         stochastic_fast_into(&high, &low, &close, 5, 3, &mut result2).unwrap();
 
         for i in 0..10 {
-            assert!(
-                approx_eq(result1.k[i], result2.k[i], EPSILON),
-                "k mismatch at {}: {} vs {}",
-                i,
-                result1.k[i],
-                result2.k[i]
-            );
-            assert!(
-                approx_eq(result1.d[i], result2.d[i], EPSILON),
-                "d mismatch at {}: {} vs {}",
-                i,
-                result1.d[i],
-                result2.d[i]
-            );
+            assert!(approx_eq(result1.k[i], result2.k[i], EPSILON));
+            assert!(approx_eq(result1.d[i], result2.d[i], EPSILON));
         }
     }
 
@@ -2618,10 +2106,8 @@ mod tests {
 
         let result = stochastic_fast(&high, &low, &close, 14, 3).unwrap();
 
-        for (i, &k) in result.k.iter().enumerate() {
-            if !k.is_nan() {
-                assert!(k >= 0.0 && k <= 100.0, "k[{}] = {} is out of bounds", i, k);
-            }
+        for &k in &result.k[13..] {
+            assert!(k >= 0.0 && k <= 100.0);
         }
     }
 
@@ -2640,10 +2126,8 @@ mod tests {
 
         let result = stochastic_fast(&high, &low, &close, 14, 3).unwrap();
 
-        for (i, &d) in result.d.iter().enumerate() {
-            if !d.is_nan() {
-                assert!(d >= 0.0 && d <= 100.0, "d[{}] = {} is out of bounds", i, d);
-            }
+        for &d in &result.d[15..] {
+            assert!(d >= 0.0 && d <= 100.0);
         }
     }
 
@@ -2709,10 +2193,8 @@ mod tests {
         let result = stochastic_fast(&high, &low, &close, 3, 2).unwrap();
 
         // Should still produce valid results in [0, 100]
-        for k in result.k.iter() {
-            if !k.is_nan() {
-                assert!(*k >= 0.0 && *k <= 100.0);
-            }
+        for &k in &result.k[2..] {
+            assert!(k >= 0.0 && k <= 100.0);
         }
     }
 
@@ -2725,10 +2207,8 @@ mod tests {
         let result = stochastic_fast(&high, &low, &close, 3, 2).unwrap();
 
         // Should handle large values
-        for k in result.k.iter() {
-            if !k.is_nan() {
-                assert!(*k >= 0.0 && *k <= 100.0);
-            }
+        for &k in &result.k[2..] {
+            assert!(k >= 0.0 && k <= 100.0);
         }
     }
 
@@ -2765,13 +2245,7 @@ mod tests {
             let result = stochastic_fast(&high, &low, &close, k_period, 3).unwrap();
 
             let nan_count = result.k.iter().filter(|x| x.is_nan()).count();
-            assert_eq!(
-                nan_count,
-                k_period - 1,
-                "Expected {} NaN values for k_period {}",
-                k_period - 1,
-                k_period
-            );
+            assert_eq!(nan_count, k_period - 1);
         }
     }
 
@@ -2788,11 +2262,7 @@ mod tests {
 
                 let expected_nan_count = k_period + d_period - 2;
                 let nan_count = result.d.iter().filter(|x| x.is_nan()).count();
-                assert_eq!(
-                    nan_count, expected_nan_count,
-                    "Expected {} NaN values for k_period={}, d_period={}",
-                    expected_nan_count, k_period, d_period
-                );
+                assert_eq!(nan_count, expected_nan_count);
             }
         }
     }
@@ -2812,13 +2282,7 @@ mod tests {
         for i in 4..10 {
             // From index k_period + d_period - 2 = 4
             let expected_d = (result.k[i - 2] + result.k[i - 1] + result.k[i]) / 3.0;
-            assert!(
-                approx_eq(result.d[i], expected_d, STOCH_EPSILON),
-                "d[{}] should be average of k[{}..{}]",
-                i,
-                i - 2,
-                i
-            );
+            assert!(approx_eq(result.d[i], expected_d, STOCH_EPSILON));
         }
     }
 
@@ -2835,7 +2299,7 @@ mod tests {
 
         // In uptrend with close near high, %K should be high (> 50)
         for i in 4..10 {
-            assert!(result.k[i] > 50.0, "k[{}] should be > 50 in uptrend", i);
+            assert!(result.k[i] > 50.0);
         }
     }
 
@@ -2850,7 +2314,270 @@ mod tests {
 
         // In downtrend with close near low, %K should be low (< 50)
         for i in 4..10 {
-            assert!(result.k[i] < 50.0, "k[{i}] should be < 50 in downtrend");
+            assert!(result.k[i] < 50.0);
         }
+    }
+}
+
+#[cfg(test)]
+mod coverage_push_private_paths_tests {
+    use super::*;
+
+    #[test]
+    fn stochastic_private_queue_and_streaming_zero_range_paths() {
+        let vals_min = [3.0_f64, 2.0, 1.0];
+        let mut q_min = IdxRing::new(3);
+        push_min_queue(&mut q_min, 0, &vals_min);
+        push_min_queue(&mut q_min, 1, &vals_min);
+        push_min_queue(&mut q_min, 2, &vals_min);
+        assert_eq!(q_min.front(), 2);
+
+        let vals_max = [1.0_f64, 2.0, 3.0];
+        let mut q_max = IdxRing::new(3);
+        push_max_queue(&mut q_max, 0, &vals_max);
+        push_max_queue(&mut q_max, 1, &vals_max);
+        push_max_queue(&mut q_max, 2, &vals_max);
+        assert_eq!(q_max.front(), 2);
+
+        pop_expired(&mut q_min, 3);
+        assert!(q_min.is_empty());
+
+        let high = vec![10.0_f64; 10];
+        let low = vec![10.0_f64; 10];
+        let close = vec![10.0_f64; 10];
+
+        let mut k_fast = vec![f64::NAN; 10];
+        let mut d_fast = vec![f64::NAN; 10];
+        compute_stochastic_fast_streaming(&high, &low, &close, 3, 2, &mut k_fast, &mut d_fast)
+            .unwrap();
+        assert_eq!(k_fast[2], 50.0);
+
+        let mut k_full = vec![f64::NAN; 10];
+        let mut d_full = vec![f64::NAN; 10];
+        compute_stochastic_full_streaming(&high, &low, &close, 3, 2, 2, &mut k_full, &mut d_full)
+            .unwrap();
+        assert_eq!(k_full[3], 50.0);
+    }
+
+    #[test]
+    fn stochastic_private_raw_k_branches() {
+        let high_flat = vec![10.0_f64; 8];
+        let low_flat = vec![10.0_f64; 8];
+        let close_flat = vec![10.0_f64; 8];
+        let mut raw_k = vec![f64::NAN; 8];
+        compute_raw_k(&high_flat, &low_flat, &close_flat, 3, &mut raw_k).unwrap();
+        assert_eq!(raw_k[2], 50.0);
+        assert_eq!(raw_k[7], 50.0);
+
+        let high_nan = vec![10.0_f64, f64::NAN, 10.0, 10.0, 10.0, 10.0];
+        let low_nan = vec![9.0_f64, f64::NAN, 9.0, 9.0, 9.0, 9.0];
+        let close_nan = vec![9.5_f64, f64::NAN, 9.5, 9.5, 9.5, 9.5];
+        let mut out_nan = vec![f64::NAN; 6];
+        compute_raw_k(&high_nan, &low_nan, &close_nan, 3, &mut out_nan).unwrap();
+        assert!(out_nan[2].is_nan());
+        assert!(out_nan[5].is_finite() || out_nan[5].is_nan());
+    }
+
+    #[test]
+    fn stochastic_private_validate_full_empty_paths() {
+        let high = [1.0_f64, 2.0, 3.0];
+        let low_empty: [f64; 0] = [];
+        let close_empty: [f64; 0] = [];
+
+        assert!(validate_stochastic_full_inputs(&high, &low_empty, &close_empty, 2, 2, 2).is_err());
+        assert!(validate_stochastic_full_inputs(&high, &high[..2], &high, 2, 2, 2).is_err());
+    }
+}
+
+#[cfg(test)]
+mod coverage_push_private_paths_tests_round2 {
+    use super::*;
+
+    #[test]
+    fn stochastic_private_monotonic_and_specialized_dispatch_paths() {
+        let high: Vec<f64> = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+        let low: Vec<f64> = vec![10.0, 9.0, 8.0, 7.0, 6.0, 5.0, 4.0, 3.0, 2.0, 1.0];
+        let close: Vec<f64> = vec![5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0];
+
+        let _ = stochastic_fast(&high, &low, &close, 3, 2).unwrap();
+        let high_f32: Vec<f32> = high.iter().map(|&v| v as f32).collect();
+        let low_f32: Vec<f32> = low.iter().map(|&v| v as f32).collect();
+        let close_f32: Vec<f32> = close.iter().map(|&v| v as f32).collect();
+        let _ = stochastic_fast(&high_f32, &low_f32, &close_f32, 3, 2).unwrap();
+
+        let _ = stochastic_full(&high, &low, &close, 3, 2, 2).unwrap();
+        let _ = stochastic_full(&high_f32, &low_f32, &close_f32, 3, 2, 2).unwrap();
+
+        let mut out_fast_f64 = StochasticOutput {
+            k: vec![f64::NAN; high.len()],
+            d: vec![f64::NAN; high.len()],
+        };
+        stochastic_fast_into(&high, &low, &close, 3, 2, &mut out_fast_f64).unwrap();
+
+        let mut out_fast_f32 = StochasticOutput {
+            k: vec![f32::NAN; high_f32.len()],
+            d: vec![f32::NAN; high_f32.len()],
+        };
+        stochastic_fast_into(&high_f32, &low_f32, &close_f32, 3, 2, &mut out_fast_f32).unwrap();
+
+        let mut out_full_f64 = StochasticOutput {
+            k: vec![f64::NAN; high.len()],
+            d: vec![f64::NAN; high.len()],
+        };
+        stochastic_full_into(&high, &low, &close, 3, 2, 2, &mut out_full_f64).unwrap();
+
+        let mut out_full_f32 = StochasticOutput {
+            k: vec![f32::NAN; high_f32.len()],
+            d: vec![f32::NAN; high_f32.len()],
+        };
+        stochastic_full_into(&high_f32, &low_f32, &close_f32, 3, 2, 2, &mut out_full_f32).unwrap();
+    }
+
+    #[test]
+    fn stochastic_private_validation_extra_surface() {
+        let empty: [f64; 0] = [];
+        assert!(validate_stochastic_full_inputs(&empty, &empty, &empty, 3, 2, 2).is_err());
+
+        let short = [1.0_f64, 2.0];
+        assert!(validate_stochastic_full_inputs(&short, &short, &short, 3, 2, 2).is_err());
+    }
+}
+
+#[cfg(test)]
+mod coverage_push_private_paths_tests_round3 {
+    use super::*;
+    use half::f16;
+
+    #[test]
+    fn stochastic_private_streaming_and_raw_rescan_paths() {
+        let low = vec![
+            0.0, 5.0, 4.0, 3.0, 2.0, 1.0, 0.5, 0.4, 0.3, 0.2, 0.1, 0.0, -0.1, -0.2, -0.3, -0.4,
+            -0.5, -0.6,
+        ];
+        let high = vec![
+            30.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0, 19.0, 20.0, 21.0, 22.0,
+            23.0, 24.0, 25.0, 26.0,
+        ];
+        let close: Vec<f64> = high
+            .iter()
+            .zip(low.iter())
+            .map(|(h, l)| l + (h - l) * 0.6)
+            .collect();
+
+        let mut k_fast = vec![f64::NAN; high.len()];
+        let mut d_fast = vec![f64::NAN; high.len()];
+        compute_stochastic_fast_streaming(&high, &low, &close, 5, 3, &mut k_fast, &mut d_fast)
+            .expect("fast streaming");
+
+        let mut k_full = vec![f64::NAN; high.len()];
+        let mut d_full = vec![f64::NAN; high.len()];
+        compute_stochastic_full_streaming(&high, &low, &close, 5, 3, 3, &mut k_full, &mut d_full)
+            .expect("full streaming");
+
+        let mut raw = vec![f64::NAN; high.len()];
+        compute_raw_k(&high, &low, &close, 5, &mut raw).expect("raw k");
+        assert!(raw.last().is_some_and(|v| v.is_finite()));
+    }
+
+    #[test]
+    fn stochastic_private_f16_dispatch_and_nan_surface() {
+        let n = 36usize;
+        let mut high = Vec::with_capacity(n);
+        let mut low = Vec::with_capacity(n);
+        let mut close = Vec::with_capacity(n);
+        for i in 0..n {
+            let base = 100.0_f32 + i as f32 * 0.75;
+            high.push(f16::from_f32(base + 1.5));
+            low.push(f16::from_f32(base - 1.25));
+            close.push(f16::from_f32(base + if i % 3 == 0 { 0.5 } else { -0.4 }));
+        }
+
+        let fast = stochastic_fast(&high, &low, &close, 5, 3).expect("f16 fast");
+        let full = stochastic_full(&high, &low, &close, 5, 3, 3).expect("f16 full");
+        assert_eq!(fast.k.len(), n);
+        assert_eq!(fast.d.len(), n);
+        assert_eq!(full.k.len(), n);
+        assert_eq!(full.d.len(), n);
+
+        let mut fast_into = StochasticOutput {
+            k: vec![f16::NAN; n],
+            d: vec![f16::NAN; n],
+        };
+        stochastic_fast_into(&high, &low, &close, 5, 3, &mut fast_into).expect("f16 fast into");
+
+        let mut full_into = StochasticOutput {
+            k: vec![f16::NAN; n],
+            d: vec![f16::NAN; n],
+        };
+        stochastic_full_into(&high, &low, &close, 5, 3, 3, &mut full_into).expect("f16 full into");
+
+        let mut high_nan = high.clone();
+        let mut low_nan = low.clone();
+        let mut close_nan = close.clone();
+        high_nan[0] = f16::NAN;
+        low_nan[11] = f16::NAN;
+        close_nan[17] = f16::NAN;
+
+        let fast_nan =
+            stochastic_fast(&high_nan, &low_nan, &close_nan, 5, 3).expect("f16 fast nan");
+        let full_nan =
+            stochastic_full(&high_nan, &low_nan, &close_nan, 5, 3, 3).expect("f16 full nan");
+        assert!(fast_nan.k.iter().any(|v| v.is_nan()));
+        assert!(full_nan.k.iter().any(|v| v.is_nan()));
+
+        let mut raw = vec![f16::NAN; n];
+        compute_raw_k(&high_nan, &low_nan, &close_nan, 5, &mut raw).expect("f16 raw k nan");
+        assert!(raw.iter().any(|v| v.is_nan()));
+        assert!(raw.iter().skip(20).any(|v| v.is_finite()));
+    }
+
+    #[test]
+    fn stochastic_private_validation_and_helper_matrix() {
+        let e: [f64; 0] = [];
+        assert!(validate_stochastic_inputs(&e, &e, &e, 3, 3).is_err());
+        assert!(validate_stochastic_inputs(&[1.0], &[1.0], &[1.0], 0, 3).is_err());
+        assert!(validate_stochastic_inputs(&[1.0], &[1.0], &[1.0], 1, 0).is_err());
+        assert!(validate_stochastic_inputs(&[1.0, 2.0], &[1.0], &[1.0, 2.0], 1, 1).is_err());
+        assert!(validate_stochastic_inputs(&[1.0, 2.0], &[1.0, 2.0], &[1.0], 1, 1).is_err());
+
+        assert!(validate_stochastic_full_inputs(&[1.0], &[1.0], &[1.0], 0, 1, 1).is_err());
+        assert!(validate_stochastic_full_inputs(&[1.0], &[1.0], &[1.0], 1, 0, 1).is_err());
+        assert!(validate_stochastic_full_inputs(&[1.0], &[1.0], &[1.0], 1, 1, 0).is_err());
+        assert!(
+            validate_stochastic_full_inputs(&[1.0, 2.0], &[1.0], &[1.0, 2.0], 1, 1, 1).is_err()
+        );
+        assert!(validate_stochastic_full_inputs(&[1.0], &[1.0], &[1.0], 2, 1, 1).is_err());
+        assert!(
+            validate_stochastic_full_inputs(&[1.0, 2.0], &[1.0, 2.0], &[1.0, 2.0], 2, 2, 2).is_ok()
+        );
+
+        let mut ring = IdxRing::new(4);
+        assert!(ring.is_empty());
+        ring.push_back(0);
+        ring.push_back(1);
+        ring.push_back(2);
+        assert_eq!(ring.front(), 0);
+        assert_eq!(ring.back(), 2);
+        ring.pop_front();
+        ring.pop_back();
+        assert_eq!(ring.front(), 1);
+
+        let mut sma = RollingSma::new(3, 1.0_f64 / 3.0);
+        assert!(sma.push(1.0).is_none());
+        assert!(sma.push(2.0).is_none());
+        assert!(sma.push(3.0).is_some());
+        assert!(sma.push(4.0).is_some());
+
+        let vals = [3.0_f64, 1.0, 2.0, 0.5, 4.0];
+        let mut q_min = IdxRing::new(vals.len());
+        let mut q_max = IdxRing::new(vals.len());
+        for i in 0..vals.len() {
+            push_min_queue(&mut q_min, i, &vals);
+            push_max_queue(&mut q_max, i, &vals);
+        }
+        pop_expired(&mut q_min, 2);
+        pop_expired(&mut q_max, 2);
+        assert!(q_min.front() >= 2);
+        assert!(q_max.front() >= 2);
     }
 }

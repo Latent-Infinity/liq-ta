@@ -365,4 +365,27 @@ mod tests {
         assert!(f32::uses_f64_accumulator());
         assert!(!f64::uses_f64_accumulator());
     }
+
+    #[test]
+    fn test_set_precision_mode_switches_global() {
+        set_precision_mode(PrecisionMode::Fast);
+        assert_eq!(current_precision_mode(), PrecisionMode::Fast);
+
+        set_precision_mode(PrecisionMode::High);
+        assert_eq!(current_precision_mode(), PrecisionMode::High);
+    }
+
+    #[test]
+    fn test_with_precision_mode_returns_and_restores() {
+        set_precision_mode(PrecisionMode::Fast);
+        assert_eq!(current_precision_mode(), PrecisionMode::Fast);
+
+        let out = with_precision_mode(PrecisionMode::High, || {
+            assert_eq!(current_precision_mode(), PrecisionMode::High);
+            7_i32
+        });
+        assert_eq!(out, 7);
+
+        assert_eq!(current_precision_mode(), PrecisionMode::Fast);
+    }
 }

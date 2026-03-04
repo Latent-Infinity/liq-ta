@@ -979,3 +979,44 @@ mod tests {
         assert_eq!(result.len(), 5);
     }
 }
+
+#[cfg(test)]
+mod coverage_push_private_paths_tests {
+    use super::*;
+
+    #[test]
+    fn williams_private_precision_and_compute_value_paths() {
+        crate::precision::with_precision_mode(crate::precision::PrecisionMode::High, || {
+            assert!(use_f64_precision::<f32>());
+            let wr = compute_williams_r_value(12.0_f32, 10.0_f32, 4.0_f32, -100.0_f32).unwrap();
+            assert!((wr + 50.0).abs() < 1e-4);
+        });
+
+        crate::precision::with_precision_mode(crate::precision::PrecisionMode::Fast, || {
+            assert!(!use_f64_precision::<f32>());
+            let wr = compute_williams_r_value(12.0_f32, 10.0_f32, 4.0_f32, -100.0_f32).unwrap();
+            assert!((wr + 50.0).abs() < 1e-4);
+        });
+    }
+
+    #[test]
+    fn williams_private_optimized_dispatch_and_zero_range_paths() {
+        let n = 1005usize;
+        let high = vec![10.0_f64; n];
+        let low = vec![10.0_f64; n];
+        let close = vec![10.0_f64; n];
+        let mut out = vec![f64::NAN; n];
+
+        williams_r_f64_optimized(&high, &low, &close, 14, &mut out).unwrap();
+        assert!(out[13..].iter().all(|&v| (v + 50.0).abs() < 1e-12));
+
+        let high2 = [10.0_f64, 11.0, 12.0];
+        let low2 = [9.0_f64, 10.0];
+        let close2 = [9.5_f64, 10.5, 11.5];
+        assert!(validate_inputs(&high2, &low2, &close2, 2).is_err());
+
+        let low3 = [9.0_f64, 10.0, 11.0];
+        let close3 = [9.5_f64, 10.5];
+        assert!(validate_inputs(&high2, &low3, &close3, 2).is_err());
+    }
+}

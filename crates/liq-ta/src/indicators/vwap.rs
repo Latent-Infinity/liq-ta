@@ -954,3 +954,34 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod coverage_push_private_paths_tests {
+    use super::*;
+
+    #[test]
+    fn vwap_private_validate_and_core_f64_paths() {
+        let high = [10.0_f64, 11.0, 12.0];
+        let low = [9.0_f64, 10.0, 11.0];
+        let close = [9.5_f64, 10.5, 11.5];
+        let volume_short = [100.0_f64, 200.0];
+
+        assert!(validate_inputs(&high, &low, &close, &volume_short).is_err());
+
+        let high_f32 = [10.0_f32, 10.0, 10.0];
+        let low_f32 = [9.0_f32, 9.0, 9.0];
+        let close_f32 = [9.5_f32, 9.5, 9.5];
+        let volume_f32 = [0.0_f32, -1.0, 1.0];
+        let mut out_f32 = vec![0.0_f32; 3];
+        compute_vwap_core_into_f64(&high_f32, &low_f32, &close_f32, &volume_f32, &mut out_f32)
+            .unwrap();
+        assert!(out_f32[0].is_nan());
+        assert!(out_f32[1].is_finite());
+        assert!(out_f32[2].is_finite());
+
+        let mut out_vec = Vec::<f64>::new();
+        let neg_vol = [0.0_f64, -1.0, 1.0];
+        compute_vwap_core(&high, &low, &close, &neg_vol, &mut out_vec);
+        assert_eq!(out_vec.len(), 3);
+    }
+}

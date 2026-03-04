@@ -82,18 +82,29 @@
 pub mod ad;
 pub mod adosc;
 pub mod adx;
+pub mod ao;
 pub mod apo;
 pub mod aroon;
 pub mod atr;
+pub mod autocorr;
 pub mod bollinger;
 pub mod bop;
 pub mod candlestick;
 pub mod cci;
+pub mod chop;
 pub mod cmo;
+pub mod composite_bands;
+pub mod connors_rsi;
 pub mod dema;
+pub mod demarker;
 pub mod donchian;
+pub mod dpo;
+pub mod dss_bressert;
 pub mod dx;
 pub mod ema;
+pub mod gaussian_channel;
+pub mod gaussian_filter;
+pub mod hma;
 pub mod ht_core;
 pub mod ht_dcperiod;
 pub mod ht_dcphase;
@@ -101,7 +112,11 @@ pub mod ht_phasor;
 pub mod ht_sine;
 pub mod ht_trendline;
 pub mod ht_trendmode;
+pub mod hurst;
+pub mod ichimoku;
 pub mod kama;
+pub mod keltner;
+pub mod laguerre_rsi;
 pub mod macd;
 pub mod mama;
 pub mod mavp;
@@ -110,20 +125,28 @@ pub mod midpoint;
 pub mod midprice;
 pub mod mom;
 pub mod obv;
+pub mod osma;
+pub mod power;
 pub mod price_transform;
+pub mod qqe;
 pub mod roc;
 pub mod rsi;
+pub mod rvi;
 pub mod sar;
 pub mod sarext;
 pub mod sma;
 pub mod statistics;
+pub mod stc;
 pub mod stochastic;
 pub mod stochrsi;
+pub mod supertrend;
 pub mod t3;
 pub mod tema;
 pub mod trima;
 pub mod trix;
+pub mod ulcer_index;
 pub mod ultosc;
+pub mod vortex;
 pub mod vwap;
 pub mod williams_r;
 pub mod wma;
@@ -159,6 +182,15 @@ pub use trima::{trima, trima_into, trima_lookback, trima_min_len};
 // Donchian Channels
 pub use donchian::{DonchianOutput, donchian, donchian_into, donchian_lookback, donchian_min_len};
 
+// Keltner Channels
+pub use keltner::{
+    KeltnerChannelOutput, keltner_channel, keltner_channel_into, keltner_channel_lookback,
+    keltner_channel_min_len,
+};
+
+// Ichimoku Kinko Hyo
+pub use ichimoku::{IchimokuOutput, ichimoku, ichimoku_into, ichimoku_lookback, ichimoku_min_len};
+
 // Exponential Moving Average
 pub use ema::{
     ema, ema_into, ema_lookback, ema_min_len, ema_wilder, ema_wilder_into, ema_with_alpha,
@@ -184,6 +216,9 @@ pub use obv::{obv, obv_into, obv_lookback, obv_min_len};
 
 // RSI
 pub use rsi::{rsi, rsi_into, rsi_lookback, rsi_min_len};
+
+// QQE
+pub use qqe::{QqeOutput, qqe, qqe_into, qqe_lookback, qqe_min_len};
 
 // Simple Moving Average (uses SIMD internally for f64 when the simd feature is enabled)
 pub use sma::{sma, sma_from_idx_into, sma_into, sma_lookback, sma_min_len};
@@ -238,6 +273,81 @@ pub use roc::{
 
 // APO (Absolute Price Oscillator) and PPO (Percentage Price Oscillator)
 pub use apo::{apo, apo_into, apo_lookback, apo_min_len, ppo, ppo_into, ppo_lookback, ppo_min_len};
+
+// AO (Awesome Oscillator)
+pub use ao::{ao, ao_into, ao_lookback, ao_min_len};
+
+// HMA (Hull Moving Average)
+pub use hma::{hma, hma_into, hma_lookback, hma_min_len};
+
+// Gaussian filter and channel
+pub use gaussian_channel::{
+    GaussianChannelOutput, gaussian_channel, gaussian_channel_into, gaussian_channel_lookback,
+    gaussian_channel_min_len,
+};
+pub use gaussian_filter::{
+    gaussian_filter, gaussian_filter_into, gaussian_filter_lookback, gaussian_filter_min_len,
+};
+
+// SuperTrend
+pub use supertrend::{
+    SuperTrendOutput, supertrend, supertrend_into, supertrend_lookback, supertrend_min_len,
+};
+
+// Bulls/Bears Power
+pub use power::{
+    bears_power, bears_power_into, bulls_power, bulls_power_into, power_lookback, power_min_len,
+};
+
+// DeMarker
+pub use demarker::{demarker, demarker_into, demarker_lookback, demarker_min_len};
+
+// OSMA
+pub use osma::{osma, osma_into, osma_lookback, osma_min_len};
+
+// Vortex
+pub use vortex::{VortexOutput, vortex, vortex_into, vortex_lookback, vortex_min_len};
+
+// RVI
+pub use rvi::{rvi, rvi_into, rvi_lookback, rvi_min_len};
+
+// DPO
+pub use dpo::{dpo, dpo_into, dpo_lookback, dpo_min_len, dpo_shift};
+
+// Connors RSI
+pub use connors_rsi::{connors_rsi, connors_rsi_into, connors_rsi_lookback, connors_rsi_min_len};
+
+// STC
+pub use stc::{stc, stc_into, stc_lookback, stc_min_len};
+
+// Laguerre RSI
+pub use laguerre_rsi::{
+    laguerre_rsi, laguerre_rsi_into, laguerre_rsi_lookback, laguerre_rsi_min_len,
+};
+
+// DSS Bressert
+pub use dss_bressert::{
+    dss_bressert, dss_bressert_into, dss_bressert_lookback, dss_bressert_min_len,
+};
+
+// CHOP
+pub use chop::{chop, chop_into, chop_lookback, chop_min_len};
+
+// Ulcer Index
+pub use ulcer_index::{ulcer_index, ulcer_index_into, ulcer_index_lookback, ulcer_index_min_len};
+
+// Hurst
+pub use hurst::{hurst, hurst_into, hurst_lookback, hurst_min_len};
+
+// Autocorrelation
+pub use autocorr::{autocorr, autocorr_into, autocorr_lookback, autocorr_min_len};
+
+// Composite bands
+pub use composite_bands::{
+    CompositeBandsOutput, hma_atr_bands, hma_atr_bands_into, hma_bollinger_bands,
+    hma_bollinger_bands_into, vwap_atr_bands, vwap_atr_bands_into, vwap_bollinger_bands,
+    vwap_bollinger_bands_into,
+};
 
 // BOP (Balance of Power)
 pub use bop::{bop, bop_into, bop_lookback, bop_min_len};

@@ -3,7 +3,7 @@
 //! Run with: `cargo bench -p liq-ta --bench precision_baseline`
 //!
 //! These benchmarks establish the performance baseline before precision policy
-//! changes are implemented. Results are saved for comparison after Phase 2.
+//! changes are implemented. Results are saved for comparison after Stage 2.
 //!
 //! ## Key Indicators
 //!

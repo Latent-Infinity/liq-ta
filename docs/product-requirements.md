@@ -1040,7 +1040,7 @@ When liq-ta differs from TA-Lib:
 
 ## 12. Future Work
 
-### 12.1 Phase 2 Indicators (Planned)
+### 12.1 Stage 2 Indicators (Planned)
 
 | Indicator | Category | Priority |
 |-----------|----------|----------|
@@ -1098,7 +1098,7 @@ A Rust-only library will not achieve adoption. `pip install liq-ta` must work be
 
 C-compatible ABI would enable R, Java, and other language bindings. Requirements TBD based on demand.
 
-**Phase 3: Other Languages** (future):
+**Stage 3: Other Languages** (future):
 
 R, Julia, and other bindings will be considered based on community interest post-v2.0.
 
@@ -1110,12 +1110,12 @@ R, Julia, and other bindings will be considered based on community interest post
 
 | Phase | Duration | Status | Deliverables |
 |-------|----------|--------|--------------|
-| Phase 0: Foundation | 1 day | **COMPLETE** | Workspace, traits, data generators |
-| Phase 1: Baseline Indicators | 2 days | **COMPLETE** | 7 indicators with ≥95% coverage |
-| Phase 2: Kernels (E01-E04) | 2 days | **COMPLETE** | 3 fusion kernels, 4 experiment benchmarks |
-| Phase 3: Plan (E05-E06) | 1 day | **COMPLETE** | DAG infrastructure, 2 experiment benchmarks |
-| Phase 4: End-to-End (E07) | 1 day | **COMPLETE** | Direct/Plan modes, final benchmark |
-| Phase 5: Documentation | 1 day | **COMPLETE** | PRD v1.6, experiment summary |
+| Stage 0: Foundation | 1 day | **COMPLETE** | Workspace, traits, data generators |
+| Stage 1: Baseline Indicators | 2 days | **COMPLETE** | 7 indicators with ≥95% coverage |
+| Stage 2: Kernels (E01-E04) | 2 days | **COMPLETE** | 3 fusion kernels, 4 experiment benchmarks |
+| Stage 3: Plan (E05-E06) | 1 day | **COMPLETE** | DAG infrastructure, 2 experiment benchmarks |
+| Stage 4: End-to-End (E07) | 1 day | **COMPLETE** | Direct/Plan modes, final benchmark |
+| Stage 5: Documentation | 1 day | **COMPLETE** | PRD v1.6, experiment summary |
 
 **Total Implementation Time**: ~8 days
 
@@ -1233,7 +1233,7 @@ Adoption targets will be defined post-v1.0 release based on comparable libraries
 | 2.5 | Dec 2025 | **Crate Simplification**: Merged liq-ta-core into liq-ta (single library crate). Updated file structure. Moved golden generator to tools/golden/generate.py. This is the idiomatic Rust pattern for library + CLI. |
 | 2.6 | Dec 2025 | **Specification Clarity**: Added Stochastic variants documentation (Fast/Slow/Full). Documented all config type defaults. Rewrote NaN edge cases as "Indeterminate Operations". Added tolerance hierarchy explanation. Added fixture spec_version for versioning. Added Error Recovery Guidance table. Added Streaming Workaround section. Added population stddev note to Bollinger. Clarified archive branch deletion policy. Removed arbitrary adoption metrics. |
 | 2.7 | Dec 2025 | **API Consistency & Tolerance Fix**: Unified Stochastic naming to `stochastic()` (fast-only in v2.x). Fixed tolerance policy with mixed abs+rel tolerances and split spec/reference thresholds. Made lookback table explicitly non-normative. Added `min_input_len` convention and `align_tail` helper. Added §5.5 Output Types with semver-stable struct schemas. Softened archive policy language. Removed environment-specific perf claims. Fixed v2.4 history to be explicitly historical. |
-| 2.8 | Dec 2025 | **Consistency Cleanup**: Fixed k_slowing docs to acknowledge Slow Stochastic (k_slowing>1). Removed k=25 from pending work (already validated). Marked fusion benefit as invalidated in metrics. Clarified align_tail/min_input_len as patterns not API. Added trait implementations to output types. Added OBV/VWAP to Phase 2 indicators. Improved Stochastic examples. |
+| 2.8 | Dec 2025 | **Consistency Cleanup**: Fixed k_slowing docs to acknowledge Slow Stochastic (k_slowing>1). Removed k=25 from pending work (already validated). Marked fusion benefit as invalidated in metrics. Clarified align_tail/min_input_len as patterns not API. Added trait implementations to output types. Added OBV/VWAP to Stage 2 indicators. Improved Stochastic examples. |
 | 2.9 | Dec 2025 | **Product Positioning**: Added §1.4 Replacement Strategy with tiered coverage roadmap. Added §4.10 Stability Contracts. Added §5.6 API Layers (simple/buffer/advanced). Added §7.6 User Validation Guidance. Added §7.7 Real-World Regression Suite requirement. Added §12.4 Interop Roadmap (Python-focused). Promoted `*_min_len()` to stable API. Added explicit Stochastic formula with NaN precedence. Removed `PartialEq` from output types. Added benchmark conditions note. |
 | 3.0 | Dec 2025 | **Product Strategy**: Added §1.1 Problem Statement (numerical stability, performance, specification opacity). Promoted Python bindings to v1.0 blocker. Added §14.3 Outcome Metrics with beta validation requirements. Restructured §12 with v1.0 Requirements vs Post-v1.0 Features. Updated completion gate to require Python + beta validation. |
 

@@ -1,0 +1,11 @@
+{
+  "spec_version": "3.0",
+  "rationale": "Stage 2 matrix fixture ensures json_fixture_tests exercises every Stage 2 indicator path",
+  "input": {
+    "length": 220
+  },
+  "params": {},
+  "expected": {
+    "expected_output_length": 220
+  }
+}

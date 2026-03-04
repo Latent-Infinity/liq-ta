@@ -1,0 +1,17 @@
+{
+  "spec_version": "3.0",
+  "rationale": "Gaussian Channel should resolve to bearish regime in persistent downtrend after lookback",
+  "input": {
+    "length": 240
+  },
+  "params": {
+    "scenario": "bearish",
+    "period": 20,
+    "sigma": 0.5,
+    "multiplier": 2.0
+  },
+  "expected": {
+    "expected_final_trend": -1.0,
+    "expect_transition": false
+  }
+}

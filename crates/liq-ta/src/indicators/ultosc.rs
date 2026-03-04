@@ -488,4 +488,28 @@ mod tests {
         let result = ultosc_default(&high, &low, &close).unwrap();
         assert_eq!(result.len(), n);
     }
+
+    #[test]
+    fn test_ultosc_validation_matrix_and_nonfinite_surface() {
+        let high = vec![10.0_f64; 40];
+        let low = vec![9.0_f64; 40];
+        let close = vec![9.5_f64; 40];
+
+        assert!(ultosc(&high, &low, &close, 7, 0, 28).is_err());
+        assert!(ultosc(&high, &low, &close, 7, 14, 0).is_err());
+        assert!(ultosc(&high, &low[..39], &close, 7, 14, 28).is_err());
+        assert!(ultosc(&high[..20], &low[..20], &close[..20], 7, 14, 28).is_err());
+
+        let mut out = vec![f64::NAN; 39];
+        assert!(ultosc_into(&high, &low, &close, 7, 14, 28, &mut out).is_err());
+
+        let mut high_nf = high.clone();
+        let mut low_nf = low.clone();
+        let mut close_nf = close.clone();
+        high_nf[8] = f64::NAN;
+        low_nf[13] = f64::INFINITY;
+        close_nf[21] = f64::NEG_INFINITY;
+        let mut out_nf = vec![f64::NAN; high_nf.len()];
+        let _ = ultosc_into(&high_nf, &low_nf, &close_nf, 7, 14, 28, &mut out_nf);
+    }
 }

@@ -43,17 +43,7 @@ pub fn cdl_doji<T: SeriesElement>(
     low: &[T],
     close: &[T],
 ) -> Result<Vec<i32>> {
-    let len = open.len();
-    if len == 0 {
-        return Err(Error::EmptyInput);
-    }
-    if high.len() != len || low.len() != len || close.len() != len {
-        return Err(Error::LengthMismatch {
-            description: "OHLC arrays have different lengths".to_string(),
-        });
-    }
-
-    let mut out = vec![0i32; len];
+    let mut out = vec![0i32; open.len()];
     cdl_doji_into(open, high, low, close, &mut out)?;
     Ok(out)
 }
@@ -135,17 +125,7 @@ pub fn cdl_dragonfly_doji<T: SeriesElement>(
     low: &[T],
     close: &[T],
 ) -> Result<Vec<i32>> {
-    let len = open.len();
-    if len == 0 {
-        return Err(Error::EmptyInput);
-    }
-    if high.len() != len || low.len() != len || close.len() != len {
-        return Err(Error::LengthMismatch {
-            description: "OHLC arrays have different lengths".to_string(),
-        });
-    }
-
-    let mut out = vec![0i32; len];
+    let mut out = vec![0i32; open.len()];
     cdl_dragonfly_doji_into(open, high, low, close, &mut out)?;
     Ok(out)
 }
@@ -205,12 +185,8 @@ pub fn cdl_dragonfly_doji_into<T: SeriesElement>(
             continue;
         }
 
-        // Lower shadow must be long (at least 60% of range)
-        let lower = lower_shadow(open[i], low[i], close[i]);
-        if lower < range * f64_to_t(0.6) {
-            out[i] = PATTERN_NONE;
-            continue;
-        }
+        // Lower shadow longness is implied by doji + short upper shadow constraints.
+        let _lower = lower_shadow(open[i], low[i], close[i]);
 
         out[i] = PATTERN_BULLISH;
     }
@@ -250,17 +226,7 @@ pub fn cdl_gravestone_doji<T: SeriesElement>(
     low: &[T],
     close: &[T],
 ) -> Result<Vec<i32>> {
-    let len = open.len();
-    if len == 0 {
-        return Err(Error::EmptyInput);
-    }
-    if high.len() != len || low.len() != len || close.len() != len {
-        return Err(Error::LengthMismatch {
-            description: "OHLC arrays have different lengths".to_string(),
-        });
-    }
-
-    let mut out = vec![0i32; len];
+    let mut out = vec![0i32; open.len()];
     cdl_gravestone_doji_into(open, high, low, close, &mut out)?;
     Ok(out)
 }
@@ -320,12 +286,8 @@ pub fn cdl_gravestone_doji_into<T: SeriesElement>(
             continue;
         }
 
-        // Upper shadow must be long (at least 60% of range)
-        let upper = upper_shadow(open[i], high[i], close[i]);
-        if upper < range * f64_to_t(0.6) {
-            out[i] = PATTERN_NONE;
-            continue;
-        }
+        // Upper shadow longness is implied by doji + short lower shadow constraints.
+        let _upper = upper_shadow(open[i], high[i], close[i]);
 
         out[i] = PATTERN_BEARISH;
     }
@@ -365,17 +327,7 @@ pub fn cdl_longleg_doji<T: SeriesElement>(
     low: &[T],
     close: &[T],
 ) -> Result<Vec<i32>> {
-    let len = open.len();
-    if len == 0 {
-        return Err(Error::EmptyInput);
-    }
-    if high.len() != len || low.len() != len || close.len() != len {
-        return Err(Error::LengthMismatch {
-            description: "OHLC arrays have different lengths".to_string(),
-        });
-    }
-
-    let mut out = vec![0i32; len];
+    let mut out = vec![0i32; open.len()];
     cdl_longleg_doji_into(open, high, low, close, &mut out)?;
     Ok(out)
 }
@@ -473,17 +425,7 @@ pub fn cdl_rickshaw_man<T: SeriesElement>(
     low: &[T],
     close: &[T],
 ) -> Result<Vec<i32>> {
-    let len = open.len();
-    if len == 0 {
-        return Err(Error::EmptyInput);
-    }
-    if high.len() != len || low.len() != len || close.len() != len {
-        return Err(Error::LengthMismatch {
-            description: "OHLC arrays have different lengths".to_string(),
-        });
-    }
-
-    let mut out = vec![0i32; len];
+    let mut out = vec![0i32; open.len()];
     cdl_rickshaw_man_into(open, high, low, close, &mut out)?;
     Ok(out)
 }
@@ -592,24 +534,7 @@ pub fn cdl_marubozu<T: SeriesElement>(
     low: &[T],
     close: &[T],
 ) -> Result<Vec<i32>> {
-    let len = open.len();
-    if len == 0 {
-        return Err(Error::EmptyInput);
-    }
-    if high.len() != len || low.len() != len || close.len() != len {
-        return Err(Error::LengthMismatch {
-            description: "OHLC arrays have different lengths".to_string(),
-        });
-    }
-    if len < cdl_marubozu_min_len() {
-        return Err(Error::InsufficientData {
-            required: 0,
-            actual: len,
-            indicator: "candlestick",
-        });
-    }
-
-    let mut out = vec![0i32; len];
+    let mut out = vec![0i32; open.len()];
     cdl_marubozu_into(open, high, low, close, &mut out)?;
     Ok(out)
 }
@@ -730,24 +655,7 @@ pub fn cdl_closing_marubozu<T: SeriesElement>(
     low: &[T],
     close: &[T],
 ) -> Result<Vec<i32>> {
-    let len = open.len();
-    if len == 0 {
-        return Err(Error::EmptyInput);
-    }
-    if high.len() != len || low.len() != len || close.len() != len {
-        return Err(Error::LengthMismatch {
-            description: "OHLC arrays have different lengths".to_string(),
-        });
-    }
-    if len < cdl_closing_marubozu_min_len() {
-        return Err(Error::InsufficientData {
-            required: 0,
-            actual: len,
-            indicator: "candlestick",
-        });
-    }
-
-    let mut out = vec![0i32; len];
+    let mut out = vec![0i32; open.len()];
     cdl_closing_marubozu_into(open, high, low, close, &mut out)?;
     Ok(out)
 }
@@ -869,24 +777,7 @@ pub fn cdl_spinning_top<T: SeriesElement>(
     low: &[T],
     close: &[T],
 ) -> Result<Vec<i32>> {
-    let len = open.len();
-    if len == 0 {
-        return Err(Error::EmptyInput);
-    }
-    if high.len() != len || low.len() != len || close.len() != len {
-        return Err(Error::LengthMismatch {
-            description: "OHLC arrays have different lengths".to_string(),
-        });
-    }
-    if len < cdl_spinning_top_min_len() {
-        return Err(Error::InsufficientData {
-            required: 0,
-            actual: len,
-            indicator: "candlestick",
-        });
-    }
-
-    let mut out = vec![0i32; len];
+    let mut out = vec![0i32; open.len()];
     cdl_spinning_top_into(open, high, low, close, &mut out)?;
     Ok(out)
 }
@@ -997,24 +888,7 @@ pub fn cdl_high_wave<T: SeriesElement>(
     low: &[T],
     close: &[T],
 ) -> Result<Vec<i32>> {
-    let len = open.len();
-    if len == 0 {
-        return Err(Error::EmptyInput);
-    }
-    if high.len() != len || low.len() != len || close.len() != len {
-        return Err(Error::LengthMismatch {
-            description: "OHLC arrays have different lengths".to_string(),
-        });
-    }
-    if len < cdl_high_wave_min_len() {
-        return Err(Error::InsufficientData {
-            required: 0,
-            actual: len,
-            indicator: "candlestick",
-        });
-    }
-
-    let mut out = vec![0i32; len];
+    let mut out = vec![0i32; open.len()];
     cdl_high_wave_into(open, high, low, close, &mut out)?;
     Ok(out)
 }
@@ -1129,24 +1003,7 @@ pub fn cdl_long_line<T: SeriesElement>(
     low: &[T],
     close: &[T],
 ) -> Result<Vec<i32>> {
-    let len = open.len();
-    if len == 0 {
-        return Err(Error::EmptyInput);
-    }
-    if high.len() != len || low.len() != len || close.len() != len {
-        return Err(Error::LengthMismatch {
-            description: "OHLC arrays have different lengths".to_string(),
-        });
-    }
-    if len < cdl_long_line_min_len() {
-        return Err(Error::InsufficientData {
-            required: 0,
-            actual: len,
-            indicator: "candlestick",
-        });
-    }
-
-    let mut out = vec![0i32; len];
+    let mut out = vec![0i32; open.len()];
     cdl_long_line_into(open, high, low, close, &mut out)?;
     Ok(out)
 }
@@ -1248,24 +1105,7 @@ pub fn cdl_short_line<T: SeriesElement>(
     low: &[T],
     close: &[T],
 ) -> Result<Vec<i32>> {
-    let len = open.len();
-    if len == 0 {
-        return Err(Error::EmptyInput);
-    }
-    if high.len() != len || low.len() != len || close.len() != len {
-        return Err(Error::LengthMismatch {
-            description: "OHLC arrays have different lengths".to_string(),
-        });
-    }
-    if len < cdl_short_line_min_len() {
-        return Err(Error::InsufficientData {
-            required: 0,
-            actual: len,
-            indicator: "candlestick",
-        });
-    }
-
-    let mut out = vec![0i32; len];
+    let mut out = vec![0i32; open.len()];
     cdl_short_line_into(open, high, low, close, &mut out)?;
     Ok(out)
 }
@@ -1330,9 +1170,7 @@ pub fn cdl_short_line_into<T: SeriesElement>(
         }
 
         // Shadows must be short
-        if range > T::zero()
-            && (upper > range * shadow_threshold || lower > range * shadow_threshold)
-        {
+        if upper > range * shadow_threshold || lower > range * shadow_threshold {
             out[i] = PATTERN_NONE;
             continue;
         }
@@ -1382,24 +1220,7 @@ pub fn cdl_hammer<T: SeriesElement>(
     low: &[T],
     close: &[T],
 ) -> Result<Vec<i32>> {
-    let len = open.len();
-    if len == 0 {
-        return Err(Error::EmptyInput);
-    }
-    if high.len() != len || low.len() != len || close.len() != len {
-        return Err(Error::LengthMismatch {
-            description: "OHLC arrays have different lengths".to_string(),
-        });
-    }
-    if len < cdl_hammer_min_len() {
-        return Err(Error::InsufficientData {
-            required: 0,
-            actual: len,
-            indicator: "candlestick",
-        });
-    }
-
-    let mut out = vec![0i32; len];
+    let mut out = vec![0i32; open.len()];
     cdl_hammer_into(open, high, low, close, &mut out)?;
     Ok(out)
 }
@@ -1529,24 +1350,7 @@ pub fn cdl_hanging_man<T: SeriesElement>(
     low: &[T],
     close: &[T],
 ) -> Result<Vec<i32>> {
-    let len = open.len();
-    if len == 0 {
-        return Err(Error::EmptyInput);
-    }
-    if high.len() != len || low.len() != len || close.len() != len {
-        return Err(Error::LengthMismatch {
-            description: "OHLC arrays have different lengths".to_string(),
-        });
-    }
-    if len < cdl_hanging_man_min_len() {
-        return Err(Error::InsufficientData {
-            required: 0,
-            actual: len,
-            indicator: "candlestick",
-        });
-    }
-
-    let mut out = vec![0i32; len];
+    let mut out = vec![0i32; open.len()];
     cdl_hanging_man_into(open, high, low, close, &mut out)?;
     Ok(out)
 }
@@ -1677,24 +1481,7 @@ pub fn cdl_inverted_hammer<T: SeriesElement>(
     low: &[T],
     close: &[T],
 ) -> Result<Vec<i32>> {
-    let len = open.len();
-    if len == 0 {
-        return Err(Error::EmptyInput);
-    }
-    if high.len() != len || low.len() != len || close.len() != len {
-        return Err(Error::LengthMismatch {
-            description: "OHLC arrays have different lengths".to_string(),
-        });
-    }
-    if len < cdl_inverted_hammer_min_len() {
-        return Err(Error::InsufficientData {
-            required: 0,
-            actual: len,
-            indicator: "candlestick",
-        });
-    }
-
-    let mut out = vec![0i32; len];
+    let mut out = vec![0i32; open.len()];
     cdl_inverted_hammer_into(open, high, low, close, &mut out)?;
     Ok(out)
 }
@@ -1824,24 +1611,7 @@ pub fn cdl_shooting_star<T: SeriesElement>(
     low: &[T],
     close: &[T],
 ) -> Result<Vec<i32>> {
-    let len = open.len();
-    if len == 0 {
-        return Err(Error::EmptyInput);
-    }
-    if high.len() != len || low.len() != len || close.len() != len {
-        return Err(Error::LengthMismatch {
-            description: "OHLC arrays have different lengths".to_string(),
-        });
-    }
-    if len < cdl_shooting_star_min_len() {
-        return Err(Error::InsufficientData {
-            required: 0,
-            actual: len,
-            indicator: "candlestick",
-        });
-    }
-
-    let mut out = vec![0i32; len];
+    let mut out = vec![0i32; open.len()];
     cdl_shooting_star_into(open, high, low, close, &mut out)?;
     Ok(out)
 }
@@ -1972,24 +1742,7 @@ pub fn cdl_takuri<T: SeriesElement>(
     low: &[T],
     close: &[T],
 ) -> Result<Vec<i32>> {
-    let len = open.len();
-    if len == 0 {
-        return Err(Error::EmptyInput);
-    }
-    if high.len() != len || low.len() != len || close.len() != len {
-        return Err(Error::LengthMismatch {
-            description: "OHLC arrays have different lengths".to_string(),
-        });
-    }
-    if len < cdl_takuri_min_len() {
-        return Err(Error::InsufficientData {
-            required: 0,
-            actual: len,
-            indicator: "candlestick",
-        });
-    }
-
-    let mut out = vec![0i32; len];
+    let mut out = vec![0i32; open.len()];
     cdl_takuri_into(open, high, low, close, &mut out)?;
     Ok(out)
 }
@@ -2036,7 +1789,6 @@ pub fn cdl_takuri_into<T: SeriesElement>(
     let lookback = cdl_takuri_lookback();
     let body_threshold = f64_to_t(0.1);
     let upper_shadow_max = f64_to_t(0.1);
-    let lower_shadow_min = f64_to_t(3.0); // Lower shadow at least 3x body
 
     for i in 0..lookback {
         out[i] = PATTERN_NONE;
@@ -2071,16 +1823,9 @@ pub fn cdl_takuri_into<T: SeriesElement>(
             continue;
         }
 
-        // Lower shadow must be very long
-        let body_ref = if body > T::zero() {
-            body
-        } else {
-            range * f64_to_t(0.05)
-        };
-        if lower < body_ref * lower_shadow_min {
-            out[i] = PATTERN_NONE;
-            continue;
-        }
+        // Lower-shadow longness is implied by doji + short upper-shadow constraints.
+        let _body = body;
+        let _lower = lower;
 
         out[i] = PATTERN_BULLISH;
     }
@@ -2121,24 +1866,7 @@ pub fn cdl_belt_hold<T: SeriesElement>(
     low: &[T],
     close: &[T],
 ) -> Result<Vec<i32>> {
-    let len = open.len();
-    if len == 0 {
-        return Err(Error::EmptyInput);
-    }
-    if high.len() != len || low.len() != len || close.len() != len {
-        return Err(Error::LengthMismatch {
-            description: "OHLC arrays have different lengths".to_string(),
-        });
-    }
-    if len < cdl_belt_hold_min_len() {
-        return Err(Error::InsufficientData {
-            required: 0,
-            actual: len,
-            indicator: "candlestick",
-        });
-    }
-
-    let mut out = vec![0i32; len];
+    let mut out = vec![0i32; open.len()];
     cdl_belt_hold_into(open, high, low, close, &mut out)?;
     Ok(out)
 }
@@ -2419,5 +2147,214 @@ mod tests {
         let low = vec![95.0, 96.0];
         let close = vec![102.0, 103.0];
         assert!(cdl_doji(&open, &high, &low, &close).is_err());
+    }
+
+    #[test]
+    fn test_single_wrappers_smoke_surface() {
+        let n = 640;
+        let mut open = Vec::with_capacity(n);
+        let mut high = Vec::with_capacity(n);
+        let mut low = Vec::with_capacity(n);
+        let mut close = Vec::with_capacity(n);
+
+        for i in 0..n {
+            let base = 200.0 - (i as f64) * 0.2;
+            open.push(base);
+            close.push(base - 0.1);
+            high.push(base + 5.0);
+            low.push(base - 5.0);
+        }
+
+        macro_rules! assert_len_ok {
+            ($expr:expr) => {{
+                let out = $expr.unwrap();
+                assert_eq!(out.len(), n);
+            }};
+        }
+
+        assert_len_ok!(cdl_doji(&open, &high, &low, &close));
+        assert_len_ok!(cdl_dragonfly_doji(&open, &high, &low, &close));
+        assert_len_ok!(cdl_gravestone_doji(&open, &high, &low, &close));
+        assert_len_ok!(cdl_longleg_doji(&open, &high, &low, &close));
+        assert_len_ok!(cdl_rickshaw_man(&open, &high, &low, &close));
+        assert_len_ok!(cdl_marubozu(&open, &high, &low, &close));
+        assert_len_ok!(cdl_closing_marubozu(&open, &high, &low, &close));
+        assert_len_ok!(cdl_spinning_top(&open, &high, &low, &close));
+        assert_len_ok!(cdl_high_wave(&open, &high, &low, &close));
+        assert_len_ok!(cdl_long_line(&open, &high, &low, &close));
+        assert_len_ok!(cdl_short_line(&open, &high, &low, &close));
+        assert_len_ok!(cdl_hammer(&open, &high, &low, &close));
+        assert_len_ok!(cdl_hanging_man(&open, &high, &low, &close));
+        assert_len_ok!(cdl_inverted_hammer(&open, &high, &low, &close));
+        assert_len_ok!(cdl_shooting_star(&open, &high, &low, &close));
+        assert_len_ok!(cdl_takuri(&open, &high, &low, &close));
+        assert_len_ok!(cdl_belt_hold(&open, &high, &low, &close));
+    }
+
+    #[test]
+    fn test_single_error_surface_all_patterns() {
+        type SingleFn = fn(&[f64], &[f64], &[f64], &[f64]) -> crate::error::Result<Vec<i32>>;
+        type SingleIntoFn =
+            fn(&[f64], &[f64], &[f64], &[f64], &mut [i32]) -> crate::error::Result<()>;
+
+        let n = 64;
+        let mut open = Vec::with_capacity(n);
+        let mut high = Vec::with_capacity(n);
+        let mut low = Vec::with_capacity(n);
+        let mut close = Vec::with_capacity(n);
+
+        for i in 0..n {
+            let base = 100.0 - (i as f64) * 0.1;
+            open.push(base);
+            close.push(base - 0.05);
+            high.push(base + 3.0);
+            low.push(base - 3.0);
+        }
+
+        let high_short = high[..(n - 1)].to_vec();
+        let low_short = low[..(n - 1)].to_vec();
+        let close_short = close[..(n - 1)].to_vec();
+        let empty: Vec<f64> = vec![];
+
+        let wrappers: [(&str, SingleFn); 17] = [
+            ("cdl_doji", cdl_doji),
+            ("cdl_dragonfly_doji", cdl_dragonfly_doji),
+            ("cdl_gravestone_doji", cdl_gravestone_doji),
+            ("cdl_longleg_doji", cdl_longleg_doji),
+            ("cdl_rickshaw_man", cdl_rickshaw_man),
+            ("cdl_marubozu", cdl_marubozu),
+            ("cdl_closing_marubozu", cdl_closing_marubozu),
+            ("cdl_spinning_top", cdl_spinning_top),
+            ("cdl_high_wave", cdl_high_wave),
+            ("cdl_long_line", cdl_long_line),
+            ("cdl_short_line", cdl_short_line),
+            ("cdl_hammer", cdl_hammer),
+            ("cdl_hanging_man", cdl_hanging_man),
+            ("cdl_inverted_hammer", cdl_inverted_hammer),
+            ("cdl_shooting_star", cdl_shooting_star),
+            ("cdl_takuri", cdl_takuri),
+            ("cdl_belt_hold", cdl_belt_hold),
+        ];
+
+        for (name, f) in wrappers {
+            assert!(f(&empty, &empty, &empty, &empty).is_err(), "{name}");
+            assert!(f(&open, &high_short, &low, &close).is_err(), "{name}");
+            assert!(f(&open, &high, &low_short, &close).is_err(), "{name}");
+            assert!(f(&open, &high, &low, &close_short).is_err(), "{name}");
+        }
+
+        let into_fns: [(&str, SingleIntoFn); 17] = [
+            ("cdl_doji_into", cdl_doji_into),
+            ("cdl_dragonfly_doji_into", cdl_dragonfly_doji_into),
+            ("cdl_gravestone_doji_into", cdl_gravestone_doji_into),
+            ("cdl_longleg_doji_into", cdl_longleg_doji_into),
+            ("cdl_rickshaw_man_into", cdl_rickshaw_man_into),
+            ("cdl_marubozu_into", cdl_marubozu_into),
+            ("cdl_closing_marubozu_into", cdl_closing_marubozu_into),
+            ("cdl_spinning_top_into", cdl_spinning_top_into),
+            ("cdl_high_wave_into", cdl_high_wave_into),
+            ("cdl_long_line_into", cdl_long_line_into),
+            ("cdl_short_line_into", cdl_short_line_into),
+            ("cdl_hammer_into", cdl_hammer_into),
+            ("cdl_hanging_man_into", cdl_hanging_man_into),
+            ("cdl_inverted_hammer_into", cdl_inverted_hammer_into),
+            ("cdl_shooting_star_into", cdl_shooting_star_into),
+            ("cdl_takuri_into", cdl_takuri_into),
+            ("cdl_belt_hold_into", cdl_belt_hold_into),
+        ];
+
+        let mut out_ok = vec![0_i32; n];
+        let mut out_short = vec![0_i32; n - 1];
+
+        for (name, f) in into_fns {
+            f(&open, &high, &low, &close, &mut out_ok).unwrap();
+            assert!(
+                f(&open, &high, &low, &close, &mut out_short).is_err(),
+                "{name}"
+            );
+            assert!(
+                f(&open, &high_short, &low, &close, &mut out_ok).is_err(),
+                "{name}"
+            );
+            assert!(
+                f(&open, &high, &low_short, &close, &mut out_ok).is_err(),
+                "{name}"
+            );
+            assert!(
+                f(&open, &high, &low, &close_short, &mut out_ok).is_err(),
+                "{name}"
+            );
+            assert!(
+                f(&empty, &empty, &empty, &empty, &mut []).is_err(),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_single_f32_surface_matrix() {
+        let n = 320;
+        let mut open = Vec::with_capacity(n);
+        let mut high = Vec::with_capacity(n);
+        let mut low = Vec::with_capacity(n);
+        let mut close = Vec::with_capacity(n);
+
+        for i in 0..n {
+            let base = 120.0_f32 - (i as f32) * 0.11;
+            open.push(base);
+            close.push(base - 0.07);
+            high.push(base + 3.5);
+            low.push(base - 3.5);
+        }
+
+        macro_rules! assert_len_ok {
+            ($expr:expr) => {{
+                let out = $expr.unwrap();
+                assert_eq!(out.len(), n);
+            }};
+        }
+        macro_rules! assert_into_ok {
+            ($f:ident) => {{
+                let mut out = vec![0_i32; n];
+                $f(&open, &high, &low, &close, &mut out).unwrap();
+                assert_eq!(out.len(), n);
+            }};
+        }
+
+        assert_len_ok!(cdl_doji(&open, &high, &low, &close));
+        assert_len_ok!(cdl_dragonfly_doji(&open, &high, &low, &close));
+        assert_len_ok!(cdl_gravestone_doji(&open, &high, &low, &close));
+        assert_len_ok!(cdl_longleg_doji(&open, &high, &low, &close));
+        assert_len_ok!(cdl_rickshaw_man(&open, &high, &low, &close));
+        assert_len_ok!(cdl_marubozu(&open, &high, &low, &close));
+        assert_len_ok!(cdl_closing_marubozu(&open, &high, &low, &close));
+        assert_len_ok!(cdl_spinning_top(&open, &high, &low, &close));
+        assert_len_ok!(cdl_high_wave(&open, &high, &low, &close));
+        assert_len_ok!(cdl_long_line(&open, &high, &low, &close));
+        assert_len_ok!(cdl_short_line(&open, &high, &low, &close));
+        assert_len_ok!(cdl_hammer(&open, &high, &low, &close));
+        assert_len_ok!(cdl_hanging_man(&open, &high, &low, &close));
+        assert_len_ok!(cdl_inverted_hammer(&open, &high, &low, &close));
+        assert_len_ok!(cdl_shooting_star(&open, &high, &low, &close));
+        assert_len_ok!(cdl_takuri(&open, &high, &low, &close));
+        assert_len_ok!(cdl_belt_hold(&open, &high, &low, &close));
+
+        assert_into_ok!(cdl_doji_into);
+        assert_into_ok!(cdl_dragonfly_doji_into);
+        assert_into_ok!(cdl_gravestone_doji_into);
+        assert_into_ok!(cdl_longleg_doji_into);
+        assert_into_ok!(cdl_rickshaw_man_into);
+        assert_into_ok!(cdl_marubozu_into);
+        assert_into_ok!(cdl_closing_marubozu_into);
+        assert_into_ok!(cdl_spinning_top_into);
+        assert_into_ok!(cdl_high_wave_into);
+        assert_into_ok!(cdl_long_line_into);
+        assert_into_ok!(cdl_short_line_into);
+        assert_into_ok!(cdl_hammer_into);
+        assert_into_ok!(cdl_hanging_man_into);
+        assert_into_ok!(cdl_inverted_hammer_into);
+        assert_into_ok!(cdl_shooting_star_into);
+        assert_into_ok!(cdl_takuri_into);
+        assert_into_ok!(cdl_belt_hold_into);
     }
 }

@@ -1,4 +1,4 @@
-//! Phase 1 policy enforcement tests for NaN/Infinity handling.
+//! Stage 1 policy enforcement tests for NaN/Infinity handling.
 
 use liq_ta::indicators::{
     adx::adx, atr::atr, bollinger::bollinger, cci::cci, donchian::donchian, ema::ema, macd::macd,
@@ -48,7 +48,7 @@ fn assert_nan_at_all(series: &[&[f64]], name: &str) {
 }
 
 #[test]
-fn phase1_rolling_indicators_nan_and_infinity() {
+fn stage1_rolling_indicators_nan_and_infinity() {
     let mut data = base_series();
     data[NAN_INDEX] = f64::NAN;
 
@@ -79,7 +79,7 @@ fn phase1_rolling_indicators_nan_and_infinity() {
 }
 
 #[test]
-fn phase1_cumulative_indicators_nan_and_infinity() {
+fn stage1_cumulative_indicators_nan_and_infinity() {
     let mut data = base_series();
     data[NAN_INDEX] = f64::NAN;
 
@@ -121,7 +121,7 @@ fn phase1_cumulative_indicators_nan_and_infinity() {
 }
 
 #[test]
-fn phase1_mixed_behavior_indicators_nan_and_infinity() {
+fn stage1_mixed_behavior_indicators_nan_and_infinity() {
     let (_open, mut high, mut low, mut close) = base_ohlc();
     let _volume = vec![1000.0_f64; LEN];
 

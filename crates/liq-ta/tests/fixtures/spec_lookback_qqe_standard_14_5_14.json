@@ -1,0 +1,13 @@
+{
+  "spec_version": "3.0",
+  "rationale": "QQE lookback/min_len should include RSI and both smoothing stages",
+  "params": {
+    "rsi_period": 14,
+    "smoothing_period": 5,
+    "wilders_period": 14
+  },
+  "expected": {
+    "expected_lookback": 32,
+    "expected_min_len": 33
+  }
+}

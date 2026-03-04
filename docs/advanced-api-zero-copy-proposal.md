@@ -312,23 +312,23 @@ Existing errors remain unchanged for Simple/Buffer APIs.
 
 ## 13. Implementation Plan (High Level)
 
-### Phase 1: Workspace Core
+### Stage 1: Workspace Core
 
 * Implement `WorkspaceBuilder`, series buffer pool, scratch arena.
 * Implement `SeriesId`, `SeriesRef`, `Input`.
 * Implement `Scope` with deterministic, allocation-free tracking (fixed capacity / pre-reserve).
 
-### Phase 2: Indicator Integration
+### Stage 2: Indicator Integration
 
 * Add `IndicatorOp<T>` implementations for a small set of core indicators first (SMA/EMA/RSI).
 * Validate semantics match existing `_into` outputs and lookback policies.
 
-### Phase 3: Expand Coverage
+### Stage 3: Expand Coverage
 
 * Add multi-input examples (e.g., ATR from OHLC).
 * Add multi-output example (e.g., Stochastic K/D).
 
-### Phase 4: Benchmarks + Gates
+### Stage 4: Benchmarks + Gates
 
 * Microbench:
 

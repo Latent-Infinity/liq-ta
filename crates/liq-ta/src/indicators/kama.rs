@@ -181,19 +181,17 @@ pub fn kama_full_into<T: SeriesElement>(
     }
 
     // First iteration
-    if lookback + 1 < n {
-        let i = lookback + 1;
-        let change = (data[i] - data[i - period]).abs();
-        let er = if volatility > T::zero() {
-            change / volatility
-        } else {
-            T::zero()
-        };
-        let sc_raw = er * sc_diff + slow_sc;
-        let sc = sc_raw * sc_raw;
-        kama = kama + sc * (data[i] - kama);
-        output[i] = kama;
-    }
+    let i = lookback + 1;
+    let change = (data[i] - data[i - period]).abs();
+    let er = if volatility > T::zero() {
+        change / volatility
+    } else {
+        T::zero()
+    };
+    let sc_raw = er * sc_diff + slow_sc;
+    let sc = sc_raw * sc_raw;
+    kama = kama + sc * (data[i] - kama);
+    output[i] = kama;
 
     // Steady-state loop
     for i in (lookback + 2)..n {
@@ -256,19 +254,17 @@ fn kama_full_into_f64(
     }
 
     // First iteration (no volatility update needed)
-    if lookback + 1 < n {
-        let i = lookback + 1;
-        let change = (data[i] - data[i - period]).abs();
-        let er = if volatility > 0.0 {
-            change / volatility
-        } else {
-            0.0
-        };
-        let sc_raw = sc_diff.mul_add(er, slow_sc);
-        let sc = sc_raw * sc_raw;
-        kama = (data[i] - kama).mul_add(sc, kama);
-        output[i] = kama;
-    }
+    let i = lookback + 1;
+    let change = (data[i] - data[i - period]).abs();
+    let er = if volatility > 0.0 {
+        change / volatility
+    } else {
+        0.0
+    };
+    let sc_raw = sc_diff.mul_add(er, slow_sc);
+    let sc = sc_raw * sc_raw;
+    kama = (data[i] - kama).mul_add(sc, kama);
+    output[i] = kama;
 
     // Steady-state loop with 4x unrolling
     let main_loop_end = lookback + 2 + ((n - (lookback + 2)) / 4) * 4;
@@ -398,19 +394,17 @@ fn kama_full_into_f32(
     }
 
     // First iteration (no volatility update needed)
-    if lookback + 1 < n {
-        let i = lookback + 1;
-        let change = (data[i] as f64 - data[i - period] as f64).abs();
-        let er = if volatility > 0.0 {
-            change / volatility
-        } else {
-            0.0
-        };
-        let sc_raw = sc_diff.mul_add(er, slow_sc);
-        let sc = sc_raw * sc_raw;
-        kama = (data[i] as f64 - kama).mul_add(sc, kama);
-        output[i] = kama as f32;
-    }
+    let i = lookback + 1;
+    let change = (data[i] as f64 - data[i - period] as f64).abs();
+    let er = if volatility > 0.0 {
+        change / volatility
+    } else {
+        0.0
+    };
+    let sc_raw = sc_diff.mul_add(er, slow_sc);
+    let sc = sc_raw * sc_raw;
+    kama = (data[i] as f64 - kama).mul_add(sc, kama);
+    output[i] = kama as f32;
 
     // Steady-state loop with 4x unrolling
     let main_loop_end = lookback + 2 + ((n - (lookback + 2)) / 4) * 4;
@@ -533,32 +527,6 @@ fn kama_full_into_f32(
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 pub fn kama<T: SeriesElement + 'static>(data: &[T], period: usize) -> Result<Vec<T>> {
-    use std::any::TypeId;
-
-    // Wrapper optimization: avoid initializing Vec for f64/f32
-    if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let mut output: Vec<f64> = Vec::with_capacity(data.len());
-        unsafe {
-            output.set_len(data.len());
-        }
-        kama_into(data, period, unsafe {
-            std::mem::transmute(output.as_mut_slice())
-        })?;
-        return Ok(unsafe { std::mem::transmute(output) });
-    }
-
-    if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let mut output: Vec<f32> = Vec::with_capacity(data.len());
-        unsafe {
-            output.set_len(data.len());
-        }
-        kama_into(data, period, unsafe {
-            std::mem::transmute(output.as_mut_slice())
-        })?;
-        return Ok(unsafe { std::mem::transmute(output) });
-    }
-
-    // Generic path: safe initialization
     let mut output = vec![T::nan(); data.len()];
     kama_into(data, period, &mut output)?;
     Ok(output)
@@ -590,32 +558,6 @@ pub fn kama_full<T: SeriesElement + 'static>(
     fast_period: usize,
     slow_period: usize,
 ) -> Result<Vec<T>> {
-    use std::any::TypeId;
-
-    // Wrapper optimization: avoid initializing Vec for f64/f32
-    if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let mut output: Vec<f64> = Vec::with_capacity(data.len());
-        unsafe {
-            output.set_len(data.len());
-        }
-        kama_full_into(data, period, fast_period, slow_period, unsafe {
-            std::mem::transmute(output.as_mut_slice())
-        })?;
-        return Ok(unsafe { std::mem::transmute(output) });
-    }
-
-    if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let mut output: Vec<f32> = Vec::with_capacity(data.len());
-        unsafe {
-            output.set_len(data.len());
-        }
-        kama_full_into(data, period, fast_period, slow_period, unsafe {
-            std::mem::transmute(output.as_mut_slice())
-        })?;
-        return Ok(unsafe { std::mem::transmute(output) });
-    }
-
-    // Generic path: safe initialization
     let mut output = vec![T::nan(); data.len()];
     kama_full_into(data, period, fast_period, slow_period, &mut output)?;
     Ok(output)
@@ -625,6 +567,7 @@ pub fn kama_full<T: SeriesElement + 'static>(
 mod tests {
     #![allow(clippy::all, clippy::pedantic, clippy::nursery)]
     use super::*;
+    use half::f16;
     use num_traits::Float;
 
     fn approx_eq<T: Float>(a: T, b: T, epsilon: T) -> bool {
@@ -739,7 +682,7 @@ mod tests {
 
         // KAMA should increase with the trend
         for i in 10..result.len() {
-            assert!(result[i] > result[i - 1], "KAMA should increase in uptrend");
+            assert!(result[i] > result[i - 1]);
         }
     }
 
@@ -758,7 +701,7 @@ mod tests {
             - valid_kama.iter().cloned().fold(f64::INFINITY, f64::min);
 
         // KAMA range should be smaller than price range in sideways market
-        assert!(kama_range < 1.0, "KAMA should be flat in sideways market");
+        assert!(kama_range < 1.0);
     }
 
     #[test]
@@ -854,5 +797,36 @@ mod tests {
             .collect();
 
         assert_eq!(fast_valid.len(), slow_valid.len());
+    }
+
+    #[test]
+    fn test_kama_generic_f16_wrapper_paths() {
+        let data: Vec<f16> = (0..80)
+            .map(|i| f16::from_f32(10.0 + (i as f32) * 0.2 + (((i * 11) % 7) as f32) * 0.1))
+            .collect();
+
+        let k = kama(&data, 10).expect("kama f16 should succeed");
+        assert_eq!(k.len(), data.len());
+
+        let kf = kama_full(&data, 10, 2, 30).expect("kama_full f16 should succeed");
+        assert_eq!(kf.len(), data.len());
+    }
+
+    #[test]
+    fn test_kama_f32_wrapper_and_full_wrapper_paths() {
+        let data: Vec<f32> = (0..96)
+            .map(|i| 20.0_f32 + (i as f32) * 0.15 + (((i * 5) % 9) as f32) * 0.03)
+            .collect();
+
+        let k = kama(&data, 10).expect("kama f32 should succeed");
+        assert_eq!(k.len(), data.len());
+
+        let kf = kama_full(&data, 10, 2, 30).expect("kama_full f32 should succeed");
+        assert_eq!(kf.len(), data.len());
+    }
+
+    #[test]
+    fn test_kama_approx_eq_nan_branch() {
+        assert!(approx_eq(f64::NAN, f64::NAN, EPSILON));
     }
 }

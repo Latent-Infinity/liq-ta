@@ -231,154 +231,39 @@ pub fn bollinger<T: SeriesElement + 'static>(
     period: usize,
     num_std_dev: T,
 ) -> Result<BollingerOutput<T>> {
-    // Validate inputs
-    if period == 0 {
-        return Err(Error::InvalidPeriod {
-            period,
-            reason: "period must be at least 1",
-        });
-    }
-
-    if data.is_empty() {
-        return Err(Error::EmptyInput);
-    }
-
-    if data.len() < period {
-        return Err(Error::InsufficientData {
-            required: period,
-            actual: data.len(),
-            indicator: "bollinger",
-        });
-    }
-
-    // Edge case fast path: period==1 means stddev=0, all bands equal input (Section 5.5)
-    if period == 1 {
-        let middle = data.to_vec();
-        let upper = data.to_vec();
-        let lower = data.to_vec();
-        return Ok(BollingerOutput {
-            middle,
-            upper,
-            lower,
-        });
-    }
-
-    // Optimization: For f64/f32, allocate uninitialized memory (Section 5.4)
-    // Avoids double-write tax since helpers fill all elements (lookback NaNs + computed values)
     use std::any::TypeId;
 
-    if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
-        let mut middle: Vec<f64> = Vec::with_capacity(data.len());
-        let mut upper: Vec<f64> = Vec::with_capacity(data.len());
-        let mut lower: Vec<f64> = Vec::with_capacity(data.len());
-        unsafe {
-            middle.set_len(data.len());
-            upper.set_len(data.len());
-            lower.set_len(data.len());
-        }
+    // Preserve high-precision f32 behavior expected by precision tests.
+    if use_f64_accumulator::<T>() && TypeId::of::<T>() == TypeId::of::<f32>() {
+        let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
+        let mut middle: Vec<f32> = vec![f32::NAN; data.len()];
+        let mut upper: Vec<f32> = vec![f32::NAN; data.len()];
+        let mut lower: Vec<f32> = vec![f32::NAN; data.len()];
 
-        bollinger_native_accum(
-            data_f64,
+        let num_std_dev_f32 = num_std_dev.to_f64().unwrap_or(2.0) as f32;
+        bollinger_f64_accum(
+            data_f32,
             period,
-            num_std_dev.to_f64().unwrap_or(2.0),
+            num_std_dev_f32,
             &mut middle,
             &mut upper,
             &mut lower,
         )?;
 
-        Ok(BollingerOutput {
+        return Ok(BollingerOutput {
             middle: unsafe { std::mem::transmute(middle) },
             upper: unsafe { std::mem::transmute(upper) },
             lower: unsafe { std::mem::transmute(lower) },
-        })
-    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
-
-        // Use f64 accumulator for f32 inputs in High precision mode
-        if use_f64_accumulator::<T>() {
-            let mut middle: Vec<f32> = Vec::with_capacity(data.len());
-            let mut upper: Vec<f32> = Vec::with_capacity(data.len());
-            let mut lower: Vec<f32> = Vec::with_capacity(data.len());
-            unsafe {
-                middle.set_len(data.len());
-                upper.set_len(data.len());
-                lower.set_len(data.len());
-            }
-
-            let num_std_dev_f32 = num_std_dev.to_f64().unwrap_or(2.0) as f32;
-            bollinger_f64_accum(
-                data_f32,
-                period,
-                num_std_dev_f32,
-                &mut middle,
-                &mut upper,
-                &mut lower,
-            )?;
-
-            Ok(BollingerOutput {
-                middle: unsafe { std::mem::transmute(middle) },
-                upper: unsafe { std::mem::transmute(upper) },
-                lower: unsafe { std::mem::transmute(lower) },
-            })
-        } else {
-            let mut middle: Vec<f32> = Vec::with_capacity(data.len());
-            let mut upper: Vec<f32> = Vec::with_capacity(data.len());
-            let mut lower: Vec<f32> = Vec::with_capacity(data.len());
-            unsafe {
-                middle.set_len(data.len());
-                upper.set_len(data.len());
-                lower.set_len(data.len());
-            }
-
-            let num_std_dev_f32 = num_std_dev.to_f64().unwrap_or(2.0) as f32;
-            bollinger_native_accum(
-                data_f32,
-                period,
-                num_std_dev_f32,
-                &mut middle,
-                &mut upper,
-                &mut lower,
-            )?;
-
-            Ok(BollingerOutput {
-                middle: unsafe { std::mem::transmute(middle) },
-                upper: unsafe { std::mem::transmute(upper) },
-                lower: unsafe { std::mem::transmute(lower) },
-            })
-        }
-    } else {
-        // Generic fallback: safe initialization
-        let mut middle = vec![T::nan(); data.len()];
-        let mut upper = vec![T::nan(); data.len()];
-        let mut lower = vec![T::nan(); data.len()];
-
-        if use_f64_accumulator::<T>() {
-            bollinger_f64_accum(
-                data,
-                period,
-                num_std_dev,
-                &mut middle,
-                &mut upper,
-                &mut lower,
-            )?;
-        } else {
-            bollinger_native_accum(
-                data,
-                period,
-                num_std_dev,
-                &mut middle,
-                &mut upper,
-                &mut lower,
-            )?;
-        }
-
-        Ok(BollingerOutput {
-            middle,
-            upper,
-            lower,
-        })
+        });
     }
+
+    let mut output = BollingerOutput {
+        middle: vec![T::nan(); data.len()],
+        upper: vec![T::nan(); data.len()],
+        lower: vec![T::nan(); data.len()],
+    };
+    bollinger_into(data, period, num_std_dev, &mut output)?;
+    Ok(output)
 }
 
 /// Bollinger Bands using Welford f64 accumulator for improved precision.
@@ -456,86 +341,6 @@ fn bollinger_f64_accum<T: SeriesElement>(
             middle[i] = T::from_f64(mean)?;
             upper[i] = T::from_f64(mean + num_std_dev_f64 * stddev)?;
             lower[i] = T::from_f64(mean - num_std_dev_f64 * stddev)?;
-        } else {
-            middle[i] = T::nan();
-            upper[i] = T::nan();
-            lower[i] = T::nan();
-        }
-    }
-
-    Ok(())
-}
-
-/// Bollinger Bands using native type accumulator.
-///
-/// This is used for f64 inputs or Fast precision mode.
-#[inline]
-fn bollinger_native_accum<T: SeriesElement + 'static>(
-    data: &[T],
-    period: usize,
-    num_std_dev: T,
-    middle: &mut [T],
-    upper: &mut [T],
-    lower: &mut [T],
-) -> Result<()> {
-    // Fill lookback period with NaN
-    for i in 0..(period - 1) {
-        middle[i] = T::nan();
-        upper[i] = T::nan();
-        lower[i] = T::nan();
-    }
-
-    // Pre-compute reciprocal for efficient division
-    let inv_period = T::one() / T::from_usize(period)?;
-
-    // Compute initial sum and sum of squares using SIMD for f64
-    let (mut sum, mut sum_sq, mut nan_count) = compute_initial_sums(data, period);
-
-    // Compute first valid values at index (period - 1)
-    let first_idx = period - 1;
-    if nan_count == 0 {
-        let mean = sum * inv_period;
-        let variance = compute_variance(sum_sq, sum, inv_period);
-        let stddev = variance.sqrt();
-
-        middle[first_idx] = mean;
-        upper[first_idx] = mean + num_std_dev * stddev;
-        lower[first_idx] = mean - num_std_dev * stddev;
-    } else {
-        middle[first_idx] = T::nan();
-        upper[first_idx] = T::nan();
-        lower[first_idx] = T::nan();
-    }
-
-    // Rolling calculation for remaining elements
-    for i in period..data.len() {
-        let old_value = data[i - period];
-        let new_value = data[i];
-
-        // Update rolling sums and NaN count
-        if is_invalid(new_value) {
-            nan_count += 1;
-        } else {
-            sum = sum + new_value;
-            sum_sq = sum_sq + new_value * new_value;
-        }
-
-        if is_invalid(old_value) {
-            nan_count -= 1;
-        } else {
-            sum = sum - old_value;
-            sum_sq = sum_sq - old_value * old_value;
-        }
-
-        // Compute bands only when window has no NaNs
-        if nan_count == 0 {
-            let mean = sum * inv_period;
-            let variance = compute_variance(sum_sq, sum, inv_period);
-            let stddev = variance.sqrt();
-
-            middle[i] = mean;
-            upper[i] = mean + num_std_dev * stddev;
-            lower[i] = mean - num_std_dev * stddev;
         } else {
             middle[i] = T::nan();
             upper[i] = T::nan();
@@ -1600,13 +1405,11 @@ mod tests {
     fn test_bollinger_output_length_equals_input_length() {
         for len in [5, 10, 50, 100] {
             for period in [1, 2, 5] {
-                if period <= len {
-                    let data: Vec<f64> = (0..len).map(|x| x as f64).collect();
-                    let result = bollinger(&data, period, 2.0).unwrap();
-                    assert_eq!(result.middle.len(), len);
-                    assert_eq!(result.upper.len(), len);
-                    assert_eq!(result.lower.len(), len);
-                }
+                let data: Vec<f64> = (0..len).map(|x| x as f64).collect();
+                let result = bollinger(&data, period, 2.0).unwrap();
+                assert_eq!(result.middle.len(), len);
+                assert_eq!(result.upper.len(), len);
+                assert_eq!(result.lower.len(), len);
             }
         }
     }
@@ -1630,18 +1433,8 @@ mod tests {
         let result = bollinger(&data, 10, 2.0).unwrap();
 
         for i in 9..100 {
-            if !result.middle[i].is_nan() {
-                assert!(
-                    result.upper[i] >= result.middle[i],
-                    "Upper should be >= middle at index {}",
-                    i
-                );
-                assert!(
-                    result.middle[i] >= result.lower[i],
-                    "Middle should be >= lower at index {}",
-                    i
-                );
-            }
+            assert!(result.upper[i] >= result.middle[i]);
+            assert!(result.middle[i] >= result.lower[i]);
         }
     }
 
@@ -1652,15 +1445,9 @@ mod tests {
         let result = bollinger(&data, 5, 2.0).unwrap();
 
         for i in 4..50 {
-            if !result.middle[i].is_nan() {
-                let upper_dist = result.upper[i] - result.middle[i];
-                let lower_dist = result.middle[i] - result.lower[i];
-                assert!(
-                    approx_eq(upper_dist, lower_dist, EPSILON),
-                    "Bands should be symmetric at index {}",
-                    i
-                );
-            }
+            let upper_dist = result.upper[i] - result.middle[i];
+            let lower_dist = result.middle[i] - result.lower[i];
+            assert!(approx_eq(upper_dist, lower_dist, EPSILON));
         }
     }
 

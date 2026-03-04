@@ -352,6 +352,431 @@ fn json_spec_fixtures() {
             continue;
         }
 
+        if file_name.starts_with("spec_keltner_") {
+            use liq_ta::indicators::keltner::keltner_channel;
+            let (high, low, close) = parse_input_ohlc(&fixture.input);
+            let period = fixture
+                .params
+                .get("period")
+                .and_then(Value::as_u64)
+                .expect("Missing period") as usize;
+            let atr_multiplier = fixture
+                .params
+                .get("atr_multiplier")
+                .and_then(Value::as_f64)
+                .expect("Missing atr_multiplier");
+
+            let result = keltner_channel(&high, &low, &close, period, atr_multiplier)
+                .expect("Keltner failed");
+
+            let first_valid = fixture
+                .expected
+                .get("expected_first_valid_index")
+                .and_then(Value::as_u64)
+                .expect("Missing expected_first_valid_index")
+                as usize;
+
+            for i in 0..result.middle.len() {
+                if i < first_valid {
+                    assert!(
+                        result.upper[i].is_nan()
+                            && result.middle[i].is_nan()
+                            && result.lower[i].is_nan(),
+                        "{file_name}[{i}] expected NaN lookback region"
+                    );
+                } else if result.upper[i].is_finite()
+                    && result.middle[i].is_finite()
+                    && result.lower[i].is_finite()
+                {
+                    assert!(
+                        result.upper[i] >= result.middle[i] && result.middle[i] >= result.lower[i],
+                        "{file_name}[{i}] expected upper >= middle >= lower"
+                    );
+                }
+            }
+            continue;
+        }
+
+        if file_name.starts_with("spec_ichimoku_") {
+            use liq_ta::indicators::ichimoku::ichimoku;
+            let (high, low, close) = parse_input_ohlc(&fixture.input);
+            let tenkan_period = fixture
+                .params
+                .get("tenkan_period")
+                .and_then(Value::as_u64)
+                .expect("Missing tenkan_period") as usize;
+            let kijun_period = fixture
+                .params
+                .get("kijun_period")
+                .and_then(Value::as_u64)
+                .expect("Missing kijun_period") as usize;
+            let senkou_b_period = fixture
+                .params
+                .get("senkou_b_period")
+                .and_then(Value::as_u64)
+                .expect("Missing senkou_b_period") as usize;
+            let displacement = fixture
+                .params
+                .get("displacement")
+                .and_then(Value::as_u64)
+                .expect("Missing displacement") as usize;
+
+            let result = ichimoku(
+                &high,
+                &low,
+                &close,
+                tenkan_period,
+                kijun_period,
+                senkou_b_period,
+                displacement,
+            )
+            .expect("Ichimoku failed");
+
+            let tenkan_first = fixture
+                .expected
+                .get("expected_tenkan_first_valid_index")
+                .and_then(Value::as_u64)
+                .expect("Missing expected_tenkan_first_valid_index")
+                as usize;
+            let kijun_first = fixture
+                .expected
+                .get("expected_kijun_first_valid_index")
+                .and_then(Value::as_u64)
+                .expect("Missing expected_kijun_first_valid_index")
+                as usize;
+            let senkou_first = fixture
+                .expected
+                .get("expected_senkou_first_valid_index")
+                .and_then(Value::as_u64)
+                .expect("Missing expected_senkou_first_valid_index")
+                as usize;
+
+            assert!(result.tenkan[..tenkan_first].iter().all(|v| v.is_nan()));
+            assert!(result.kijun[..kijun_first].iter().all(|v| v.is_nan()));
+            assert!(result.senkou_b[..senkou_first].iter().all(|v| v.is_nan()));
+
+            if displacement > 0 {
+                let start = result.chikou.len().saturating_sub(displacement);
+                let tail = &result.chikou[start..];
+                assert!(
+                    tail.iter().all(|v| v.is_nan()),
+                    "{file_name}: trailing chikou values should be NaN"
+                );
+            }
+            continue;
+        }
+
+        if file_name.starts_with("spec_qqe_") {
+            use liq_ta::indicators::qqe::qqe;
+            let input = parse_input_series(&fixture.input);
+            let rsi_period = fixture
+                .params
+                .get("rsi_period")
+                .and_then(Value::as_u64)
+                .expect("Missing rsi_period") as usize;
+            let smoothing_period = fixture
+                .params
+                .get("smoothing_period")
+                .and_then(Value::as_u64)
+                .expect("Missing smoothing_period") as usize;
+            let wilders_period = fixture
+                .params
+                .get("wilders_period")
+                .and_then(Value::as_u64)
+                .expect("Missing wilders_period") as usize;
+            let factor = fixture
+                .params
+                .get("factor")
+                .and_then(Value::as_f64)
+                .expect("Missing factor");
+
+            let result = qqe(&input, rsi_period, smoothing_period, wilders_period, factor)
+                .expect("QQE failed");
+
+            let first_valid = fixture
+                .expected
+                .get("expected_first_valid_index")
+                .and_then(Value::as_u64)
+                .expect("Missing expected_first_valid_index")
+                as usize;
+
+            assert!(
+                result.upper_band[..first_valid].iter().all(|v| v.is_nan())
+                    && result.lower_band[..first_valid].iter().all(|v| v.is_nan()),
+                "{file_name}: expected QQE bands to remain NaN before first valid index"
+            );
+            for i in first_valid..result.qqe.len() {
+                if result.upper_band[i].is_finite()
+                    && result.qqe[i].is_finite()
+                    && result.lower_band[i].is_finite()
+                {
+                    assert!(
+                        result.upper_band[i] >= result.qqe[i]
+                            && result.qqe[i] >= result.lower_band[i],
+                        "{file_name}[{i}] expected upper >= qqe >= lower"
+                    );
+                }
+            }
+            continue;
+        }
+
+        if file_name.starts_with("spec_stage2_indicator_matrix_") {
+            use liq_ta::indicators::{
+                ao, autocorr, bears_power, bulls_power, chop, connors_rsi, demarker, dpo,
+                dss_bressert, gaussian_channel, gaussian_filter, hma, hma_atr_bands,
+                hma_bollinger_bands, hurst, laguerre_rsi, osma, rvi, stc, supertrend, ulcer_index,
+                vortex, vwap_atr_bands, vwap_bollinger_bands,
+            };
+
+            let n = parse_length(&fixture.input);
+            let base: Vec<f64> = (0..n).map(|i| 100.0 + i as f64 * 0.2).collect();
+            let open: Vec<f64> = base.iter().map(|v| v - 0.1).collect();
+            let high: Vec<f64> = base.iter().map(|v| v + 0.8).collect();
+            let low: Vec<f64> = base.iter().map(|v| v - 0.8).collect();
+            let close: Vec<f64> = base.iter().map(|v| v + 0.2).collect();
+            let volume: Vec<f64> = (0..n).map(|i| 1_000.0 + (i % 20) as f64 * 25.0).collect();
+
+            assert_eq!(hma(&close, 21).expect("HMA failed").len(), n, "{file_name}");
+            assert_eq!(
+                gaussian_filter(&close, 20, 0.5)
+                    .expect("Gaussian Filter failed")
+                    .len(),
+                n,
+                "{file_name}"
+            );
+            assert_eq!(ao(&high, &low).expect("AO failed").len(), n, "{file_name}");
+            assert_eq!(
+                bulls_power(&high, &low, &close, 13)
+                    .expect("Bulls Power failed")
+                    .len(),
+                n,
+                "{file_name}"
+            );
+            assert_eq!(
+                bears_power(&high, &low, &close, 13)
+                    .expect("Bears Power failed")
+                    .len(),
+                n,
+                "{file_name}"
+            );
+            assert_eq!(
+                demarker(&high, &low, 14).expect("DeMarker failed").len(),
+                n,
+                "{file_name}"
+            );
+            assert_eq!(
+                osma(&close, 12, 26, 9).expect("OSMA failed").len(),
+                n,
+                "{file_name}"
+            );
+            assert_eq!(
+                rvi(&open, &high, &low, &close, 10)
+                    .expect("RVI failed")
+                    .len(),
+                n,
+                "{file_name}"
+            );
+            assert_eq!(dpo(&close, 20).expect("DPO failed").len(), n, "{file_name}");
+            assert_eq!(
+                connors_rsi(&close, 3, 2, 100)
+                    .expect("Connors RSI failed")
+                    .len(),
+                n,
+                "{file_name}"
+            );
+            assert_eq!(
+                stc(&close, 23, 50, 10, 3).expect("STC failed").len(),
+                n,
+                "{file_name}"
+            );
+            assert_eq!(
+                laguerre_rsi(&close, 0.5)
+                    .expect("Laguerre RSI failed")
+                    .len(),
+                n,
+                "{file_name}"
+            );
+            assert_eq!(
+                dss_bressert(&high, &low, &close, 14, 5)
+                    .expect("DSS Bressert failed")
+                    .len(),
+                n,
+                "{file_name}"
+            );
+            assert_eq!(
+                chop(&high, &low, &close, 14).expect("CHOP failed").len(),
+                n,
+                "{file_name}"
+            );
+            assert_eq!(
+                ulcer_index(&close, 14).expect("Ulcer Index failed").len(),
+                n,
+                "{file_name}"
+            );
+            assert_eq!(
+                hurst(&close, 64).expect("Hurst failed").len(),
+                n,
+                "{file_name}"
+            );
+            assert_eq!(
+                autocorr(&close, 32, 1)
+                    .expect("Autocorrelation failed")
+                    .len(),
+                n,
+                "{file_name}"
+            );
+
+            let vortex_out = vortex(&high, &low, &close, 14).expect("Vortex failed");
+            assert_eq!(vortex_out.plus_vi.len(), n, "{file_name}");
+            assert_eq!(vortex_out.minus_vi.len(), n, "{file_name}");
+
+            let supertrend_out =
+                supertrend(&high, &low, &close, 10, 3.0).expect("SuperTrend failed");
+            assert_eq!(supertrend_out.supertrend.len(), n, "{file_name}");
+            assert_eq!(supertrend_out.upper_band.len(), n, "{file_name}");
+            assert_eq!(supertrend_out.lower_band.len(), n, "{file_name}");
+            assert_eq!(supertrend_out.trend.len(), n, "{file_name}");
+
+            let gaussian_out =
+                gaussian_channel(&close, 20, 0.5, 2.0).expect("Gaussian Channel failed");
+            assert_eq!(gaussian_out.center.len(), n, "{file_name}");
+            assert_eq!(gaussian_out.upper.len(), n, "{file_name}");
+            assert_eq!(gaussian_out.lower.len(), n, "{file_name}");
+            assert_eq!(gaussian_out.trend.len(), n, "{file_name}");
+
+            let hma_atr_out =
+                hma_atr_bands(&high, &low, &close, 21, 14, 2.0).expect("HMA ATR bands failed");
+            assert_eq!(hma_atr_out.upper.len(), n, "{file_name}");
+            assert_eq!(hma_atr_out.middle.len(), n, "{file_name}");
+            assert_eq!(hma_atr_out.lower.len(), n, "{file_name}");
+
+            let hma_bollinger_out =
+                hma_bollinger_bands(&close, 21, 20, 2.0).expect("HMA Bollinger bands failed");
+            assert_eq!(hma_bollinger_out.upper.len(), n, "{file_name}");
+            assert_eq!(hma_bollinger_out.middle.len(), n, "{file_name}");
+            assert_eq!(hma_bollinger_out.lower.len(), n, "{file_name}");
+
+            let vwap_atr_out = vwap_atr_bands(&high, &low, &close, &volume, 14, 2.0)
+                .expect("VWAP ATR bands failed");
+            assert_eq!(vwap_atr_out.upper.len(), n, "{file_name}");
+            assert_eq!(vwap_atr_out.middle.len(), n, "{file_name}");
+            assert_eq!(vwap_atr_out.lower.len(), n, "{file_name}");
+
+            let vwap_bollinger_out = vwap_bollinger_bands(&high, &low, &close, &volume, 20, 2.0)
+                .expect("VWAP Bollinger bands failed");
+            assert_eq!(vwap_bollinger_out.upper.len(), n, "{file_name}");
+            assert_eq!(vwap_bollinger_out.middle.len(), n, "{file_name}");
+            assert_eq!(vwap_bollinger_out.lower.len(), n, "{file_name}");
+            continue;
+        }
+
+        if file_name.starts_with("spec_gaussian_channel_") {
+            use liq_ta::indicators::gaussian_channel::{
+                gaussian_channel, gaussian_channel_lookback,
+            };
+            let n = parse_length(&fixture.input);
+            let period = fixture
+                .params
+                .get("period")
+                .and_then(Value::as_u64)
+                .expect("Missing period") as usize;
+            let sigma = fixture
+                .params
+                .get("sigma")
+                .and_then(Value::as_f64)
+                .expect("Missing sigma");
+            let multiplier = fixture
+                .params
+                .get("multiplier")
+                .and_then(Value::as_f64)
+                .expect("Missing multiplier");
+            let scenario = fixture
+                .params
+                .get("scenario")
+                .and_then(Value::as_str)
+                .expect("Missing scenario");
+
+            let data: Vec<f64> = match scenario {
+                "bullish" => (0..n).map(|i| 100.0 + i as f64 * 0.35).collect(),
+                "bearish" => (0..n).map(|i| 180.0 - i as f64 * 0.35).collect(),
+                "transition" => {
+                    let pivot = n / 2;
+                    (0..n)
+                        .map(|i| {
+                            if i < pivot {
+                                160.0 - i as f64 * 0.45
+                            } else {
+                                100.0 + (i - pivot) as f64 * 0.55
+                            }
+                        })
+                        .collect()
+                }
+                other => panic!("{file_name}: unsupported scenario '{other}'"),
+            };
+
+            let out = gaussian_channel(&data, period, sigma, multiplier)
+                .expect("Gaussian Channel failed");
+            let lookback = gaussian_channel_lookback(period);
+            for i in 0..lookback.min(n) {
+                assert!(
+                    out.center[i].is_nan()
+                        && out.upper[i].is_nan()
+                        && out.lower[i].is_nan()
+                        && out.trend[i].is_nan(),
+                    "{file_name}[{i}] expected NaN lookback region"
+                );
+            }
+
+            let mut finite_trend = Vec::new();
+            for i in lookback..n {
+                if out.center[i].is_finite() && out.upper[i].is_finite() && out.lower[i].is_finite()
+                {
+                    assert!(
+                        out.upper[i] >= out.center[i] && out.center[i] >= out.lower[i],
+                        "{file_name}[{i}] expected upper >= center >= lower"
+                    );
+                }
+                if out.trend[i].is_finite() {
+                    finite_trend.push(out.trend[i]);
+                }
+            }
+            assert!(
+                !finite_trend.is_empty(),
+                "{file_name}: expected at least one finite trend value"
+            );
+
+            if let Some(expected_final) = fixture
+                .expected
+                .get("expected_final_trend")
+                .and_then(Value::as_f64)
+            {
+                let actual_final = *finite_trend.last().expect("non-empty trend");
+                assert!(
+                    approx_eq(actual_final, expected_final, EPSILON),
+                    "{file_name}: expected final trend {expected_final}, got {actual_final}"
+                );
+            }
+
+            if fixture
+                .expected
+                .get("expect_transition")
+                .and_then(Value::as_bool)
+                == Some(true)
+            {
+                let transitions = finite_trend
+                    .windows(2)
+                    .filter(|pair| {
+                        pair[0] != 0.0 && pair[1] != 0.0 && pair[0].signum() != pair[1].signum()
+                    })
+                    .count();
+                assert!(
+                    transitions > 0,
+                    "{file_name}: expected at least one bullish/bearish transition"
+                );
+            }
+            continue;
+        }
+
         if file_name.starts_with("spec_macd_alignment_") {
             let length = parse_length(&fixture.input);
             let fast = fixture
@@ -503,6 +928,28 @@ fn json_spec_fixtures() {
                             .unwrap() as usize,
                         "{file_name}"
                     );
+                } else if file_name.contains("keltner") {
+                    use liq_ta::indicators::keltner::{
+                        keltner_channel_lookback, keltner_channel_min_len,
+                    };
+                    assert_eq!(
+                        keltner_channel_lookback(period),
+                        fixture
+                            .expected
+                            .get("expected_lookback")
+                            .and_then(Value::as_u64)
+                            .unwrap() as usize,
+                        "{file_name}"
+                    );
+                    assert_eq!(
+                        keltner_channel_min_len(period),
+                        fixture
+                            .expected
+                            .get("expected_min_len")
+                            .and_then(Value::as_u64)
+                            .unwrap() as usize,
+                        "{file_name}"
+                    );
                 }
             } else if file_name.contains("macd") {
                 use liq_ta::indicators::macd::{
@@ -585,6 +1032,76 @@ fn json_spec_fixtures() {
                 );
                 assert_eq!(
                     stochastic_min_len(k, d),
+                    fixture
+                        .expected
+                        .get("expected_min_len")
+                        .and_then(Value::as_u64)
+                        .unwrap() as usize,
+                    "{file_name}"
+                );
+            } else if file_name.contains("ichimoku") {
+                use liq_ta::indicators::ichimoku::{ichimoku_lookback, ichimoku_min_len};
+                let tenkan = fixture
+                    .params
+                    .get("tenkan_period")
+                    .and_then(Value::as_u64)
+                    .unwrap() as usize;
+                let kijun = fixture
+                    .params
+                    .get("kijun_period")
+                    .and_then(Value::as_u64)
+                    .unwrap() as usize;
+                let senkou_b = fixture
+                    .params
+                    .get("senkou_b_period")
+                    .and_then(Value::as_u64)
+                    .unwrap() as usize;
+                assert_eq!(
+                    ichimoku_lookback(tenkan, kijun, senkou_b),
+                    fixture
+                        .expected
+                        .get("expected_lookback")
+                        .and_then(Value::as_u64)
+                        .unwrap() as usize,
+                    "{file_name}"
+                );
+                assert_eq!(
+                    ichimoku_min_len(tenkan, kijun, senkou_b),
+                    fixture
+                        .expected
+                        .get("expected_min_len")
+                        .and_then(Value::as_u64)
+                        .unwrap() as usize,
+                    "{file_name}"
+                );
+            } else if file_name.contains("qqe") {
+                use liq_ta::indicators::qqe::{qqe_lookback, qqe_min_len};
+                let rsi_period = fixture
+                    .params
+                    .get("rsi_period")
+                    .and_then(Value::as_u64)
+                    .unwrap() as usize;
+                let smoothing_period = fixture
+                    .params
+                    .get("smoothing_period")
+                    .and_then(Value::as_u64)
+                    .unwrap() as usize;
+                let wilders_period = fixture
+                    .params
+                    .get("wilders_period")
+                    .and_then(Value::as_u64)
+                    .unwrap() as usize;
+                assert_eq!(
+                    qqe_lookback(rsi_period, smoothing_period, wilders_period),
+                    fixture
+                        .expected
+                        .get("expected_lookback")
+                        .and_then(Value::as_u64)
+                        .unwrap() as usize,
+                    "{file_name}"
+                );
+                assert_eq!(
+                    qqe_min_len(rsi_period, smoothing_period, wilders_period),
                     fixture
                         .expected
                         .get("expected_min_len")

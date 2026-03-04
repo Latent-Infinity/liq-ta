@@ -1139,3 +1139,79 @@ mod tests {
         assert!(approx_eq(result[4], expected_4, EPSILON));
     }
 }
+
+#[cfg(test)]
+mod coverage_push_private_paths_tests {
+    use super::*;
+
+    #[test]
+    fn sma_private_generic_paths_with_invalid_values() {
+        let data = [1.0_f64, 2.0, f64::NAN, 4.0, 5.0, 6.0];
+        let mut out = vec![f64::NAN; data.len()];
+        sma_generic(&data, 3, &mut out).unwrap();
+
+        assert!(out[2].is_nan());
+        assert!(out[3].is_nan());
+        assert!(out[4].is_nan());
+        assert!((out[5] - 5.0).abs() < 1e-12);
+
+        let mut out_into = vec![0.0_f64; data.len()];
+        let valid = sma_generic_into(&data, 3, &mut out_into).unwrap();
+        assert_eq!(valid, data.len() - 3 + 1);
+        assert!(out_into[2].is_nan());
+        assert!((out_into[5] - 5.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn sma_from_idx_into_error_and_edge_paths() {
+        let mut out = vec![0.0_f64; 4];
+        assert!(matches!(
+            sma_from_idx_into::<f64>(&[], 2, 0, &mut out),
+            Err(Error::EmptyInput)
+        ));
+
+        assert!(matches!(
+            sma_from_idx_into(&[1.0_f64, 2.0], 0, 0, &mut out),
+            Err(Error::InvalidPeriod { .. })
+        ));
+
+        let mut too_small = vec![0.0_f64; 1];
+        assert!(matches!(
+            sma_from_idx_into(&[1.0_f64, 2.0], 1, 0, &mut too_small),
+            Err(Error::BufferTooSmall { .. })
+        ));
+
+        let data = [1.0_f64, 2.0, 3.0, 4.0, 5.0];
+        let mut out2 = vec![0.0_f64; data.len()];
+        let c0 = sma_from_idx_into(&data, 3, data.len(), &mut out2).unwrap();
+        assert_eq!(c0, 0);
+        assert!(out2.iter().all(|v| v.is_nan()));
+
+        let mut out3 = vec![0.0_f64; data.len()];
+        let c1 = sma_from_idx_into(&data, 3, 4, &mut out3).unwrap();
+        assert_eq!(c1, 0);
+        assert!(out3.iter().all(|v| v.is_nan()));
+    }
+}
+
+#[cfg(test)]
+mod coverage_push_private_paths_tests_round2 {
+    use super::*;
+
+    #[test]
+    fn sma_private_tracking_and_invalid_entering_branches() {
+        let data_tracking = [1.0_f64, 2.0, 3.0, 4.0, 5.0];
+        let mut out_tracking = vec![f64::NAN; data_tracking.len()];
+        sma_f64_with_tracking(&data_tracking, 3, &mut out_tracking);
+        assert!((out_tracking[2] - 2.0).abs() < 1e-12);
+
+        let data_generic = [1.0_f64, 2.0, 3.0, f64::NAN, 5.0, 6.0];
+        let mut out_generic = vec![f64::NAN; data_generic.len()];
+        sma_generic(&data_generic, 3, &mut out_generic).unwrap();
+        assert!(out_generic[3].is_nan());
+
+        let mut out_generic_into = vec![f64::NAN; data_generic.len()];
+        sma_generic_into(&data_generic, 3, &mut out_generic_into).unwrap();
+        assert!(out_generic_into[3].is_nan());
+    }
+}

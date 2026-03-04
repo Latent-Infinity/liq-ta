@@ -300,6 +300,98 @@ fn test_stochastic_requires_ohlc() {
 }
 
 #[test]
+fn test_keltner_requires_ohlc() {
+    let input = fixtures_dir().join("ohlc.csv");
+    let _output = run_cli(&["keltner", input.to_str().unwrap(), "5,2.0"]);
+}
+
+#[test]
+fn test_ichimoku_requires_ohlc() {
+    let input = fixtures_dir().join("ohlc.csv");
+    let _output = run_cli(&["ichimoku", input.to_str().unwrap(), "3,5,7,2"]);
+}
+
+#[test]
+fn test_qqe_end_to_end() {
+    let input = fixtures_dir().join("simple_close.csv");
+    let _output = run_cli(&["qqe", input.to_str().unwrap(), "3,2,2,4.236"]);
+}
+
+#[test]
+fn test_hma_end_to_end() {
+    let input = fixtures_dir().join("simple_close.csv");
+    let stdout = run_cli_stdout(&["hma", input.to_str().unwrap(), "3"]);
+    let lines: Vec<&str> = stdout.lines().collect();
+
+    // 10 input rows, hma_lookback(3)=3 => 7 data rows + header
+    assert_eq!(lines.len(), 8);
+    assert!(lines[0].contains("hma_3"));
+}
+
+#[test]
+fn test_supertrend_end_to_end() {
+    let input = fixtures_dir().join("ohlc.csv");
+    let stdout = run_cli_stdout(&["supertrend", input.to_str().unwrap(), "3,2.0"]);
+    let lines: Vec<&str> = stdout.lines().collect();
+
+    // 10 input rows, supertrend_lookback(3)=3 => 7 data rows + header
+    assert_eq!(lines.len(), 8);
+    assert!(lines[0].contains("supertrend"));
+    assert!(lines[0].contains("supertrend_upper"));
+    assert!(lines[0].contains("supertrend_lower"));
+    assert!(lines[0].contains("supertrend_trend"));
+}
+
+#[test]
+fn test_gaussian_channel_end_to_end() {
+    let input = fixtures_dir().join("simple_close.csv");
+    let stdout = run_cli_stdout(&["gaussian-channel", input.to_str().unwrap(), "3,0.5,2.0"]);
+    let lines: Vec<&str> = stdout.lines().collect();
+
+    // 10 input rows, gaussian_lookback(3)=2 => 8 data rows + header
+    assert_eq!(lines.len(), 9);
+    assert!(lines[0].contains("gaussian_center"));
+    assert!(lines[0].contains("gaussian_upper"));
+    assert!(lines[0].contains("gaussian_lower"));
+    assert!(lines[0].contains("gaussian_trend"));
+}
+
+#[test]
+fn test_stage3_new_commands_smoke() {
+    let simple = fixtures_dir().join("simple_close.csv");
+    let ohlc = fixtures_dir().join("ohlc.csv");
+
+    let hma = run_cli(&["hma", simple.to_str().unwrap(), "3"]);
+    assert!(hma.status.success());
+
+    let ao = run_cli(&["ao", ohlc.to_str().unwrap()]);
+    assert!(!ao.status.success());
+
+    let osma = run_cli(&["osma", simple.to_str().unwrap(), "2,3,2"]);
+    assert!(osma.status.success());
+
+    let chop = run_cli(&["chop", ohlc.to_str().unwrap(), "3"]);
+    assert!(chop.status.success());
+
+    let hurst = run_cli(&["hurst", simple.to_str().unwrap(), "5"]);
+    assert!(hurst.status.success());
+}
+
+#[test]
+fn test_supertrend_invalid_args() {
+    let input = fixtures_dir().join("ohlc.csv");
+    let output = run_cli(&["supertrend", input.to_str().unwrap(), "3,-1.0"]);
+    assert!(!output.status.success());
+}
+
+#[test]
+fn test_gaussian_channel_invalid_args() {
+    let input = fixtures_dir().join("simple_close.csv");
+    let output = run_cli(&["gaussian-channel", input.to_str().unwrap(), "3,0.5"]);
+    assert!(!output.status.success());
+}
+
+#[test]
 fn test_output_to_stdout() {
     let input = fixtures_dir().join("simple_close.csv");
 

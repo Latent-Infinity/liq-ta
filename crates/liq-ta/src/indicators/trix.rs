@@ -120,14 +120,14 @@ pub fn trix_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) 
     // Fill lookback period with NaN
     output[..lookback].fill(T::nan());
 
-    // Phase 1: Build initial SMA for EMA1 (indices 0..period)
+    // Stage 1: Build initial SMA for EMA1 (indices 0..period)
     let mut ema1_sum = T::zero();
     for i in 0..period {
         ema1_sum = ema1_sum + data[i];
     }
     let mut ema1 = ema1_sum / period_t;
 
-    // Phase 2: Continue EMA1 and build initial SMA for EMA2
+    // Stage 2: Continue EMA1 and build initial SMA for EMA2
     // EMA1 is now valid at index ema_lb (= period - 1)
     // We need `period` EMA1 values for EMA2's SMA: indices ema_lb through 2*ema_lb
     let mut ema2_sum = ema1;
@@ -138,7 +138,7 @@ pub fn trix_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) 
     }
     let mut ema2 = ema2_sum / period_t;
 
-    // Phase 3: Continue EMA1, EMA2 and build initial SMA for EMA3
+    // Stage 3: Continue EMA1, EMA2 and build initial SMA for EMA3
     // EMA2 is now valid at index 2*ema_lb
     // We need `period` EMA2 values for EMA3's SMA: indices 2*ema_lb through 3*ema_lb
     let mut ema3_sum = ema2;
@@ -150,7 +150,7 @@ pub fn trix_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) 
     }
     let mut ema3 = ema3_sum / period_t;
 
-    // Phase 4: Calculate TRIX (ROC of triple EMA)
+    // Stage 4: Calculate TRIX (ROC of triple EMA)
     // First valid TRIX is at index lookback = 3*ema_lb + 1
     // We need prev_ema3 (at index 3*ema_lb) for the ROC calculation
     let mut prev_ema3 = ema3;
@@ -252,6 +252,7 @@ pub fn trix<T: SeriesElement + 'static>(data: &[T], period: usize) -> Result<Vec
 mod tests {
     #![allow(clippy::all, clippy::pedantic, clippy::nursery)]
     use super::*;
+    use half::f16;
 
     #[test]
     fn test_trix_lookback() {
@@ -405,5 +406,39 @@ mod tests {
                 i
             );
         }
+    }
+
+    #[test]
+    fn test_trix_period_one_zero_division_and_nonfinite_surface_all_types() {
+        let data64 = vec![0.0_f64, 1.0, 2.0, f64::NAN, 4.0, 0.0, 3.0];
+        let mut out64 = vec![f64::NAN; data64.len()];
+        trix_into(&data64, 1, &mut out64).unwrap();
+        assert!(out64[0].is_nan());
+        assert_eq!(out64[1], 0.0);
+        assert!(out64[3].is_nan());
+
+        let data32 = vec![0.0_f32, 1.0, 2.0, f32::NAN, 4.0, 0.0, 3.0];
+        let mut out32 = vec![f32::NAN; data32.len()];
+        trix_into(&data32, 1, &mut out32).unwrap();
+        assert!(out32[0].is_nan());
+        assert_eq!(out32[1], 0.0);
+        assert!(out32[3].is_nan());
+
+        let data16: Vec<f16> = vec![0.0_f32, 1.0, 2.0, f32::NAN, 4.0, 0.0, 3.0]
+            .into_iter()
+            .map(f16::from_f32)
+            .collect();
+        let mut out16 = vec![f16::NAN; data16.len()];
+        trix_into(&data16, 1, &mut out16).unwrap();
+        assert!(out16[0].is_nan());
+    }
+
+    #[test]
+    fn test_trix_zero_prev_ema3_path_for_first_and_loop_outputs() {
+        let data = vec![0.0_f64; 32];
+        let out = trix(&data, 3).expect("trix on zeros should succeed");
+        let lb = trix_lookback(3);
+        assert_eq!(out[lb], 0.0);
+        assert!(out[(lb + 1)..].iter().all(|&v| v == 0.0));
     }
 }

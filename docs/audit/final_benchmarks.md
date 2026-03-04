@@ -11,7 +11,7 @@ These results validate that no performance regressions were introduced during th
 # Ensure nightly toolchain is installed (required for portable_simd)
 rustup install nightly
 
-# Verify baseline was saved (from Phase 1)
+# Verify baseline was saved (from Stage 1)
 ls target/criterion/*/audit-baseline/
 ```
 

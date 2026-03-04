@@ -122,6 +122,13 @@ pub fn adxr_into<T: SeriesElement>(
         return Err(Error::EmptyInput);
     }
 
+    if period == 0 {
+        return Err(Error::InvalidPeriod {
+            period,
+            reason: "period must be at least 1",
+        });
+    }
+
     let min_len = adxr_min_len(period);
     if n < min_len {
         return Err(Error::InsufficientData {
@@ -412,21 +419,35 @@ pub const fn dm_min_len(period: usize) -> usize {
     dm_lookback(period) + 1
 }
 
-/// Computes `PLUS_DM` (Plus Directional Movement) with Wilder smoothing.
-///
-/// # Errors
-///
-/// Returns an error if:
-/// - The input arrays are empty (`Error::EmptyInput`)
-/// - The input arrays have different lengths (`Error::LengthMismatch`)
-/// - The period is invalid (`Error::InvalidPeriod`)
-/// - There is insufficient data for the lookback (`Error::InsufficientData`)
-/// - The output buffer is too small (`Error::BufferTooSmall`)
-pub fn plus_dm_into<T: SeriesElement>(
+#[derive(Copy, Clone)]
+enum DmKind {
+    Plus,
+    Minus,
+}
+
+#[inline]
+fn compute_dm_sample<T: SeriesElement>(up_move: T, down_move: T, kind: DmKind) -> T {
+    if up_move.is_finite() && down_move.is_finite() {
+        let (primary, secondary) = match kind {
+            DmKind::Plus => (up_move, down_move),
+            DmKind::Minus => (down_move, up_move),
+        };
+        if primary > secondary && primary > T::zero() {
+            primary
+        } else {
+            T::zero()
+        }
+    } else {
+        T::nan()
+    }
+}
+
+fn dm_into<T: SeriesElement>(
     high: &[T],
     low: &[T],
     period: usize,
     output: &mut [T],
+    kind: DmKind,
 ) -> Result<()> {
     let n = high.len();
 
@@ -450,7 +471,10 @@ pub fn plus_dm_into<T: SeriesElement>(
     let min_len = dm_min_len(period);
     if n < min_len {
         return Err(Error::InsufficientData {
-            indicator: "plus_dm",
+            indicator: match kind {
+                DmKind::Plus => "plus_dm",
+                DmKind::Minus => "minus_dm",
+            },
             required: min_len,
             actual: n,
         });
@@ -458,7 +482,10 @@ pub fn plus_dm_into<T: SeriesElement>(
 
     if output.len() < n {
         return Err(Error::BufferTooSmall {
-            indicator: "plus_dm",
+            indicator: match kind {
+                DmKind::Plus => "plus_dm",
+                DmKind::Minus => "minus_dm",
+            },
             required: n,
             actual: output.len(),
         });
@@ -470,54 +497,52 @@ pub fn plus_dm_into<T: SeriesElement>(
     // Fill lookback with NaN using efficient slice.fill()
     output[..period].fill(T::nan());
 
-    // Calculate initial sum of +DM for the first period
-    let mut sum_plus_dm = T::zero();
+    // Calculate initial sum of DM for the first period
+    let mut sum_dm = T::zero();
     for i in 1..=period {
         let up_move = high[i] - high[i - 1];
         let down_move = low[i - 1] - low[i];
-
-        // Handle NaN: if up_move or down_move is NaN, comparisons fail and plus_dm = 0
-        // But we want NaN propagation. Check for finite before comparison.
-        let plus_dm = if up_move.is_finite() && down_move.is_finite() {
-            if up_move > down_move && up_move > T::zero() {
-                up_move
-            } else {
-                T::zero()
-            }
-        } else {
-            T::nan()
-        };
-        sum_plus_dm = sum_plus_dm + plus_dm;
+        let dm = compute_dm_sample(up_move, down_move, kind);
+        sum_dm = sum_dm + dm;
     }
 
     // First smoothed value - NaN propagates through sum
-    let mut smoothed_plus_dm = sum_plus_dm;
-    output[period] = smoothed_plus_dm;
+    let mut smoothed_dm = sum_dm;
+    output[period] = smoothed_dm;
 
     // Continue with Wilder smoothing
-    // Once smoothed_plus_dm is NaN, it stays NaN through Wilder smoothing
+    // Once smoothed_dm is NaN, it stays NaN through Wilder smoothing
     for i in (period + 1)..n {
         let up_move = high[i] - high[i - 1];
         let down_move = low[i - 1] - low[i];
-
-        // Handle NaN with single check on computed values
-        let plus_dm = if up_move.is_finite() && down_move.is_finite() {
-            if up_move > down_move && up_move > T::zero() {
-                up_move
-            } else {
-                T::zero()
-            }
-        } else {
-            T::nan()
-        };
+        let dm = compute_dm_sample(up_move, down_move, kind);
 
         // Wilder smoothing using difference form (section 5.3)
-        // IEEE 754: if smoothed_plus_dm is NaN or plus_dm is NaN, result is NaN
-        smoothed_plus_dm = (plus_dm - smoothed_plus_dm).mul_add(alpha, smoothed_plus_dm);
-        output[i] = smoothed_plus_dm;
+        // IEEE 754: if smoothed_dm is NaN or dm is NaN, result is NaN
+        smoothed_dm = (dm - smoothed_dm).mul_add(alpha, smoothed_dm);
+        output[i] = smoothed_dm;
     }
 
     Ok(())
+}
+
+/// Computes `PLUS_DM` (Plus Directional Movement) with Wilder smoothing.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The input arrays are empty (`Error::EmptyInput`)
+/// - The input arrays have different lengths (`Error::LengthMismatch`)
+/// - The period is invalid (`Error::InvalidPeriod`)
+/// - There is insufficient data for the lookback (`Error::InsufficientData`)
+/// - The output buffer is too small (`Error::BufferTooSmall`)
+pub fn plus_dm_into<T: SeriesElement>(
+    high: &[T],
+    low: &[T],
+    period: usize,
+    output: &mut [T],
+) -> Result<()> {
+    dm_into(high, low, period, output, DmKind::Plus)
 }
 
 /// Computes `PLUS_DM` (Plus Directional Movement).
@@ -551,96 +576,7 @@ pub fn minus_dm_into<T: SeriesElement>(
     period: usize,
     output: &mut [T],
 ) -> Result<()> {
-    let n = high.len();
-
-    if n == 0 {
-        return Err(Error::EmptyInput);
-    }
-
-    if low.len() != n {
-        return Err(Error::LengthMismatch {
-            description: format!("high has {} elements, low has {}", n, low.len()),
-        });
-    }
-
-    if period == 0 {
-        return Err(Error::InvalidPeriod {
-            period,
-            reason: "period must be at least 1",
-        });
-    }
-
-    let min_len = dm_min_len(period);
-    if n < min_len {
-        return Err(Error::InsufficientData {
-            indicator: "minus_dm",
-            required: min_len,
-            actual: n,
-        });
-    }
-
-    if output.len() < n {
-        return Err(Error::BufferTooSmall {
-            indicator: "minus_dm",
-            required: n,
-            actual: output.len(),
-        });
-    }
-
-    let period_t = T::from_usize(period)?;
-    let alpha = T::one() / period_t; // Wilder smoothing factor for difference form
-
-    // Fill lookback with NaN using efficient slice.fill()
-    output[..period].fill(T::nan());
-
-    // Calculate initial sum of -DM for the first period
-    let mut sum_minus_dm = T::zero();
-    for i in 1..=period {
-        let up_move = high[i] - high[i - 1];
-        let down_move = low[i - 1] - low[i];
-
-        // Handle NaN: if up_move or down_move is NaN, comparisons fail
-        // Check for finite before comparison for proper NaN propagation
-        let minus_dm = if up_move.is_finite() && down_move.is_finite() {
-            if down_move > up_move && down_move > T::zero() {
-                down_move
-            } else {
-                T::zero()
-            }
-        } else {
-            T::nan()
-        };
-        sum_minus_dm = sum_minus_dm + minus_dm;
-    }
-
-    // First smoothed value - NaN propagates through sum
-    let mut smoothed_minus_dm = sum_minus_dm;
-    output[period] = smoothed_minus_dm;
-
-    // Continue with Wilder smoothing
-    // Once smoothed_minus_dm is NaN, it stays NaN through Wilder smoothing
-    for i in (period + 1)..n {
-        let up_move = high[i] - high[i - 1];
-        let down_move = low[i - 1] - low[i];
-
-        // Handle NaN with single check on computed values
-        let minus_dm = if up_move.is_finite() && down_move.is_finite() {
-            if down_move > up_move && down_move > T::zero() {
-                down_move
-            } else {
-                T::zero()
-            }
-        } else {
-            T::nan()
-        };
-
-        // Wilder smoothing using difference form (section 5.3)
-        // IEEE 754: if smoothed_minus_dm is NaN or minus_dm is NaN, result is NaN
-        smoothed_minus_dm = (minus_dm - smoothed_minus_dm).mul_add(alpha, smoothed_minus_dm);
-        output[i] = smoothed_minus_dm;
-    }
-
-    Ok(())
+    dm_into(high, low, period, output, DmKind::Minus)
 }
 
 /// Computes `MINUS_DM` (Minus Directional Movement).
@@ -656,4 +592,87 @@ pub fn minus_dm<T: SeriesElement>(high: &[T], low: &[T], period: usize) -> Resul
     let mut output = vec![T::zero(); high.len()];
     minus_dm_into(high, low, period, &mut output)?;
     Ok(output)
+}
+
+#[cfg(test)]
+mod coverage_push_private_paths_tests {
+    use super::*;
+
+    #[test]
+    fn dx_private_helper_non_finite_surface() {
+        assert!(compute_true_range(f64::NAN, 1.0, 1.0).is_nan());
+        assert!(compute_true_range(1.0, f64::INFINITY, 1.0).is_nan());
+
+        let (p, m) = compute_directional_movement(f64::NAN, 1.0, 1.0, 1.0);
+        assert!(p.is_nan());
+        assert!(m.is_nan());
+    }
+
+    #[test]
+    fn dx_error_matrix_surface() {
+        let high = vec![10.0_f64, 11.0, 12.0];
+        let low = vec![9.0_f64, 10.0];
+        let close = vec![9.5_f64, 10.5, 11.5];
+        let mut out = vec![0.0_f64; 3];
+
+        assert!(matches!(
+            dx_into(&high, &low, &close, 2, &mut out),
+            Err(Error::LengthMismatch { .. })
+        ));
+        assert!(matches!(
+            dx_into(&high, &high, &close, 0, &mut out),
+            Err(Error::InvalidPeriod { .. })
+        ));
+        assert!(matches!(
+            adxr_into(&high, &high, &close, 2, &mut out),
+            Err(Error::InsufficientData { .. })
+        ));
+    }
+
+    #[test]
+    fn dx_plus_minus_dm_error_and_success_surface() {
+        let empty: Vec<f64> = vec![];
+        let mut out_empty = vec![];
+        assert!(matches!(
+            plus_dm_into(&empty, &empty, 5, &mut out_empty),
+            Err(Error::EmptyInput)
+        ));
+        assert!(matches!(
+            minus_dm_into(&empty, &empty, 5, &mut out_empty),
+            Err(Error::EmptyInput)
+        ));
+
+        let high = vec![10.0_f64, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0];
+        let low = vec![9.0_f64, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0];
+        let mut plus = vec![0.0_f64; high.len()];
+        let mut minus = vec![0.0_f64; high.len()];
+
+        plus_dm_into(&high, &low, 3, &mut plus).expect("plus_dm_into should succeed");
+        minus_dm_into(&high, &low, 3, &mut minus).expect("minus_dm_into should succeed");
+        assert_eq!(plus.len(), high.len());
+        assert_eq!(minus.len(), high.len());
+    }
+
+    #[test]
+    fn dx_and_adxr_alloc_paths_with_non_finite_inputs() {
+        let mut high = vec![
+            10.0_f64, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0, 19.0, 20.0, 21.0,
+        ];
+        let mut low = vec![
+            9.0_f64, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0, 19.0, 20.0,
+        ];
+        let mut close = vec![
+            9.5_f64, 10.5, 11.5, 12.5, 13.5, 14.5, 15.5, 16.5, 17.5, 18.5, 19.5, 20.5,
+        ];
+        high[7] = f64::NAN;
+        low[8] = f64::NAN;
+        close[9] = f64::NAN;
+
+        let dx_out = dx(&high, &low, &close, 3).expect("dx should handle NaN propagation");
+        assert_eq!(dx_out.len(), high.len());
+        assert!(dx_out.iter().skip(3).any(|v| v.is_nan()));
+
+        let adxr_out = adxr(&high, &low, &close, 3).expect("adxr should handle NaN propagation");
+        assert_eq!(adxr_out.len(), high.len());
+    }
 }

@@ -18,7 +18,9 @@ path = "src/main.rs"
 doc = false
 
 [dependencies]
-liq-ta = { path = "../liq-ta", version = "0.1.0" }
+liq-ta = { path = "../liq-ta", version = "0.1.1" }
 clap = { workspace = true }
 csv = { workspace = true }
 thiserror = { workspace = true }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

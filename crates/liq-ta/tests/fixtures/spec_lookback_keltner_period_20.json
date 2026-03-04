@@ -1,0 +1,11 @@
+{
+  "spec_version": "3.0",
+  "rationale": "Keltner lookback/min_len should match EMA+ATR dependency requirements",
+  "params": {
+    "period": 20
+  },
+  "expected": {
+    "expected_lookback": 20,
+    "expected_min_len": 21
+  }
+}

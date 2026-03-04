@@ -12,6 +12,20 @@ Run with `cargo bench -p liq-ta` to reproduce.
 - SIMD: Always enabled (portable_simd, requires nightly)
 - TA-Lib: v0.4.0 (via ta-lib-sys FFI)
 
+## Stage 3 Benchmark Scope Update (2026-02-25)
+
+Benchmark harness coverage was expanded to include additional high-value indicators:
+
+- `hma`
+- `ichimoku`
+- `qqe`
+- `supertrend`
+- `chop`
+- `hurst`
+- `gaussian_channel`
+
+Run `cargo bench -p liq-ta` to capture refreshed baseline numbers for these groups.
+
 ## SIMD Acceleration
 
 SIMD (Single Instruction Multiple Data) is always enabled and provides

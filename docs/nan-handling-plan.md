@@ -46,7 +46,7 @@ The IEEE 754 standard provides automatic NaN propagation through arithmetic oper
 
 ## Optimization Results
 
-### Phase 1: Audit and Classification (COMPLETED)
+### Stage 1: Audit and Classification (COMPLETED)
 
 Audited all indicator files to classify NaN handling patterns:
 
@@ -74,7 +74,7 @@ Audited all indicator files to classify NaN handling patterns:
 | stochastic | Hybrid | VALIDATED | has_nan + nan_count |
 | mfi | Window sum | OPTIMIZED | has_nan window check |
 
-### Phase 2: Simple Indicators - IEEE Pattern (COMPLETED)
+### Stage 2: Simple Indicators - IEEE Pattern (COMPLETED)
 
 Applied IEEE 754 auto-propagation to simple pointwise indicators:
 
@@ -82,14 +82,14 @@ Applied IEEE 754 auto-propagation to simple pointwise indicators:
 - `midpoint.rs`: Added sum accumulator for NaN detection in window
 - `midprice.rs`: Changed output initialization from `T::nan()` to `T::zero()`
 
-### Phase 3: Division Indicators - IEEE with Edge Cases (COMPLETED)
+### Stage 3: Division Indicators - IEEE with Edge Cases (COMPLETED)
 
 Applied IEEE 754 pattern with explicit division-by-zero handling:
 
 - `ad.rs`: Changed from `range > T::zero()` to `range == T::zero()` pattern
 - `roc.rs`: Division by zero now returns `T::zero()` (validated as correct)
 
-### Phase 4: Medium Complexity - Evaluation (COMPLETED)
+### Stage 4: Medium Complexity - Evaluation (COMPLETED)
 
 Evaluated medium complexity indicators:
 
@@ -97,7 +97,7 @@ Evaluated medium complexity indicators:
 - `ema.rs`: VALIDATED - Explicit checks appropriate for recursive state
 - `rsi.rs`: VALIDATED - Explicit checks appropriate for Wilder smoothing
 
-### Phase 5: Complex Indicators - Validation (COMPLETED)
+### Stage 5: Complex Indicators - Validation (COMPLETED)
 
 Validated complex indicators:
 
@@ -108,7 +108,7 @@ Validated complex indicators:
 - `macd.rs`: VALIDATED - Correctly inherits NaN from underlying EMAs
 - `adx.rs`: FIXED - Added explicit NaN checks before all comparisons
 
-### Phase 6: Testing and Documentation (IN PROGRESS)
+### Stage 6: Testing and Documentation (IN PROGRESS)
 
 - [x] Document test suite requirements (cargo blocked in environment)
 - [x] Document NaN-specific test coverage

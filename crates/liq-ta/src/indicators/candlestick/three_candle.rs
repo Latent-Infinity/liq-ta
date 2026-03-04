@@ -49,24 +49,7 @@ pub fn cdl_morning_star<T: SeriesElement>(
     low: &[T],
     close: &[T],
 ) -> Result<Vec<i32>> {
-    let len = open.len();
-    if len == 0 {
-        return Err(Error::EmptyInput);
-    }
-    if high.len() != len || low.len() != len || close.len() != len {
-        return Err(Error::LengthMismatch {
-            description: "OHLC arrays have different lengths".to_string(),
-        });
-    }
-    if len < cdl_morning_star_min_len() {
-        return Err(Error::InsufficientData {
-            required: 0,
-            actual: len,
-            indicator: "candlestick",
-        });
-    }
-
-    let mut out = vec![0i32; len];
+    let mut out = vec![0i32; open.len()];
     cdl_morning_star_into(open, high, low, close, &mut out)?;
     Ok(out)
 }
@@ -204,24 +187,7 @@ pub fn cdl_evening_star<T: SeriesElement>(
     low: &[T],
     close: &[T],
 ) -> Result<Vec<i32>> {
-    let len = open.len();
-    if len == 0 {
-        return Err(Error::EmptyInput);
-    }
-    if high.len() != len || low.len() != len || close.len() != len {
-        return Err(Error::LengthMismatch {
-            description: "OHLC arrays have different lengths".to_string(),
-        });
-    }
-    if len < cdl_evening_star_min_len() {
-        return Err(Error::InsufficientData {
-            required: 0,
-            actual: len,
-            indicator: "candlestick",
-        });
-    }
-
-    let mut out = vec![0i32; len];
+    let mut out = vec![0i32; open.len()];
     cdl_evening_star_into(open, high, low, close, &mut out)?;
     Ok(out)
 }
@@ -355,24 +321,7 @@ pub fn cdl_morning_doji_star<T: SeriesElement>(
     low: &[T],
     close: &[T],
 ) -> Result<Vec<i32>> {
-    let len = open.len();
-    if len == 0 {
-        return Err(Error::EmptyInput);
-    }
-    if high.len() != len || low.len() != len || close.len() != len {
-        return Err(Error::LengthMismatch {
-            description: "OHLC arrays have different lengths".to_string(),
-        });
-    }
-    if len < cdl_morning_doji_star_min_len() {
-        return Err(Error::InsufficientData {
-            required: 0,
-            actual: len,
-            indicator: "candlestick",
-        });
-    }
-
-    let mut out = vec![0i32; len];
+    let mut out = vec![0i32; open.len()];
     cdl_morning_doji_star_into(open, high, low, close, &mut out)?;
     Ok(out)
 }
@@ -502,24 +451,7 @@ pub fn cdl_evening_doji_star<T: SeriesElement>(
     low: &[T],
     close: &[T],
 ) -> Result<Vec<i32>> {
-    let len = open.len();
-    if len == 0 {
-        return Err(Error::EmptyInput);
-    }
-    if high.len() != len || low.len() != len || close.len() != len {
-        return Err(Error::LengthMismatch {
-            description: "OHLC arrays have different lengths".to_string(),
-        });
-    }
-    if len < cdl_evening_doji_star_min_len() {
-        return Err(Error::InsufficientData {
-            required: 0,
-            actual: len,
-            indicator: "candlestick",
-        });
-    }
-
-    let mut out = vec![0i32; len];
+    let mut out = vec![0i32; open.len()];
     cdl_evening_doji_star_into(open, high, low, close, &mut out)?;
     Ok(out)
 }
@@ -649,24 +581,7 @@ pub fn cdl_abandoned_baby<T: SeriesElement>(
     low: &[T],
     close: &[T],
 ) -> Result<Vec<i32>> {
-    let len = open.len();
-    if len == 0 {
-        return Err(Error::EmptyInput);
-    }
-    if high.len() != len || low.len() != len || close.len() != len {
-        return Err(Error::LengthMismatch {
-            description: "OHLC arrays have different lengths".to_string(),
-        });
-    }
-    if len < cdl_abandoned_baby_min_len() {
-        return Err(Error::InsufficientData {
-            required: 0,
-            actual: len,
-            indicator: "candlestick",
-        });
-    }
-
-    let mut out = vec![0i32; len];
+    let mut out = vec![0i32; open.len()];
     cdl_abandoned_baby_into(open, high, low, close, &mut out)?;
     Ok(out)
 }
@@ -842,24 +757,7 @@ pub fn cdl_3white_soldiers<T: SeriesElement>(
     low: &[T],
     close: &[T],
 ) -> Result<Vec<i32>> {
-    let len = open.len();
-    if len == 0 {
-        return Err(Error::EmptyInput);
-    }
-    if high.len() != len || low.len() != len || close.len() != len {
-        return Err(Error::LengthMismatch {
-            description: "OHLC arrays have different lengths".to_string(),
-        });
-    }
-    if len < cdl_3white_soldiers_min_len() {
-        return Err(Error::InsufficientData {
-            required: 0,
-            actual: len,
-            indicator: "candlestick",
-        });
-    }
-
-    let mut out = vec![0i32; len];
+    let mut out = vec![0i32; open.len()];
     cdl_3white_soldiers_into(open, high, low, close, &mut out)?;
     Ok(out)
 }
@@ -1010,24 +908,7 @@ pub fn cdl_3black_crows<T: SeriesElement>(
     low: &[T],
     close: &[T],
 ) -> Result<Vec<i32>> {
-    let len = open.len();
-    if len == 0 {
-        return Err(Error::EmptyInput);
-    }
-    if high.len() != len || low.len() != len || close.len() != len {
-        return Err(Error::LengthMismatch {
-            description: "OHLC arrays have different lengths".to_string(),
-        });
-    }
-    if len < cdl_3black_crows_min_len() {
-        return Err(Error::InsufficientData {
-            required: 0,
-            actual: len,
-            indicator: "candlestick",
-        });
-    }
-
-    let mut out = vec![0i32; len];
+    let mut out = vec![0i32; open.len()];
     cdl_3black_crows_into(open, high, low, close, &mut out)?;
     Ok(out)
 }
@@ -1182,24 +1063,7 @@ pub fn cdl_3inside<T: SeriesElement>(
     low: &[T],
     close: &[T],
 ) -> Result<Vec<i32>> {
-    let len = open.len();
-    if len == 0 {
-        return Err(Error::EmptyInput);
-    }
-    if high.len() != len || low.len() != len || close.len() != len {
-        return Err(Error::LengthMismatch {
-            description: "OHLC arrays have different lengths".to_string(),
-        });
-    }
-    if len < cdl_3inside_min_len() {
-        return Err(Error::InsufficientData {
-            required: 0,
-            actual: len,
-            indicator: "candlestick",
-        });
-    }
-
-    let mut out = vec![0i32; len];
+    let mut out = vec![0i32; open.len()];
     cdl_3inside_into(open, high, low, close, &mut out)?;
     Ok(out)
 }
@@ -1326,24 +1190,7 @@ pub fn cdl_3outside<T: SeriesElement>(
     low: &[T],
     close: &[T],
 ) -> Result<Vec<i32>> {
-    let len = open.len();
-    if len == 0 {
-        return Err(Error::EmptyInput);
-    }
-    if high.len() != len || low.len() != len || close.len() != len {
-        return Err(Error::LengthMismatch {
-            description: "OHLC arrays have different lengths".to_string(),
-        });
-    }
-    if len < cdl_3outside_min_len() {
-        return Err(Error::InsufficientData {
-            required: 0,
-            actual: len,
-            indicator: "candlestick",
-        });
-    }
-
-    let mut out = vec![0i32; len];
+    let mut out = vec![0i32; open.len()];
     cdl_3outside_into(open, high, low, close, &mut out)?;
     Ok(out)
 }
@@ -1469,24 +1316,7 @@ pub fn cdl_3line_strike<T: SeriesElement>(
     low: &[T],
     close: &[T],
 ) -> Result<Vec<i32>> {
-    let len = open.len();
-    if len == 0 {
-        return Err(Error::EmptyInput);
-    }
-    if high.len() != len || low.len() != len || close.len() != len {
-        return Err(Error::LengthMismatch {
-            description: "OHLC arrays have different lengths".to_string(),
-        });
-    }
-    if len < cdl_3line_strike_min_len() {
-        return Err(Error::InsufficientData {
-            required: 0,
-            actual: len,
-            indicator: "candlestick",
-        });
-    }
-
-    let mut out = vec![0i32; len];
+    let mut out = vec![0i32; open.len()];
     cdl_3line_strike_into(open, high, low, close, &mut out)?;
     Ok(out)
 }
@@ -1604,24 +1434,7 @@ pub fn cdl_3stars_in_south<T: SeriesElement>(
     low: &[T],
     close: &[T],
 ) -> Result<Vec<i32>> {
-    let len = open.len();
-    if len == 0 {
-        return Err(Error::EmptyInput);
-    }
-    if high.len() != len || low.len() != len || close.len() != len {
-        return Err(Error::LengthMismatch {
-            description: "OHLC arrays have different lengths".to_string(),
-        });
-    }
-    if len < cdl_3stars_in_south_min_len() {
-        return Err(Error::InsufficientData {
-            required: 0,
-            actual: len,
-            indicator: "candlestick",
-        });
-    }
-
-    let mut out = vec![0i32; len];
+    let mut out = vec![0i32; open.len()];
     cdl_3stars_in_south_into(open, high, low, close, &mut out)?;
     Ok(out)
 }
@@ -1749,24 +1562,7 @@ pub fn cdl_tristar<T: SeriesElement>(
     low: &[T],
     close: &[T],
 ) -> Result<Vec<i32>> {
-    let len = open.len();
-    if len == 0 {
-        return Err(Error::EmptyInput);
-    }
-    if high.len() != len || low.len() != len || close.len() != len {
-        return Err(Error::LengthMismatch {
-            description: "OHLC arrays have different lengths".to_string(),
-        });
-    }
-    if len < cdl_tristar_min_len() {
-        return Err(Error::InsufficientData {
-            required: 0,
-            actual: len,
-            indicator: "candlestick",
-        });
-    }
-
-    let mut out = vec![0i32; len];
+    let mut out = vec![0i32; open.len()];
     cdl_tristar_into(open, high, low, close, &mut out)?;
     Ok(out)
 }
@@ -1902,24 +1698,7 @@ pub fn cdl_identical_3crows<T: SeriesElement>(
     low: &[T],
     close: &[T],
 ) -> Result<Vec<i32>> {
-    let len = open.len();
-    if len == 0 {
-        return Err(Error::EmptyInput);
-    }
-    if high.len() != len || low.len() != len || close.len() != len {
-        return Err(Error::LengthMismatch {
-            description: "OHLC arrays have different lengths".to_string(),
-        });
-    }
-    if len < cdl_identical_3crows_min_len() {
-        return Err(Error::InsufficientData {
-            required: 0,
-            actual: len,
-            indicator: "candlestick",
-        });
-    }
-
-    let mut out = vec![0i32; len];
+    let mut out = vec![0i32; open.len()];
     cdl_identical_3crows_into(open, high, low, close, &mut out)?;
     Ok(out)
 }
@@ -2332,5 +2111,407 @@ mod tests {
     fn test_empty_input() {
         let empty: Vec<f64> = vec![];
         assert!(cdl_morning_star(&empty, &empty, &empty, &empty).is_err());
+    }
+
+    #[test]
+    fn test_three_candle_wrappers_smoke_surface() {
+        let n = 700;
+        let mut open = Vec::with_capacity(n);
+        let mut high = Vec::with_capacity(n);
+        let mut low = Vec::with_capacity(n);
+        let mut close = Vec::with_capacity(n);
+
+        for i in 0..n {
+            let base = 400.0 - (i as f64) * 0.1;
+            open.push(base);
+            close.push(base - 0.08);
+            high.push(base + 7.0);
+            low.push(base - 7.0);
+        }
+
+        macro_rules! assert_len_ok {
+            ($expr:expr) => {{
+                let out = $expr.unwrap();
+                assert_eq!(out.len(), n);
+            }};
+        }
+
+        assert_len_ok!(cdl_morning_star(&open, &high, &low, &close));
+        assert_len_ok!(cdl_evening_star(&open, &high, &low, &close));
+        assert_len_ok!(cdl_morning_doji_star(&open, &high, &low, &close));
+        assert_len_ok!(cdl_evening_doji_star(&open, &high, &low, &close));
+        assert_len_ok!(cdl_abandoned_baby(&open, &high, &low, &close));
+        assert_len_ok!(cdl_3white_soldiers(&open, &high, &low, &close));
+        assert_len_ok!(cdl_3black_crows(&open, &high, &low, &close));
+        assert_len_ok!(cdl_3inside(&open, &high, &low, &close));
+        assert_len_ok!(cdl_3outside(&open, &high, &low, &close));
+        assert_len_ok!(cdl_3line_strike(&open, &high, &low, &close));
+        assert_len_ok!(cdl_3stars_in_south(&open, &high, &low, &close));
+        assert_len_ok!(cdl_tristar(&open, &high, &low, &close));
+        assert_len_ok!(cdl_identical_3crows(&open, &high, &low, &close));
+        assert_len_ok!(cdl_advance_block(&open, &high, &low, &close));
+        assert_len_ok!(cdl_stalled_pattern(&open, &high, &low, &close));
+        assert_len_ok!(cdl_unique_3river(&open, &high, &low, &close));
+        assert_len_ok!(cdl_stick_sandwich(&open, &high, &low, &close));
+        assert_len_ok!(cdl_tasuki_gap(&open, &high, &low, &close));
+        assert_len_ok!(cdl_upside_gap_2crows(&open, &high, &low, &close));
+        assert_len_ok!(cdl_gap_side_side_white(&open, &high, &low, &close));
+        assert_len_ok!(cdl_breakaway(&open, &high, &low, &close));
+        assert_len_ok!(cdl_ladder_bottom(&open, &high, &low, &close));
+        assert_len_ok!(cdl_mat_hold(&open, &high, &low, &close));
+        assert_len_ok!(cdl_rise_fall_3methods(&open, &high, &low, &close));
+        assert_len_ok!(cdl_concealing_baby_swallow(&open, &high, &low, &close));
+        assert_len_ok!(cdl_xside_gap_3methods(&open, &high, &low, &close));
+    }
+
+    #[test]
+    fn test_three_candle_error_surface_all_patterns() {
+        type ThreeFn = fn(&[f64], &[f64], &[f64], &[f64]) -> crate::error::Result<Vec<i32>>;
+        type ThreeIntoFn =
+            fn(&[f64], &[f64], &[f64], &[f64], &mut [i32]) -> crate::error::Result<()>;
+
+        let n = 96;
+        let mut open = Vec::with_capacity(n);
+        let mut high = Vec::with_capacity(n);
+        let mut low = Vec::with_capacity(n);
+        let mut close = Vec::with_capacity(n);
+
+        for i in 0..n {
+            let base = 220.0 - (i as f64) * 0.1;
+            open.push(base);
+            close.push(base - 0.06);
+            high.push(base + 5.0);
+            low.push(base - 5.0);
+        }
+
+        let high_short = high[..(n - 1)].to_vec();
+        let low_short = low[..(n - 1)].to_vec();
+        let close_short = close[..(n - 1)].to_vec();
+        let empty: Vec<f64> = vec![];
+
+        let wrappers: [(&str, ThreeFn); 26] = [
+            ("cdl_morning_star", cdl_morning_star),
+            ("cdl_evening_star", cdl_evening_star),
+            ("cdl_morning_doji_star", cdl_morning_doji_star),
+            ("cdl_evening_doji_star", cdl_evening_doji_star),
+            ("cdl_abandoned_baby", cdl_abandoned_baby),
+            ("cdl_3white_soldiers", cdl_3white_soldiers),
+            ("cdl_3black_crows", cdl_3black_crows),
+            ("cdl_3inside", cdl_3inside),
+            ("cdl_3outside", cdl_3outside),
+            ("cdl_3line_strike", cdl_3line_strike),
+            ("cdl_3stars_in_south", cdl_3stars_in_south),
+            ("cdl_tristar", cdl_tristar),
+            ("cdl_identical_3crows", cdl_identical_3crows),
+            ("cdl_advance_block", cdl_advance_block),
+            ("cdl_stalled_pattern", cdl_stalled_pattern),
+            ("cdl_unique_3river", cdl_unique_3river),
+            ("cdl_stick_sandwich", cdl_stick_sandwich),
+            ("cdl_tasuki_gap", cdl_tasuki_gap),
+            ("cdl_upside_gap_2crows", cdl_upside_gap_2crows),
+            ("cdl_gap_side_side_white", cdl_gap_side_side_white),
+            ("cdl_breakaway", cdl_breakaway),
+            ("cdl_ladder_bottom", cdl_ladder_bottom),
+            ("cdl_mat_hold", cdl_mat_hold),
+            ("cdl_rise_fall_3methods", cdl_rise_fall_3methods),
+            ("cdl_concealing_baby_swallow", cdl_concealing_baby_swallow),
+            ("cdl_xside_gap_3methods", cdl_xside_gap_3methods),
+        ];
+
+        for (name, f) in wrappers {
+            assert!(f(&empty, &empty, &empty, &empty).is_err(), "{name}");
+            assert!(f(&open, &high_short, &low, &close).is_err(), "{name}");
+            assert!(f(&open, &high, &low_short, &close).is_err(), "{name}");
+            assert!(f(&open, &high, &low, &close_short).is_err(), "{name}");
+        }
+
+        let into_fns: [(&str, ThreeIntoFn); 26] = [
+            ("cdl_morning_star_into", cdl_morning_star_into),
+            ("cdl_evening_star_into", cdl_evening_star_into),
+            ("cdl_morning_doji_star_into", cdl_morning_doji_star_into),
+            ("cdl_evening_doji_star_into", cdl_evening_doji_star_into),
+            ("cdl_abandoned_baby_into", cdl_abandoned_baby_into),
+            ("cdl_3white_soldiers_into", cdl_3white_soldiers_into),
+            ("cdl_3black_crows_into", cdl_3black_crows_into),
+            ("cdl_3inside_into", cdl_3inside_into),
+            ("cdl_3outside_into", cdl_3outside_into),
+            ("cdl_3line_strike_into", cdl_3line_strike_into),
+            ("cdl_3stars_in_south_into", cdl_3stars_in_south_into),
+            ("cdl_tristar_into", cdl_tristar_into),
+            ("cdl_identical_3crows_into", cdl_identical_3crows_into),
+            ("cdl_advance_block_into", cdl_advance_block_into),
+            ("cdl_stalled_pattern_into", cdl_stalled_pattern_into),
+            ("cdl_unique_3river_into", cdl_unique_3river_into),
+            ("cdl_stick_sandwich_into", cdl_stick_sandwich_into),
+            ("cdl_tasuki_gap_into", cdl_tasuki_gap_into),
+            ("cdl_upside_gap_2crows_into", cdl_upside_gap_2crows_into),
+            ("cdl_gap_side_side_white_into", cdl_gap_side_side_white_into),
+            ("cdl_breakaway_into", cdl_breakaway_into),
+            ("cdl_ladder_bottom_into", cdl_ladder_bottom_into),
+            ("cdl_mat_hold_into", cdl_mat_hold_into),
+            ("cdl_rise_fall_3methods_into", cdl_rise_fall_3methods_into),
+            (
+                "cdl_concealing_baby_swallow_into",
+                cdl_concealing_baby_swallow_into,
+            ),
+            ("cdl_xside_gap_3methods_into", cdl_xside_gap_3methods_into),
+        ];
+
+        let mut out_ok = vec![0_i32; n];
+        let mut out_short = vec![0_i32; n - 1];
+        for (name, f) in into_fns {
+            f(&open, &high, &low, &close, &mut out_ok).unwrap();
+            assert!(
+                f(&open, &high, &low, &close, &mut out_short).is_err(),
+                "{name}"
+            );
+            assert!(
+                f(&open, &high_short, &low, &close, &mut out_ok).is_err(),
+                "{name}"
+            );
+            assert!(
+                f(&open, &high, &low_short, &close, &mut out_ok).is_err(),
+                "{name}"
+            );
+            assert!(
+                f(&open, &high, &low, &close_short, &mut out_ok).is_err(),
+                "{name}"
+            );
+            assert!(
+                f(&empty, &empty, &empty, &empty, &mut []).is_err(),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_three_candle_f32_surface_matrix() {
+        let n = 360;
+        let mut open = Vec::with_capacity(n);
+        let mut high = Vec::with_capacity(n);
+        let mut low = Vec::with_capacity(n);
+        let mut close = Vec::with_capacity(n);
+
+        for i in 0..n {
+            let base = 260.0_f32 - (i as f32) * 0.09;
+            open.push(base);
+            close.push(base - 0.07);
+            high.push(base + 4.8);
+            low.push(base - 4.8);
+        }
+
+        macro_rules! assert_len_ok {
+            ($expr:expr) => {{
+                let out = $expr.unwrap();
+                assert_eq!(out.len(), n);
+            }};
+        }
+        macro_rules! assert_into_ok {
+            ($f:ident) => {{
+                let mut out = vec![0_i32; n];
+                $f(&open, &high, &low, &close, &mut out).unwrap();
+                assert_eq!(out.len(), n);
+            }};
+        }
+
+        assert_len_ok!(cdl_morning_star(&open, &high, &low, &close));
+        assert_len_ok!(cdl_evening_star(&open, &high, &low, &close));
+        assert_len_ok!(cdl_morning_doji_star(&open, &high, &low, &close));
+        assert_len_ok!(cdl_evening_doji_star(&open, &high, &low, &close));
+        assert_len_ok!(cdl_abandoned_baby(&open, &high, &low, &close));
+        assert_len_ok!(cdl_3white_soldiers(&open, &high, &low, &close));
+        assert_len_ok!(cdl_3black_crows(&open, &high, &low, &close));
+        assert_len_ok!(cdl_3inside(&open, &high, &low, &close));
+        assert_len_ok!(cdl_3outside(&open, &high, &low, &close));
+        assert_len_ok!(cdl_3line_strike(&open, &high, &low, &close));
+        assert_len_ok!(cdl_3stars_in_south(&open, &high, &low, &close));
+        assert_len_ok!(cdl_tristar(&open, &high, &low, &close));
+        assert_len_ok!(cdl_identical_3crows(&open, &high, &low, &close));
+        assert_len_ok!(cdl_advance_block(&open, &high, &low, &close));
+        assert_len_ok!(cdl_stalled_pattern(&open, &high, &low, &close));
+        assert_len_ok!(cdl_unique_3river(&open, &high, &low, &close));
+        assert_len_ok!(cdl_stick_sandwich(&open, &high, &low, &close));
+        assert_len_ok!(cdl_tasuki_gap(&open, &high, &low, &close));
+        assert_len_ok!(cdl_upside_gap_2crows(&open, &high, &low, &close));
+        assert_len_ok!(cdl_gap_side_side_white(&open, &high, &low, &close));
+        assert_len_ok!(cdl_breakaway(&open, &high, &low, &close));
+        assert_len_ok!(cdl_ladder_bottom(&open, &high, &low, &close));
+        assert_len_ok!(cdl_mat_hold(&open, &high, &low, &close));
+        assert_len_ok!(cdl_rise_fall_3methods(&open, &high, &low, &close));
+        assert_len_ok!(cdl_concealing_baby_swallow(&open, &high, &low, &close));
+        assert_len_ok!(cdl_xside_gap_3methods(&open, &high, &low, &close));
+
+        assert_into_ok!(cdl_morning_star_into);
+        assert_into_ok!(cdl_evening_star_into);
+        assert_into_ok!(cdl_morning_doji_star_into);
+        assert_into_ok!(cdl_evening_doji_star_into);
+        assert_into_ok!(cdl_abandoned_baby_into);
+        assert_into_ok!(cdl_3white_soldiers_into);
+        assert_into_ok!(cdl_3black_crows_into);
+        assert_into_ok!(cdl_3inside_into);
+        assert_into_ok!(cdl_3outside_into);
+        assert_into_ok!(cdl_3line_strike_into);
+        assert_into_ok!(cdl_3stars_in_south_into);
+        assert_into_ok!(cdl_tristar_into);
+        assert_into_ok!(cdl_identical_3crows_into);
+        assert_into_ok!(cdl_advance_block_into);
+        assert_into_ok!(cdl_stalled_pattern_into);
+        assert_into_ok!(cdl_unique_3river_into);
+        assert_into_ok!(cdl_stick_sandwich_into);
+        assert_into_ok!(cdl_tasuki_gap_into);
+        assert_into_ok!(cdl_upside_gap_2crows_into);
+        assert_into_ok!(cdl_gap_side_side_white_into);
+        assert_into_ok!(cdl_breakaway_into);
+        assert_into_ok!(cdl_ladder_bottom_into);
+        assert_into_ok!(cdl_mat_hold_into);
+        assert_into_ok!(cdl_rise_fall_3methods_into);
+        assert_into_ok!(cdl_concealing_baby_swallow_into);
+        assert_into_ok!(cdl_xside_gap_3methods_into);
+    }
+
+    #[test]
+    fn test_three_candle_f32_error_surface_all_patterns() {
+        type ThreeFn = fn(&[f32], &[f32], &[f32], &[f32]) -> crate::error::Result<Vec<i32>>;
+        type ThreeIntoFn =
+            fn(&[f32], &[f32], &[f32], &[f32], &mut [i32]) -> crate::error::Result<()>;
+
+        let n = 96;
+        let mut open = Vec::with_capacity(n);
+        let mut high = Vec::with_capacity(n);
+        let mut low = Vec::with_capacity(n);
+        let mut close = Vec::with_capacity(n);
+
+        for i in 0..n {
+            let base = 230.0_f32 - (i as f32) * 0.1;
+            open.push(base);
+            close.push(base - 0.06);
+            high.push(base + 5.0);
+            low.push(base - 5.0);
+        }
+
+        let high_short = high[..(n - 1)].to_vec();
+        let low_short = low[..(n - 1)].to_vec();
+        let close_short = close[..(n - 1)].to_vec();
+        let empty: Vec<f32> = vec![];
+
+        let wrappers: [ThreeFn; 26] = [
+            cdl_morning_star,
+            cdl_evening_star,
+            cdl_morning_doji_star,
+            cdl_evening_doji_star,
+            cdl_abandoned_baby,
+            cdl_3white_soldiers,
+            cdl_3black_crows,
+            cdl_3inside,
+            cdl_3outside,
+            cdl_3line_strike,
+            cdl_3stars_in_south,
+            cdl_tristar,
+            cdl_identical_3crows,
+            cdl_advance_block,
+            cdl_stalled_pattern,
+            cdl_unique_3river,
+            cdl_stick_sandwich,
+            cdl_tasuki_gap,
+            cdl_upside_gap_2crows,
+            cdl_gap_side_side_white,
+            cdl_breakaway,
+            cdl_ladder_bottom,
+            cdl_mat_hold,
+            cdl_rise_fall_3methods,
+            cdl_concealing_baby_swallow,
+            cdl_xside_gap_3methods,
+        ];
+        for f in wrappers {
+            assert!(f(&empty, &empty, &empty, &empty).is_err());
+            assert!(f(&open, &high_short, &low, &close).is_err());
+            assert!(f(&open, &high, &low_short, &close).is_err());
+            assert!(f(&open, &high, &low, &close_short).is_err());
+        }
+
+        let into_fns: [ThreeIntoFn; 26] = [
+            cdl_morning_star_into,
+            cdl_evening_star_into,
+            cdl_morning_doji_star_into,
+            cdl_evening_doji_star_into,
+            cdl_abandoned_baby_into,
+            cdl_3white_soldiers_into,
+            cdl_3black_crows_into,
+            cdl_3inside_into,
+            cdl_3outside_into,
+            cdl_3line_strike_into,
+            cdl_3stars_in_south_into,
+            cdl_tristar_into,
+            cdl_identical_3crows_into,
+            cdl_advance_block_into,
+            cdl_stalled_pattern_into,
+            cdl_unique_3river_into,
+            cdl_stick_sandwich_into,
+            cdl_tasuki_gap_into,
+            cdl_upside_gap_2crows_into,
+            cdl_gap_side_side_white_into,
+            cdl_breakaway_into,
+            cdl_ladder_bottom_into,
+            cdl_mat_hold_into,
+            cdl_rise_fall_3methods_into,
+            cdl_concealing_baby_swallow_into,
+            cdl_xside_gap_3methods_into,
+        ];
+        let mut out_ok = vec![0_i32; n];
+        let mut out_short = vec![0_i32; n - 1];
+        for f in into_fns {
+            assert!(f(&open, &high, &low, &close, &mut out_short).is_err());
+            assert!(f(&open, &high_short, &low, &close, &mut out_ok).is_err());
+            assert!(f(&open, &high, &low_short, &close, &mut out_ok).is_err());
+            assert!(f(&open, &high, &low, &close_short, &mut out_ok).is_err());
+            assert!(f(&empty, &empty, &empty, &empty, &mut []).is_err());
+        }
+    }
+
+    #[test]
+    fn test_three_candle_simple_pattern_lookback_min_len_surface() {
+        assert_eq!(
+            cdl_stick_sandwich_min_len(),
+            cdl_stick_sandwich_lookback() + 1
+        );
+        assert_eq!(
+            cdl_unique_3river_min_len(),
+            cdl_unique_3river_lookback() + 1
+        );
+        assert_eq!(
+            cdl_advance_block_min_len(),
+            cdl_advance_block_lookback() + 1
+        );
+        assert_eq!(
+            cdl_stalled_pattern_min_len(),
+            cdl_stalled_pattern_lookback() + 1
+        );
+        assert_eq!(cdl_tasuki_gap_min_len(), cdl_tasuki_gap_lookback() + 1);
+        assert_eq!(
+            cdl_upside_gap_2crows_min_len(),
+            cdl_upside_gap_2crows_lookback() + 1
+        );
+        assert_eq!(
+            cdl_gap_side_side_white_min_len(),
+            cdl_gap_side_side_white_lookback() + 1
+        );
+        assert_eq!(cdl_breakaway_min_len(), cdl_breakaway_lookback() + 1);
+        assert_eq!(
+            cdl_ladder_bottom_min_len(),
+            cdl_ladder_bottom_lookback() + 1
+        );
+        assert_eq!(cdl_mat_hold_min_len(), cdl_mat_hold_lookback() + 1);
+        assert_eq!(
+            cdl_rise_fall_3methods_min_len(),
+            cdl_rise_fall_3methods_lookback() + 1
+        );
+        assert_eq!(
+            cdl_concealing_baby_swallow_min_len(),
+            cdl_concealing_baby_swallow_lookback() + 1
+        );
+        assert_eq!(
+            cdl_xside_gap_3methods_min_len(),
+            cdl_xside_gap_3methods_lookback() + 1
+        );
     }
 }

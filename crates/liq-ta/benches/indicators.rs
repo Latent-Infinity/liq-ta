@@ -33,10 +33,15 @@ use liq_ta::indicators::{
     bollinger::bollinger,
     bop::bop,
     cci::cci,
+    chop::chop,
     cmo::cmo,
     dema::dema,
     donchian::donchian,
     ema::ema,
+    gaussian_channel::gaussian_channel,
+    hma::hma,
+    hurst::hurst,
+    ichimoku::ichimoku,
     kama::kama,
     macd::macd,
     mfi::mfi,
@@ -45,6 +50,7 @@ use liq_ta::indicators::{
     mom::mom,
     obv::obv,
     price_transform::{avgprice, medprice, typprice, wclprice},
+    qqe::qqe,
     roc::roc,
     rsi::rsi,
     sar::sar,
@@ -52,6 +58,7 @@ use liq_ta::indicators::{
     statistics::var,
     stochastic::stochastic,
     stochrsi::stochrsi,
+    supertrend::supertrend,
     t3::t3,
     tema::tema,
     trima::trima,
@@ -490,6 +497,18 @@ fn bench_t3(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_hma(c: &mut Criterion) {
+    let mut group = c.benchmark_group("hma");
+    for &size in SIZES {
+        let data = generate_series(size);
+        group.throughput(Throughput::Elements(size as u64));
+        group.bench_with_input(BenchmarkId::from_parameter(size), &data, |b, data| {
+            b.iter(|| hma(black_box(data), black_box(20)));
+        });
+    }
+    group.finish();
+}
+
 // ============================================================================
 // Momentum Indicators - MOM, CMO, APO, TRIX
 // ============================================================================
@@ -537,6 +556,26 @@ fn bench_trix(c: &mut Criterion) {
         group.throughput(Throughput::Elements(size as u64));
         group.bench_with_input(BenchmarkId::from_parameter(size), &data, |b, data| {
             b.iter(|| trix(black_box(data), black_box(15)));
+        });
+    }
+    group.finish();
+}
+
+fn bench_qqe(c: &mut Criterion) {
+    let mut group = c.benchmark_group("qqe");
+    for &size in SIZES {
+        let data = generate_series(size);
+        group.throughput(Throughput::Elements(size as u64));
+        group.bench_with_input(BenchmarkId::from_parameter(size), &data, |b, data| {
+            b.iter(|| {
+                qqe(
+                    black_box(data),
+                    black_box(14),
+                    black_box(5),
+                    black_box(14),
+                    black_box(4.236),
+                )
+            });
         });
     }
     group.finish();
@@ -712,12 +751,110 @@ fn bench_ultosc(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_ichimoku(c: &mut Criterion) {
+    let mut group = c.benchmark_group("ichimoku");
+    for &size in SIZES {
+        let (_, high, low, close, _) = generate_ohlcv(size);
+        group.throughput(Throughput::Elements(size as u64));
+        group.bench_with_input(
+            BenchmarkId::from_parameter(size),
+            &(high, low, close),
+            |b, (h, l, c)| {
+                b.iter(|| {
+                    ichimoku(
+                        black_box(h),
+                        black_box(l),
+                        black_box(c),
+                        black_box(9),
+                        black_box(26),
+                        black_box(52),
+                        black_box(26),
+                    )
+                });
+            },
+        );
+    }
+    group.finish();
+}
+
+fn bench_supertrend(c: &mut Criterion) {
+    let mut group = c.benchmark_group("supertrend");
+    for &size in SIZES {
+        let (_, high, low, close, _) = generate_ohlcv(size);
+        group.throughput(Throughput::Elements(size as u64));
+        group.bench_with_input(
+            BenchmarkId::from_parameter(size),
+            &(high, low, close),
+            |b, (h, l, c)| {
+                b.iter(|| {
+                    supertrend(
+                        black_box(h),
+                        black_box(l),
+                        black_box(c),
+                        black_box(10),
+                        black_box(3.0),
+                    )
+                });
+            },
+        );
+    }
+    group.finish();
+}
+
+fn bench_chop(c: &mut Criterion) {
+    let mut group = c.benchmark_group("chop");
+    for &size in SIZES {
+        let (_, high, low, close, _) = generate_ohlcv(size);
+        group.throughput(Throughput::Elements(size as u64));
+        group.bench_with_input(
+            BenchmarkId::from_parameter(size),
+            &(high, low, close),
+            |b, (h, l, c)| {
+                b.iter(|| chop(black_box(h), black_box(l), black_box(c), black_box(14)));
+            },
+        );
+    }
+    group.finish();
+}
+
+fn bench_hurst(c: &mut Criterion) {
+    let mut group = c.benchmark_group("hurst");
+    for &size in SIZES {
+        let data = generate_series(size);
+        group.throughput(Throughput::Elements(size as u64));
+        group.bench_with_input(BenchmarkId::from_parameter(size), &data, |b, data| {
+            b.iter(|| hurst(black_box(data), black_box(64)));
+        });
+    }
+    group.finish();
+}
+
+fn bench_gaussian_channel(c: &mut Criterion) {
+    let mut group = c.benchmark_group("gaussian_channel");
+    for &size in SIZES {
+        let data = generate_series(size);
+        group.throughput(Throughput::Elements(size as u64));
+        group.bench_with_input(BenchmarkId::from_parameter(size), &data, |b, data| {
+            b.iter(|| {
+                gaussian_channel(
+                    black_box(data),
+                    black_box(20),
+                    black_box(0.5),
+                    black_box(2.0),
+                )
+            });
+        });
+    }
+    group.finish();
+}
+
 // Standard benchmarks with default configuration
 criterion_group!(
     benches,
     // Core moving averages
     bench_sma,
     bench_ema,
+    bench_hma,
     bench_wma,
     bench_dema,
     bench_tema,
@@ -730,6 +867,10 @@ criterion_group!(
     bench_atr,
     bench_adx,
     bench_donchian,
+    bench_ichimoku,
+    bench_supertrend,
+    bench_chop,
+    bench_gaussian_channel,
     bench_aroon,
     bench_cci,
     bench_sar,
@@ -740,6 +881,7 @@ criterion_group!(
     bench_cmo,
     bench_apo,
     bench_trix,
+    bench_qqe,
     bench_ultosc,
     // Volume indicators
     bench_obv,
@@ -758,6 +900,7 @@ criterion_group!(
     // Other
     bench_roc,
     bench_var,
+    bench_hurst,
 );
 
 // Slower benchmarks need extended measurement time

@@ -73,6 +73,106 @@ pub struct AroonOutput<T> {
     pub aroon_down: Vec<T>,
 }
 
+#[cfg(test)]
+mod coverage_push_private_paths_tests {
+    use super::*;
+    use half::f16;
+
+    fn make_f16_series(n: usize) -> (Vec<f16>, Vec<f16>) {
+        let mut high = Vec::with_capacity(n);
+        let mut low = Vec::with_capacity(n);
+        for i in 0..n {
+            let base = 100.0_f32 + i as f32 * 0.2;
+            high.push(f16::from_f32(base + 0.8));
+            low.push(f16::from_f32(base - 0.7));
+        }
+        (high, low)
+    }
+
+    #[test]
+    fn aroon_private_generic_naive_and_lazy_f16_paths() {
+        let period = 5usize;
+        let n = 36usize;
+        let (mut high, mut low) = make_f16_series(n);
+        let mut up = vec![f16::from_f32(0.0); n];
+        let mut down = vec![f16::from_f32(0.0); n];
+
+        aroon_into_naive(&high, &low, period, &mut up, &mut down)
+            .expect("f16 naive generic path should succeed");
+        assert_eq!(up.len(), n);
+        assert_eq!(down.len(), n);
+
+        aroon_into_lazy_rescan(&high, &low, period, &mut up, &mut down)
+            .expect("f16 lazy-rescan generic path should succeed");
+        assert!(up[period].is_finite() || up[period].is_nan());
+
+        high[12] = f16::from_f32(f32::NAN);
+        low[12] = f16::from_f32(f32::NAN);
+        aroon_into_lazy_rescan(&high, &low, period, &mut up, &mut down)
+            .expect("f16 lazy-rescan generic invalid-window path should succeed");
+        assert!(up.iter().any(|v| v.is_nan()));
+        assert!(down.iter().any(|v| v.is_nan()));
+    }
+
+    #[test]
+    fn aroon_private_lazy_rescan_specialized_update_paths() {
+        let period = 13usize;
+        let n = 80usize;
+
+        let mut high64 = Vec::with_capacity(n);
+        let mut low64 = Vec::with_capacity(n);
+        for i in 0..n {
+            high64.push(200.0 + i as f64 * 0.5);
+            low64.push(100.0 - i as f64 * 0.4);
+        }
+        let mut up64 = vec![0.0_f64; n];
+        let mut down64 = vec![0.0_f64; n];
+        aroon_into_lazy_rescan_f64(&high64, &low64, period, &mut up64, &mut down64)
+            .expect("f64 lazy-rescan specialized path should succeed");
+        assert!(up64[n - 1].is_finite());
+        assert!(down64[n - 1].is_finite());
+
+        let high32: Vec<f32> = high64.iter().map(|&v| v as f32).collect();
+        let low32: Vec<f32> = low64.iter().map(|&v| v as f32).collect();
+        let mut up32 = vec![0.0_f32; n];
+        let mut down32 = vec![0.0_f32; n];
+        aroon_into_lazy_rescan_f32(&high32, &low32, period, &mut up32, &mut down32)
+            .expect("f32 lazy-rescan specialized path should succeed");
+        assert!(up32[n - 1].is_finite());
+        assert!(down32[n - 1].is_finite());
+    }
+
+    #[test]
+    fn aroon_private_ring_and_deque_invalid_tracking_paths() {
+        let period = 8usize;
+        let n = 48usize;
+        let mut high = vec![50.0_f64; n];
+        let mut low = vec![49.0_f64; n];
+        for i in 0..n {
+            high[i] += (i as f64 * 0.11).sin() * 2.0;
+            low[i] -= (i as f64 * 0.09).cos() * 1.7;
+        }
+
+        high[15] = f64::NAN;
+        low[15] = f64::NAN;
+
+        let mut up = vec![0.0_f64; n];
+        let mut down = vec![0.0_f64; n];
+        aroon_into_ring(&high, &low, period, &mut up, &mut down)
+            .expect("ring path with invalid tracking should succeed");
+        assert!(up.iter().any(|v| v.is_nan()));
+        assert!(down.iter().any(|v| v.is_nan()));
+
+        let mut high2 = high.clone();
+        let mut low2 = low.clone();
+        high2[15] = 52.0;
+        low2[15] = 48.0;
+        aroon_into_deque(&high2, &low2, period, &mut up, &mut down)
+            .expect("deque path should succeed");
+        assert!(up[period].is_finite() || up[period].is_nan());
+    }
+}
+
 /// Computes the lookback period for AROON.
 #[inline]
 #[must_use]

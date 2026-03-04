@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "liq-ta"
-version = "0.1.0"
+version = "0.1.1"
 description = "High-performance technical analysis library"
 readme = "README.md"
 license = { text = "MIT OR Apache-2.0" }
@@ -27,7 +27,7 @@ classifiers = [
     "Typing :: Typed",
 ]
 keywords = ["technical-analysis", "trading", "finance", "indicators", "stocks", "numpy"]
-dependencies = ["numpy>=1.20"]
+dependencies = ["numpy>=2.0"]
 
 [project.scripts]
 liq-ta-validate = "liq_ta.validate:main"
@@ -43,12 +43,13 @@ Issues = "https://github.com/Latent-Infinity/liq-ta/issues"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["python"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 
 [tool.maturin]
-features = ["pyo3/extension-module"]
+features = ["extension-module"]
 python-source = "python"
 module-name = "liq_ta._liq_ta"
 strip = true

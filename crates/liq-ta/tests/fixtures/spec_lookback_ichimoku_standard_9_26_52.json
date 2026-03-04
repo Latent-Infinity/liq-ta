@@ -1,0 +1,14 @@
+{
+  "spec_version": "3.0",
+  "rationale": "Ichimoku lookback/min_len should be driven by the largest window",
+  "params": {
+    "tenkan_period": 9,
+    "kijun_period": 26,
+    "senkou_b_period": 52,
+    "displacement": 26
+  },
+  "expected": {
+    "expected_lookback": 51,
+    "expected_min_len": 52
+  }
+}

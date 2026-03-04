@@ -17,6 +17,7 @@ Exit codes:
 from __future__ import annotations
 
 import sys
+from importlib.metadata import PackageNotFoundError, version as package_version
 from typing import Any, Dict, List, Tuple
 
 import numpy as np
@@ -169,7 +170,12 @@ def main() -> None:
 
     try:
         import liq_ta
-        print(f"\n[OK] liq-ta version: {liq_ta.__version__}")
+        try:
+            package_name = "liq-ta"
+            project_version = package_version(package_name)
+        except PackageNotFoundError:
+            project_version = "unknown"
+        print(f"\n[OK] liq-ta version: {project_version}")
     except ImportError as exc:
         print(f"\n[FAIL] Could not import liq_ta: {exc}")
         print("\nMake sure liq-ta is installed:")

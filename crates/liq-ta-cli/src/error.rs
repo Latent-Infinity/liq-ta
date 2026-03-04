@@ -4,16 +4,23 @@
 //! that can occur during CLI operations. Error messages are designed to be
 //! actionable, providing both what went wrong and how to fix it.
 
-use std::fmt;
 use std::io;
+use thiserror::Error;
 
 /// CLI error type encompassing all possible error conditions.
 ///
 /// Each variant provides context about what went wrong and, where applicable,
 /// suggestions for how to fix the issue.
-#[derive(Debug)]
+///
+/// Error classes are stable and intended for machine- or script-consumption:
+/// - `io_error`
+/// - `csv_parse_error`
+/// - `indicator_error`
+/// - `invalid_argument`
+#[derive(Debug, Error)]
 pub enum CliError {
     /// An I/O error occurred while reading or writing files.
+    #[error("{}", io_error_message(path, source))]
     IoError {
         /// The underlying I/O error.
         source: io::Error,
@@ -21,6 +28,7 @@ pub enum CliError {
         path: Option<String>,
     },
     /// An error occurred while parsing CSV data.
+    #[error("{}", csv_parse_error_message(message, line))]
     CsvParseError {
         /// Description of the parse error.
         message: String,
@@ -28,11 +36,13 @@ pub enum CliError {
         line: Option<usize>,
     },
     /// An error occurred while computing an indicator.
+    #[error("Indicator computation error: {source}")]
     IndicatorError {
         /// The underlying liq-ta error.
         source: liq_ta::Error,
     },
     /// An invalid argument was provided.
+    #[error("{}", invalid_argument_message(argument, reason, suggestion))]
     InvalidArgument {
         /// Name of the invalid argument.
         argument: String,
@@ -43,57 +53,48 @@ pub enum CliError {
     },
 }
 
-impl fmt::Display for CliError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl CliError {
+    /// Stable error class name for deterministic user-facing diagnostics.
+    #[must_use]
+    pub const fn class_name(&self) -> &'static str {
         match self {
-            CliError::IoError { source, path } => {
-                if let Some(p) = path {
-                    write!(f, "I/O error with file '{p}': {source}. ")?;
-                    write!(
-                        f,
-                        "Check that the file exists and you have read permissions."
-                    )
-                } else {
-                    write!(f, "I/O error: {source}")
-                }
-            }
-            CliError::CsvParseError { message, line } => {
-                if let Some(l) = line {
-                    write!(f, "CSV parse error on line {l}: {message}. ")?;
-                } else {
-                    write!(f, "CSV parse error: {message}. ")?;
-                }
-                write!(
-                    f,
-                    "Ensure your CSV has valid format with numeric data columns."
-                )
-            }
-            CliError::IndicatorError { source } => {
-                write!(f, "Indicator computation error: {source}")
-            }
-            CliError::InvalidArgument {
-                argument,
-                reason,
-                suggestion,
-            } => {
-                write!(f, "Invalid argument '{argument}': {reason}")?;
-                if let Some(s) = suggestion {
-                    write!(f, ". {s}")?;
-                }
-                Ok(())
-            }
+            CliError::IoError { .. } => "io_error",
+            CliError::CsvParseError { .. } => "csv_parse_error",
+            CliError::IndicatorError { .. } => "indicator_error",
+            CliError::InvalidArgument { .. } => "invalid_argument",
         }
     }
 }
 
-impl std::error::Error for CliError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            CliError::IoError { source, .. } => Some(source),
-            CliError::IndicatorError { source } => Some(source),
-            CliError::CsvParseError { .. } | CliError::InvalidArgument { .. } => None,
-        }
+fn io_error_message(path: &Option<String>, source: &io::Error) -> String {
+    if let Some(path) = path {
+        format!(
+            "I/O error with file '{path}': {source}. Check that the file exists and you have read permissions."
+        )
+    } else {
+        format!("I/O error: {source}")
     }
+}
+
+fn csv_parse_error_message(message: &str, line: &Option<usize>) -> String {
+    if let Some(line) = line {
+        format!(
+            "CSV parse error on line {line}: {message}. Ensure your CSV has valid format with numeric data columns."
+        )
+    } else {
+        format!(
+            "CSV parse error: {message}. Ensure your CSV has valid format with numeric data columns."
+        )
+    }
+}
+
+fn invalid_argument_message(argument: &str, reason: &str, suggestion: &Option<String>) -> String {
+    let mut formatted = format!("Invalid argument '{argument}': {reason}");
+    if let Some(suggestion) = suggestion {
+        formatted.push_str(". ");
+        formatted.push_str(suggestion);
+    }
+    formatted
 }
 
 impl From<io::Error> for CliError {
@@ -251,6 +252,33 @@ mod tests {
             }
             _ => panic!("Expected InvalidArgument variant"),
         }
+    }
+
+    #[test]
+    fn test_error_class_name_mapping() {
+        let io_err = CliError::IoError {
+            source: io::Error::new(io::ErrorKind::NotFound, "missing"),
+            path: None,
+        };
+        assert_eq!(io_err.class_name(), "io_error");
+
+        let csv_err = CliError::CsvParseError {
+            message: "bad row".to_string(),
+            line: None,
+        };
+        assert_eq!(csv_err.class_name(), "csv_parse_error");
+
+        let ind_err = CliError::IndicatorError {
+            source: liq_ta::Error::EmptyInput,
+        };
+        assert_eq!(ind_err.class_name(), "indicator_error");
+
+        let arg_err = CliError::InvalidArgument {
+            argument: "period".to_string(),
+            reason: "must be positive".to_string(),
+            suggestion: None,
+        };
+        assert_eq!(arg_err.class_name(), "invalid_argument");
     }
 
     // ==========================================================================

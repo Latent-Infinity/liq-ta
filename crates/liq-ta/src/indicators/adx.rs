@@ -106,7 +106,7 @@ pub struct AdxOutput<T> {
 #[inline]
 #[must_use]
 pub const fn adx_lookback(period: usize) -> usize {
-    2 * period - 1
+    period.saturating_mul(2).saturating_sub(1)
 }
 
 /// Returns the minimum input length required for ADX.
@@ -218,94 +218,24 @@ pub fn adx<T: SeriesElement>(
     close: &[T],
     period: usize,
 ) -> Result<AdxOutput<T>> {
-    validate_adx_inputs(high, low, close, period)?;
-
     let n = high.len();
-
-    // Optimization: For f64/f32, allocate uninitialized memory (Section 5.4)
-    // Avoids double-write tax since compute_adx_core fills all elements (lookback NaNs + computed values)
-    use std::any::TypeId;
-
-    if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let high_f64: &[f64] = unsafe { std::mem::transmute(high) };
-        let low_f64: &[f64] = unsafe { std::mem::transmute(low) };
-        let close_f64: &[f64] = unsafe { std::mem::transmute(close) };
-
-        let mut adx_out: Vec<f64> = Vec::with_capacity(n);
-        let mut plus_di: Vec<f64> = Vec::with_capacity(n);
-        let mut minus_di: Vec<f64> = Vec::with_capacity(n);
-        unsafe {
-            adx_out.set_len(n);
-            plus_di.set_len(n);
-            minus_di.set_len(n);
-        }
-
-        compute_adx_core(
-            high_f64,
-            low_f64,
-            close_f64,
-            period,
-            &mut adx_out,
-            &mut plus_di,
-            &mut minus_di,
-        )?;
-
-        Ok(AdxOutput {
-            adx: unsafe { std::mem::transmute(adx_out) },
-            plus_di: unsafe { std::mem::transmute(plus_di) },
-            minus_di: unsafe { std::mem::transmute(minus_di) },
-        })
-    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let high_f32: &[f32] = unsafe { std::mem::transmute(high) };
-        let low_f32: &[f32] = unsafe { std::mem::transmute(low) };
-        let close_f32: &[f32] = unsafe { std::mem::transmute(close) };
-
-        let mut adx_out: Vec<f32> = Vec::with_capacity(n);
-        let mut plus_di: Vec<f32> = Vec::with_capacity(n);
-        let mut minus_di: Vec<f32> = Vec::with_capacity(n);
-        unsafe {
-            adx_out.set_len(n);
-            plus_di.set_len(n);
-            minus_di.set_len(n);
-        }
-
-        compute_adx_core(
-            high_f32,
-            low_f32,
-            close_f32,
-            period,
-            &mut adx_out,
-            &mut plus_di,
-            &mut minus_di,
-        )?;
-
-        Ok(AdxOutput {
-            adx: unsafe { std::mem::transmute(adx_out) },
-            plus_di: unsafe { std::mem::transmute(plus_di) },
-            minus_di: unsafe { std::mem::transmute(minus_di) },
-        })
-    } else {
-        // Generic fallback: safe initialization
-        let mut adx_out = vec![T::nan(); n];
-        let mut plus_di = vec![T::nan(); n];
-        let mut minus_di = vec![T::nan(); n];
-
-        compute_adx_core(
-            high,
-            low,
-            close,
-            period,
-            &mut adx_out,
-            &mut plus_di,
-            &mut minus_di,
-        )?;
-
-        Ok(AdxOutput {
-            adx: adx_out,
-            plus_di,
-            minus_di,
-        })
-    }
+    let mut adx_out = vec![T::nan(); n];
+    let mut plus_di = vec![T::nan(); n];
+    let mut minus_di = vec![T::nan(); n];
+    adx_into(
+        high,
+        low,
+        close,
+        period,
+        &mut adx_out,
+        &mut plus_di,
+        &mut minus_di,
+    )?;
+    Ok(AdxOutput {
+        adx: adx_out,
+        plus_di,
+        minus_di,
+    })
 }
 
 /// Computes ADX into pre-allocated output buffers.
@@ -719,4 +649,90 @@ fn compute_adx_core<T: SeriesElement>(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod coverage_push_private_paths_tests {
+    use super::*;
+    use half::f16;
+
+    #[test]
+    fn adx_private_clamp_and_directional_helpers() {
+        assert_eq!(clamp_unit_percent(-1.0_f64), 0.0_f64);
+        assert_eq!(clamp_unit_percent(101.0_f64), 100.0_f64);
+        assert!(clamp_unit_percent(f64::NAN).is_nan());
+
+        let (p, m) = compute_directional_movement(10.0_f64, f64::NAN, 9.0, 8.0);
+        assert!(p.is_nan());
+        assert!(m.is_nan());
+    }
+
+    #[test]
+    fn adx_private_generic_fallback_with_f16() {
+        let n = 40usize;
+        let mut high = Vec::with_capacity(n);
+        let mut low = Vec::with_capacity(n);
+        let mut close = Vec::with_capacity(n);
+        for i in 0..n {
+            let base = 100.0 + i as f32 * 0.3;
+            high.push(f16::from_f32(base + 0.8));
+            low.push(f16::from_f32(base - 0.7));
+            close.push(f16::from_f32(base + if i % 2 == 0 { 0.2 } else { -0.2 }));
+        }
+
+        let out = adx(&high, &low, &close, 5).expect("f16 generic fallback should succeed");
+        assert_eq!(out.adx.len(), n);
+        assert_eq!(out.plus_di.len(), n);
+        assert_eq!(out.minus_di.len(), n);
+    }
+
+    #[test]
+    fn adx_private_core_nan_activation_paths() {
+        let period = 5usize;
+        let n = 24usize;
+        let mut high = vec![10.0_f64; n];
+        let mut low = vec![9.0_f64; n];
+        let mut close = vec![9.5_f64; n];
+        high[2] = f64::NAN;
+        low[2] = f64::NAN;
+        close[2] = f64::NAN;
+
+        let mut adx_out = vec![0.0_f64; n];
+        let mut plus_di = vec![0.0_f64; n];
+        let mut minus_di = vec![0.0_f64; n];
+        compute_adx_core(
+            &high,
+            &low,
+            &close,
+            period,
+            &mut adx_out,
+            &mut plus_di,
+            &mut minus_di,
+        )
+        .expect("core should complete with NaN propagation");
+
+        assert!(plus_di[period].is_nan());
+        assert!(minus_di[period].is_nan());
+        assert!(adx_out[2 * period - 1].is_nan());
+        assert!(adx_out[(2 * period)..].iter().any(|v| v.is_nan()));
+    }
+
+    #[test]
+    fn adx_private_wrapper_success_f64_and_f32_paths() {
+        let n = 96usize;
+        let high64: Vec<f64> = (0..n)
+            .map(|i| 100.0 + i as f64 * 0.4 + ((i % 5) as f64) * 0.2)
+            .collect();
+        let low64: Vec<f64> = high64.iter().map(|v| v - 1.7).collect();
+        let close64: Vec<f64> = high64.iter().map(|v| v - 0.6).collect();
+
+        let out64 = adx(&high64, &low64, &close64, 14).expect("adx f64 should succeed");
+        assert_eq!(out64.adx.len(), n);
+
+        let high32: Vec<f32> = high64.iter().map(|&v| v as f32).collect();
+        let low32: Vec<f32> = low64.iter().map(|&v| v as f32).collect();
+        let close32: Vec<f32> = close64.iter().map(|&v| v as f32).collect();
+        let out32 = adx(&high32, &low32, &close32, 14).expect("adx f32 should succeed");
+        assert_eq!(out32.adx.len(), n);
+    }
 }

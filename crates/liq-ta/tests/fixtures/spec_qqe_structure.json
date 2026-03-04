@@ -1,0 +1,15 @@
+{
+  "spec_version": "3.0",
+  "rationale": "QQE should produce ordered dynamic bands around smoothed RSI after warmup",
+  "input": [100.0, 100.4, 100.2, 100.9, 101.3, 101.1, 101.7, 102.0, 101.8, 102.4, 102.8, 102.6, 103.0, 103.4, 103.2, 103.8, 104.1, 103.9, 104.4, 104.7, 104.5, 105.0, 105.3, 105.1],
+  "params": {
+    "rsi_period": 5,
+    "smoothing_period": 3,
+    "wilders_period": 3,
+    "factor": 4.236
+  },
+  "expected": {
+    "expected_first_valid_index": 10,
+    "property": "upper >= qqe >= lower for valid values"
+  }
+}

@@ -19,7 +19,7 @@
 //! The rolling update `weighted_sum = weighted_sum - simple_sum + new * period`
 //! implicitly adjusts weights for ALL window positions - partial sums with NaN holes
 //! cannot be maintained. When NaN exits the window, full O(period) recomputation is
-//! required. See `docs/nan-audit-results.md` Phase 4.1 for detailed analysis.
+//! required. See `docs/nan-audit-results.md` Stage 4.1 for detailed analysis.
 //!
 //! # Formula
 //!
@@ -910,5 +910,47 @@ mod tests {
         assert!(!result[2].is_nan());
         // Result should be proportional to input
         assert!(result[2] > 0.0 && result[2] < 5e-10);
+    }
+
+    #[test]
+    fn test_wma_internal_is_invalid_helper_surface() {
+        assert!(is_invalid(f64::NAN));
+        assert!(is_invalid(f64::INFINITY));
+        assert!(is_invalid(f64::NEG_INFINITY));
+        assert!(!is_invalid(1.0_f64));
+    }
+
+    #[test]
+    fn test_wma_f32_tracking_initial_and_rolling_invalid_paths() {
+        let data_initial_nan = vec![f32::NAN, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let mut out_initial_nan = vec![0.0_f32; data_initial_nan.len()];
+        wma_f32_with_tracking(&data_initial_nan, 3, &mut out_initial_nan);
+        assert!(out_initial_nan[2].is_nan());
+        assert!(!out_initial_nan[5].is_nan());
+
+        let data_runtime_inf = vec![1.0_f32, 2.0, 3.0, f32::INFINITY, 5.0, 6.0, 7.0];
+        let mut out_runtime_inf = vec![0.0_f32; data_runtime_inf.len()];
+        wma_f32_with_tracking(&data_runtime_inf, 3, &mut out_runtime_inf);
+        assert!(out_runtime_inf[3].is_nan());
+        assert!(out_runtime_inf[4].is_nan());
+        assert!(out_runtime_inf[5].is_nan());
+        assert!(!out_runtime_inf[6].is_nan());
+    }
+
+    #[test]
+    fn test_wma_f32_optimistic_switch_to_tracking_paths() {
+        let data_initial_invalid = vec![f32::NAN, 2.0, 3.0, 4.0, 5.0];
+        let mut out_initial_invalid = vec![0.0_f32; data_initial_invalid.len()];
+        wma_f32_optimistic(&data_initial_invalid, 3, &mut out_initial_invalid);
+        assert!(out_initial_invalid[2].is_nan());
+        assert!(!out_initial_invalid[4].is_nan());
+
+        let data_runtime_invalid = vec![1.0_f32, 2.0, 3.0, f32::NAN, 5.0, 6.0];
+        let mut out_runtime_invalid = vec![0.0_f32; data_runtime_invalid.len()];
+        wma_f32_optimistic(&data_runtime_invalid, 3, &mut out_runtime_invalid);
+        assert!(!out_runtime_invalid[2].is_nan());
+        assert!(out_runtime_invalid[3].is_nan());
+        assert!(out_runtime_invalid[4].is_nan());
+        assert!(out_runtime_invalid[5].is_nan());
     }
 }

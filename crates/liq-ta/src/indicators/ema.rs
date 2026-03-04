@@ -1295,3 +1295,86 @@ mod tests {
         ));
     }
 }
+
+#[cfg(test)]
+mod coverage_push_private_paths_tests {
+    use super::*;
+
+    #[test]
+    fn ema_private_kernels_and_handlers() {
+        let data = [1.0_f64, 2.0, 3.0, 4.0, 5.0];
+        let mut out = vec![0.0_f64; data.len()];
+        ema_core_f64_unchecked(&data, 1, 0.5, &mut out);
+        assert_eq!(out, data);
+
+        let mut out2 = vec![0.0_f64; data.len()];
+        ema_core_f64_unchecked(&data, 3, 0.5, &mut out2);
+        assert!(out2[0].is_nan());
+        assert!(out2[1].is_nan());
+        assert!(out2[2].is_finite());
+
+        handle_invalid_f64(&mut out2, 3);
+        assert!(out2[3].is_nan());
+        assert!(out2[4].is_nan());
+    }
+
+    #[test]
+    fn ema_private_f32_invalid_paths() {
+        let data_seed_invalid = [1.0_f32, f32::NAN, 3.0, 4.0];
+        let mut out_seed_invalid = vec![0.0_f32; data_seed_invalid.len()];
+        ema_core_f32(&data_seed_invalid, 3, 0.5, &mut out_seed_invalid);
+        assert!(out_seed_invalid[2].is_nan());
+        assert!(out_seed_invalid[3].is_nan());
+
+        let data_stream_invalid = [1.0_f32, 2.0, 3.0, 4.0, f32::INFINITY, 6.0];
+        let mut out_stream_invalid = vec![0.0_f32; data_stream_invalid.len()];
+        ema_core_f32(&data_stream_invalid, 3, 0.5, &mut out_stream_invalid);
+        assert!(out_stream_invalid[2].is_finite());
+        assert!(out_stream_invalid[4].is_nan());
+        assert!(out_stream_invalid[5].is_nan());
+    }
+
+    #[test]
+    fn ema_private_generic_core_and_alpha_helpers() {
+        let mut out = vec![0.0_f64; 5];
+        compute_ema_core(&[1.0_f64, 2.0, 3.0, 4.0, 5.0], 1, 0.5, &mut out);
+        assert_eq!(out, vec![1.0, 2.0, 3.0, 4.0, 5.0]);
+
+        let mut out_nan = vec![0.0_f64; 4];
+        compute_ema_core(&[1.0_f64, f64::NAN, 3.0, 4.0], 3, 0.5, &mut out_nan);
+        assert!(out_nan[0].is_nan());
+        assert!(out_nan[1].is_nan());
+        assert!(out_nan[2].is_nan());
+        assert!(out_nan[3].is_nan());
+
+        let step = ema_step(4.0_f64, 2.0_f64, 0.5_f64);
+        assert!((step - 3.0).abs() < 1e-12);
+
+        assert!(compute_standard_alpha::<f64>(0).is_err());
+        assert!(compute_wilder_alpha::<f64>(0).is_err());
+        let alpha_std = compute_standard_alpha::<f64>(3).unwrap();
+        let alpha_wilder = compute_wilder_alpha::<f64>(3).unwrap();
+        assert!((alpha_std - 0.5).abs() < 1e-12);
+        assert!((alpha_wilder - (1.0 / 3.0)).abs() < 1e-12);
+    }
+}
+
+#[cfg(test)]
+mod coverage_push_private_paths_tests_round2 {
+    use super::*;
+
+    #[test]
+    fn ema_private_f32_period_one_and_generic_finite_updates() {
+        let data_f32 = [1.0_f32, 2.0, 3.0, 4.0];
+        let mut out_f32 = vec![0.0_f32; data_f32.len()];
+        ema_core_f32(&data_f32, 1, 0.5, &mut out_f32);
+        assert_eq!(out_f32, data_f32);
+
+        let data_f64 = [1.0_f64, 2.0, 3.0, 4.0, 5.0];
+        let mut out_f64 = vec![f64::NAN; data_f64.len()];
+        compute_ema_core(&data_f64, 3, 0.5, &mut out_f64);
+        assert!(out_f64[2].is_finite());
+        assert!(out_f64[3].is_finite());
+        assert!(out_f64[4].is_finite());
+    }
+}

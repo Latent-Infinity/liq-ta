@@ -614,11 +614,11 @@ For readability, a scoped block is often the cleanest "early drop":
 fn do_work_in_phases() {
     {
         let tmp = vec![0u8; 8 * 1024 * 1024];
-        // ... phase 1 ...
+        // ... stage 1 ...
         let _ = tmp.len(); // stand-in for real work
     } // tmp dropped here
 
-    // ... phase 2 (runs with lower memory pressure) ...
+    // ... stage 2 (runs with lower memory pressure) ...
 }
 ```
 

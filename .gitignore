@@ -161,3 +161,6 @@ target/criterion/
 
 # Git worktrees
 .worktrees/
+
+# Serena
+.serena/

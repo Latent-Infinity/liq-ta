@@ -266,70 +266,18 @@ pub fn stochrsi<T: SeriesElement + 'static>(
     k_period: usize,
     d_period: usize,
 ) -> Result<StochRsiOutput<T>> {
-    // Optimization: For f64/f32, allocate uninitialized memory (Section 5.4)
-    use std::any::TypeId;
-
-    if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
-        let mut fastk: Vec<f64> = Vec::with_capacity(data.len());
-        let mut fastd: Vec<f64> = Vec::with_capacity(data.len());
-        unsafe {
-            fastk.set_len(data.len());
-            fastd.set_len(data.len());
-        }
-
-        stochrsi_into(
-            data_f64,
-            rsi_period,
-            stoch_period,
-            k_period,
-            d_period,
-            &mut fastk,
-            &mut fastd,
-        )?;
-
-        Ok(StochRsiOutput {
-            fastk: unsafe { std::mem::transmute(fastk) },
-            fastd: unsafe { std::mem::transmute(fastd) },
-        })
-    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
-        let mut fastk: Vec<f32> = Vec::with_capacity(data.len());
-        let mut fastd: Vec<f32> = Vec::with_capacity(data.len());
-        unsafe {
-            fastk.set_len(data.len());
-            fastd.set_len(data.len());
-        }
-
-        stochrsi_into(
-            data_f32,
-            rsi_period,
-            stoch_period,
-            k_period,
-            d_period,
-            &mut fastk,
-            &mut fastd,
-        )?;
-
-        Ok(StochRsiOutput {
-            fastk: unsafe { std::mem::transmute(fastk) },
-            fastd: unsafe { std::mem::transmute(fastd) },
-        })
-    } else {
-        // Generic fallback: safe initialization
-        let mut fastk = vec![T::nan(); data.len()];
-        let mut fastd = vec![T::nan(); data.len()];
-        stochrsi_into(
-            data,
-            rsi_period,
-            stoch_period,
-            k_period,
-            d_period,
-            &mut fastk,
-            &mut fastd,
-        )?;
-        Ok(StochRsiOutput { fastk, fastd })
-    }
+    let mut fastk = vec![T::nan(); data.len()];
+    let mut fastd = vec![T::nan(); data.len()];
+    stochrsi_into(
+        data,
+        rsi_period,
+        stoch_period,
+        k_period,
+        d_period,
+        &mut fastk,
+        &mut fastd,
+    )?;
+    Ok(StochRsiOutput { fastk, fastd })
 }
 
 /// Simple `StochRSI` with common defaults (rsi=14, stoch=14, k=1, d=3).
@@ -429,20 +377,20 @@ mod tests {
 
         // FastK should be NaN for lookback period
         for i in 0..k_lookback {
-            assert!(result.fastk[i].is_nan(), "fastk[{}] should be NaN", i);
+            assert!(result.fastk[i].is_nan());
         }
 
         // FastD should be NaN for its lookback period
         for i in 0..d_lookback {
-            assert!(result.fastd[i].is_nan(), "fastd[{}] should be NaN", i);
+            assert!(result.fastd[i].is_nan());
         }
 
         // Values after lookback should be finite
         for i in k_lookback..result.fastk.len() {
-            assert!(result.fastk[i].is_finite(), "fastk[{}] should be finite", i);
+            assert!(result.fastk[i].is_finite());
         }
         for i in d_lookback..result.fastd.len() {
-            assert!(result.fastd[i].is_finite(), "fastd[{}] should be finite", i);
+            assert!(result.fastd[i].is_finite());
         }
     }
 
@@ -456,22 +404,12 @@ mod tests {
 
         let k_lookback = stochrsi_k_lookback(5, 5);
         for i in k_lookback..result.fastk.len() {
-            assert!(
-                result.fastk[i] >= 0.0 && result.fastk[i] <= 1.0,
-                "fastk[{}] = {} should be in [0, 1]",
-                i,
-                result.fastk[i]
-            );
+            assert!(result.fastk[i] >= 0.0 && result.fastk[i] <= 1.0);
         }
 
         let d_lookback = stochrsi_d_lookback(5, 5, 3);
         for i in d_lookback..result.fastd.len() {
-            assert!(
-                result.fastd[i] >= 0.0 && result.fastd[i] <= 1.0,
-                "fastd[{}] = {} should be in [0, 1]",
-                i,
-                result.fastd[i]
-            );
+            assert!(result.fastd[i] >= 0.0 && result.fastd[i] <= 1.0);
         }
     }
 
@@ -516,6 +454,13 @@ mod tests {
     }
 
     #[test]
+    fn test_stochrsi_f32_error_propagation_surface() {
+        let empty: Vec<f32> = vec![];
+        let result = stochrsi(&empty, 5, 5, 1, 3);
+        assert!(matches!(result, Err(Error::EmptyInput)));
+    }
+
+    #[test]
     fn test_stochrsi_default() {
         let data: Vec<f64> = vec![
             44.0, 44.5, 43.5, 44.5, 44.0, 43.0, 42.5, 43.5, 44.5, 45.0, 45.5, 46.0, 46.5, 47.0,
@@ -535,12 +480,7 @@ mod tests {
 
         let k_lookback = stochrsi_k_lookback(5, 5);
         for i in k_lookback..result.fastk.len() {
-            assert!(
-                result.fastk[i] >= 0.0 && result.fastk[i] <= 1.0,
-                "fastk[{}] = {} should be in [0, 1]",
-                i,
-                result.fastk[i]
-            );
+            assert!(result.fastk[i] >= 0.0 && result.fastk[i] <= 1.0);
         }
     }
 
@@ -555,7 +495,63 @@ mod tests {
         let result = stochrsi(&data, 5, 5, 3, 3).unwrap();
         let k_lookback = stochrsi_k_lookback(5, 5) + 3 - 1;
         for i in k_lookback..result.fastk.len() {
-            assert!(result.fastk[i].is_finite(), "fastk[{}] should be finite", i);
+            assert!(result.fastk[i].is_finite());
         }
+    }
+
+    #[test]
+    fn test_stochrsi_insufficient_data_and_copy_paths() {
+        let short = vec![1.0_f64, 2.0, 3.0, 4.0];
+        let err = stochrsi(&short, 5, 5, 1, 3);
+        assert!(matches!(err, Err(Error::InsufficientData { .. })));
+
+        let data: Vec<f64> = (0..48)
+            .map(|i| 100.0 + (i as f64) * 0.1 + (((i * 13) % 9) as f64) * 0.03)
+            .collect();
+        let mut fastk = vec![f64::NAN; data.len()];
+        let mut fastd = vec![f64::NAN; data.len()];
+        stochrsi_into(&data, 5, 5, 1, 1, &mut fastk, &mut fastd).expect("stochrsi_into d=1");
+
+        let d_lookback = stochrsi_d_lookback(5, 5, 1);
+        for i in d_lookback..data.len() {
+            assert_eq!(fastd[i], fastk[i]);
+        }
+    }
+
+    #[test]
+    fn test_stochrsi_generic_f16_fallback_paths() {
+        use half::f16;
+
+        let data: Vec<f16> = (0..64)
+            .map(|i| f16::from_f32(50.0 + (i as f32) * 0.2 + (((i * 7) % 5) as f32) * 0.1))
+            .collect();
+
+        let out = stochrsi(&data, 5, 5, 1, 3).expect("stochrsi f16");
+        assert_eq!(out.fastk.len(), data.len());
+        assert_eq!(out.fastd.len(), data.len());
+
+        let mut fastk = vec![f16::NAN; data.len()];
+        let mut fastd = vec![f16::NAN; data.len()];
+        stochrsi_into(&data, 5, 5, 1, 3, &mut fastk, &mut fastd).expect("stochrsi_into f16");
+    }
+
+    #[test]
+    fn test_stochrsi_generic_f16_error_propagation_surface() {
+        use half::f16;
+
+        let empty: Vec<f16> = vec![];
+        let result = stochrsi(&empty, 5, 5, 1, 3);
+        assert!(matches!(result, Err(Error::EmptyInput)));
+    }
+
+    #[test]
+    fn test_stochrsi_nan_window_propagation_surface() {
+        let mut data: Vec<f64> = (0..80).map(|i| 75.0 + (i as f64) * 0.15).collect();
+        for i in (10..data.len()).step_by(17) {
+            data[i] = f64::NAN;
+        }
+        let out = stochrsi(&data, 6, 6, 2, 3).expect("stochrsi with NaNs");
+        assert_eq!(out.fastk.len(), data.len());
+        assert_eq!(out.fastd.len(), data.len());
     }
 }

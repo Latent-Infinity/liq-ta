@@ -2,6 +2,8 @@
 
 import numpy as np
 import pytest
+import re
+from pathlib import Path
 
 import liq_ta
 
@@ -204,6 +206,134 @@ class TestDonchian:
         assert len(upper) == 10
         assert len(middle) == 10
         assert len(lower) == 10
+
+
+class TestKeltner:
+    """Keltner Channel tests."""
+
+    def test_keltner_structure(self):
+        high = np.array([10.2, 10.8, 11.3, 11.1, 11.8, 12.2, 12.5, 12.7, 13.0, 13.2])
+        low = np.array([9.8, 10.1, 10.7, 10.6, 11.0, 11.5, 11.9, 12.0, 12.3, 12.5])
+        close = np.array([10.0, 10.5, 11.0, 10.9, 11.4, 11.9, 12.2, 12.4, 12.8, 12.9])
+
+        upper, middle, lower = liq_ta.keltner_channel(high, low, close, 3, 2.0)
+
+        assert len(upper) == 10
+        assert len(middle) == 10
+        assert len(lower) == 10
+
+
+class TestIchimoku:
+    """Ichimoku tests."""
+
+    def test_ichimoku_structure(self):
+        high = np.array([10.2, 10.8, 11.3, 11.1, 11.8, 12.2, 12.5, 12.7, 13.0, 13.2, 13.4, 13.7])
+        low = np.array([9.8, 10.1, 10.7, 10.6, 11.0, 11.5, 11.9, 12.0, 12.3, 12.5, 12.8, 13.0])
+        close = np.array([10.0, 10.5, 11.0, 10.9, 11.4, 11.9, 12.2, 12.4, 12.8, 12.9, 13.1, 13.4])
+
+        tenkan, kijun, senkou_a, senkou_b, chikou = liq_ta.ichimoku(high, low, close, 3, 5, 7, 2)
+
+        assert len(tenkan) == 12
+        assert len(kijun) == 12
+        assert len(senkou_a) == 12
+        assert len(senkou_b) == 12
+        assert len(chikou) == 12
+
+
+class TestQQE:
+    """QQE tests."""
+
+    def test_qqe_structure(self):
+        np.random.seed(42)
+        prices = 100 + np.cumsum(np.random.randn(80) * 0.5)
+
+        qqe_line, upper, lower = liq_ta.qqe(prices, 14, 5, 14, 4.236)
+
+        assert len(qqe_line) == 80
+        assert len(upper) == 80
+        assert len(lower) == 80
+
+
+class TestStage2Indicators:
+    """Stage 2 indicator smoke/shape tests."""
+
+    def test_stage2_shapes(self):
+        n = 220
+        base = np.linspace(100.0, 140.0, n)
+        open_ = base - 0.1
+        high = base + 0.8
+        low = base - 0.8
+        close = base + 0.2
+        volume = 1000.0 + (np.arange(n) % 20) * 25.0
+
+        assert len(liq_ta.hma(close, 21)) == n
+        assert len(liq_ta.gaussian_filter(close, 20, 0.5)) == n
+        assert len(liq_ta.ao(high, low)) == n
+        assert len(liq_ta.bulls_power(high, low, close, 13)) == n
+        assert len(liq_ta.bears_power(high, low, close, 13)) == n
+        assert len(liq_ta.demarker(high, low, 14)) == n
+        assert len(liq_ta.osma(close, 12, 26, 9)) == n
+        assert len(liq_ta.rvi(open_, high, low, close, 10)) == n
+        assert len(liq_ta.dpo(close, 20)) == n
+        assert len(liq_ta.connors_rsi(close, 3, 2, 50)) == n
+        assert len(liq_ta.stc(close, 23, 50, 10, 3)) == n
+        assert len(liq_ta.laguerre_rsi(close, 0.5)) == n
+        assert len(liq_ta.dss_bressert(high, low, close, 14, 5)) == n
+        assert len(liq_ta.chop(high, low, close, 14)) == n
+        assert len(liq_ta.ulcer_index(close, 14)) == n
+        assert len(liq_ta.hurst(close, 64)) == n
+        assert len(liq_ta.autocorr(close, 32, 1)) == n
+
+        plus_vi, minus_vi = liq_ta.vortex(high, low, close, 14)
+        assert len(plus_vi) == n
+        assert len(minus_vi) == n
+
+        st, ub, lb, trend = liq_ta.supertrend(high, low, close, 10, 3.0)
+        assert len(st) == n
+        assert len(ub) == n
+        assert len(lb) == n
+        assert len(trend) == n
+
+        center, upper, lower, trend = liq_ta.gaussian_channel(close, 20, 0.5, 2.0)
+        assert len(center) == n
+        assert len(upper) == n
+        assert len(lower) == n
+        assert len(trend) == n
+
+        upper, middle, lower = liq_ta.hma_atr_bands(high, low, close, 21, 14, 2.0)
+        assert len(upper) == n
+        assert len(middle) == n
+        assert len(lower) == n
+
+        upper, middle, lower = liq_ta.hma_bollinger_bands(close, 21, 20, 2.0)
+        assert len(upper) == n
+        assert len(middle) == n
+        assert len(lower) == n
+
+        upper, middle, lower = liq_ta.vwap_atr_bands(high, low, close, volume, 14, 2.0)
+        assert len(upper) == n
+        assert len(middle) == n
+        assert len(lower) == n
+
+        upper, middle, lower = liq_ta.vwap_bollinger_bands(high, low, close, volume, 20, 2.0)
+        assert len(upper) == n
+        assert len(middle) == n
+        assert len(lower) == n
+
+    def test_gaussian_error_paths(self):
+        close = np.linspace(100.0, 140.0, 220)
+
+        with pytest.raises(ValueError):
+            liq_ta.gaussian_filter(close, 20, 0.0)
+
+        with pytest.raises(ValueError):
+            liq_ta.gaussian_filter(close, 0, 0.5)
+
+        with pytest.raises(ValueError):
+            liq_ta.gaussian_channel(close, 20, 0.5, 0.0)
+
+        with pytest.raises(ValueError):
+            liq_ta.gaussian_channel(close, 20, -1.0, 2.0)
 
 
 class TestOBV:
@@ -410,3 +540,68 @@ class TestEdgeCases:
 
         with pytest.raises(ValueError):
             liq_ta.atr(high, low, close, 2)
+
+
+class TestFoundationRegistry:
+    """Stage-0 foundation registry and metadata alignment checks."""
+
+    def test_registry_exports_foundation_indicators(self):
+        from liq_ta._liq_ta import get_indicator_registry
+
+        foundation_registry = {name for name, *_ in get_indicator_registry()}
+        foundation_names = {
+            "sma",
+            "ema",
+            "ema_wilder",
+            "rsi",
+            "macd",
+            "keltner_channel",
+            "ichimoku",
+            "qqe",
+        }
+
+        assert foundation_names <= foundation_registry
+
+        # Runtime metadata from Rust should be visible in package helpers.
+        for name in foundation_names:
+            assert liq_ta.get_indicator_info(name) is not None
+
+    def test_foundation_registry_metadata_matches_python_catalog(self):
+        from liq_ta._liq_ta import get_indicator_registry
+
+        runtime_indicators = {
+            name: {
+                "category": category,
+                "input_shape": input_shape,
+                "inputs": list(inputs),
+                "params": list(params),
+                "outputs": list(outputs),
+                "supports_out": supports_out,
+            }
+            for name, category, input_shape, inputs, params, outputs, supports_out in get_indicator_registry()
+        }
+
+        assert runtime_indicators
+        for name, runtime_info in runtime_indicators.items():
+            py_info = liq_ta.get_indicator_info(name)
+            assert py_info is not None
+            assert py_info["category"] == runtime_info["category"]
+            assert py_info["inputs"] == runtime_info["inputs"]
+            assert py_info["params"] == runtime_info["params"]
+            assert py_info["outputs"] == runtime_info["outputs"]
+            assert py_info["supports_out"] == runtime_info["supports_out"]
+            assert py_info["input_shape"] == runtime_info["input_shape"]
+
+    def test_stub_alignment_for_foundation_registry(self):
+        from liq_ta._liq_ta import get_indicator_registry
+
+        stub_path = Path(liq_ta.__file__).with_name("_liq_ta.pyi")
+        if not stub_path.exists():
+            pytest.skip(f"Skipping stub alignment check; stub not found at {stub_path}")
+        stub_text = stub_path.read_text(encoding="utf-8")
+        stub_functions = set(
+            re.findall(r"^def\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(", stub_text, flags=re.MULTILINE)
+        )
+
+        registry_names = {name for name, *_ in get_indicator_registry()}
+        assert registry_names <= stub_functions

@@ -65,6 +65,77 @@ fn use_f64_precision<T: 'static>() -> bool {
     TypeId::of::<T>() == TypeId::of::<f32>() && current_precision_mode() == PrecisionMode::High
 }
 
+#[cfg(test)]
+mod coverage_push_private_paths_tests {
+    use super::*;
+
+    #[test]
+    fn ad_private_f64_core_zero_range_and_non_finite_numerator_paths() {
+        let high = [1.0_f64, 1.0, 1.0, 1.0];
+        let low = [1.0_f64, 1.0, 1.0, 1.0];
+        let close = [1.0_f64, 1.0, 1.0, 1.0];
+        let volume = [10.0_f64, 11.0, 12.0, 13.0];
+        let mut out = vec![0.0_f64; high.len()];
+        ad_core_f64(&high, &low, &close, &volume, &mut out).expect("finite zero-range should work");
+        assert!(out.iter().all(|v| v.is_finite()));
+
+        let close_bad = [f64::INFINITY, 1.0, 1.0, 1.0];
+        let mut out_bad = vec![0.0_f64; high.len()];
+        ad_core_f64(&high, &low, &close_bad, &volume, &mut out_bad)
+            .expect("non-finite numerator path should complete with NaN propagation");
+        assert!(out_bad[0].is_nan());
+        assert!(out_bad[1..].iter().all(|v| v.is_nan()));
+    }
+
+    #[test]
+    fn ad_private_f64_core_chunk_early_exit_positions() {
+        let high = [2.0_f64, 2.0, 2.0, 2.0, 2.0];
+        let low = [1.0_f64, 1.0, 1.0, 1.0, 1.0];
+
+        let close_at_1 = [1.5_f64, 2.0, 1.5, 1.5, 1.5];
+        let volume_at_1 = [1.0_f64, f64::INFINITY, 1.0, 1.0, 1.0];
+        let mut out1 = vec![0.0_f64; 5];
+        ad_core_f64(&high, &low, &close_at_1, &volume_at_1, &mut out1)
+            .expect("mfv1 non-finite path should return Ok");
+        assert!(out1[0].is_finite());
+        assert!(out1[1].is_nan());
+        assert!(out1[2..].iter().all(|v| v.is_nan()));
+
+        let close_at_2 = [1.5_f64, 1.5, 2.0, 1.5, 1.5];
+        let volume_at_2 = [1.0_f64, 1.0, f64::INFINITY, 1.0, 1.0];
+        let mut out2 = vec![0.0_f64; 5];
+        ad_core_f64(&high, &low, &close_at_2, &volume_at_2, &mut out2)
+            .expect("mfv2 non-finite path should return Ok");
+        assert!(out2[0].is_finite());
+        assert!(out2[1].is_finite());
+        assert!(out2[2].is_nan());
+        assert!(out2[3..].iter().all(|v| v.is_nan()));
+    }
+
+    #[test]
+    fn ad_private_f64_core_chunk_and_remainder_non_finite_paths() {
+        let high = [2.0_f64, 2.0, 2.0, 2.0, 2.0];
+        let low = [1.0_f64, 1.0, 1.0, 1.0, 1.0];
+
+        let close_at_3 = [1.5_f64, 1.5, 1.5, 2.0, 1.5];
+        let volume_at_3 = [1.0_f64, 1.0, 1.0, f64::INFINITY, 1.0];
+        let mut out3 = vec![0.0_f64; 5];
+        ad_core_f64(&high, &low, &close_at_3, &volume_at_3, &mut out3)
+            .expect("mfv3 non-finite path should return Ok");
+        assert!(out3[..3].iter().all(|v| v.is_finite()));
+        assert!(out3[3].is_nan());
+        assert!(out3[4].is_nan());
+
+        let close_at_4 = [1.5_f64, 1.5, 1.5, 1.5, 2.0];
+        let volume_at_4 = [1.0_f64, 1.0, 1.0, 1.0, f64::INFINITY];
+        let mut out4 = vec![0.0_f64; 5];
+        ad_core_f64(&high, &low, &close_at_4, &volume_at_4, &mut out4)
+            .expect("remainder non-finite path should return Ok");
+        assert!(out4[..4].iter().all(|v| v.is_finite()));
+        assert!(out4[4].is_nan());
+    }
+}
+
 /// Returns the lookback period for AD.
 ///
 /// AD has no lookback - the first output is valid.

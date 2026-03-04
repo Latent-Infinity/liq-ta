@@ -12,10 +12,17 @@ description = "Python bindings for liq-ta technical analysis library"
 name = "liq_ta"
 crate-type = ["cdylib"]
 
+[features]
+default = []
+extension-module = ["pyo3/extension-module"]
+
 [dependencies]
 liq-ta = { path = "../liq-ta" }
-pyo3 = { version = "0.23", features = ["extension-module"] }
+pyo3 = { version = "0.23" }
 numpy = "0.23"
 
 [dev-dependencies]
 pyo3 = { version = "0.23", features = ["auto-initialize"] }
+
+[build-dependencies]
+pyo3-build-config = "0.23"

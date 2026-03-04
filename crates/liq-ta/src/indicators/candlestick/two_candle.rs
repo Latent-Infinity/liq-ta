@@ -46,24 +46,7 @@ pub fn cdl_engulfing<T: SeriesElement>(
     low: &[T],
     close: &[T],
 ) -> Result<Vec<i32>> {
-    let len = open.len();
-    if len == 0 {
-        return Err(Error::EmptyInput);
-    }
-    if high.len() != len || low.len() != len || close.len() != len {
-        return Err(Error::LengthMismatch {
-            description: "OHLC arrays have different lengths".to_string(),
-        });
-    }
-    if len < cdl_engulfing_min_len() {
-        return Err(Error::InsufficientData {
-            required: 0,
-            actual: len,
-            indicator: "candlestick",
-        });
-    }
-
-    let mut out = vec![0i32; len];
+    let mut out = vec![0i32; open.len()];
     cdl_engulfing_into(open, high, low, close, &mut out)?;
     Ok(out)
 }
@@ -181,24 +164,7 @@ pub fn cdl_harami<T: SeriesElement>(
     low: &[T],
     close: &[T],
 ) -> Result<Vec<i32>> {
-    let len = open.len();
-    if len == 0 {
-        return Err(Error::EmptyInput);
-    }
-    if high.len() != len || low.len() != len || close.len() != len {
-        return Err(Error::LengthMismatch {
-            description: "OHLC arrays have different lengths".to_string(),
-        });
-    }
-    if len < cdl_harami_min_len() {
-        return Err(Error::InsufficientData {
-            required: 0,
-            actual: len,
-            indicator: "candlestick",
-        });
-    }
-
-    let mut out = vec![0i32; len];
+    let mut out = vec![0i32; open.len()];
     cdl_harami_into(open, high, low, close, &mut out)?;
     Ok(out)
 }
@@ -327,24 +293,7 @@ pub fn cdl_harami_cross<T: SeriesElement>(
     low: &[T],
     close: &[T],
 ) -> Result<Vec<i32>> {
-    let len = open.len();
-    if len == 0 {
-        return Err(Error::EmptyInput);
-    }
-    if high.len() != len || low.len() != len || close.len() != len {
-        return Err(Error::LengthMismatch {
-            description: "OHLC arrays have different lengths".to_string(),
-        });
-    }
-    if len < cdl_harami_cross_min_len() {
-        return Err(Error::InsufficientData {
-            required: 0,
-            actual: len,
-            indicator: "candlestick",
-        });
-    }
-
-    let mut out = vec![0i32; len];
+    let mut out = vec![0i32; open.len()];
     cdl_harami_cross_into(open, high, low, close, &mut out)?;
     Ok(out)
 }
@@ -468,24 +417,7 @@ pub fn cdl_piercing<T: SeriesElement>(
     low: &[T],
     close: &[T],
 ) -> Result<Vec<i32>> {
-    let len = open.len();
-    if len == 0 {
-        return Err(Error::EmptyInput);
-    }
-    if high.len() != len || low.len() != len || close.len() != len {
-        return Err(Error::LengthMismatch {
-            description: "OHLC arrays have different lengths".to_string(),
-        });
-    }
-    if len < cdl_piercing_min_len() {
-        return Err(Error::InsufficientData {
-            required: 0,
-            actual: len,
-            indicator: "candlestick",
-        });
-    }
-
-    let mut out = vec![0i32; len];
+    let mut out = vec![0i32; open.len()];
     cdl_piercing_into(open, high, low, close, &mut out)?;
     Ok(out)
 }
@@ -615,24 +547,7 @@ pub fn cdl_dark_cloud_cover<T: SeriesElement>(
     low: &[T],
     close: &[T],
 ) -> Result<Vec<i32>> {
-    let len = open.len();
-    if len == 0 {
-        return Err(Error::EmptyInput);
-    }
-    if high.len() != len || low.len() != len || close.len() != len {
-        return Err(Error::LengthMismatch {
-            description: "OHLC arrays have different lengths".to_string(),
-        });
-    }
-    if len < cdl_dark_cloud_cover_min_len() {
-        return Err(Error::InsufficientData {
-            required: 0,
-            actual: len,
-            indicator: "candlestick",
-        });
-    }
-
-    let mut out = vec![0i32; len];
+    let mut out = vec![0i32; open.len()];
     cdl_dark_cloud_cover_into(open, high, low, close, &mut out)?;
     Ok(out)
 }
@@ -761,24 +676,7 @@ pub fn cdl_doji_star<T: SeriesElement>(
     low: &[T],
     close: &[T],
 ) -> Result<Vec<i32>> {
-    let len = open.len();
-    if len == 0 {
-        return Err(Error::EmptyInput);
-    }
-    if high.len() != len || low.len() != len || close.len() != len {
-        return Err(Error::LengthMismatch {
-            description: "OHLC arrays have different lengths".to_string(),
-        });
-    }
-    if len < cdl_doji_star_min_len() {
-        return Err(Error::InsufficientData {
-            required: 0,
-            actual: len,
-            indicator: "candlestick",
-        });
-    }
-
-    let mut out = vec![0i32; len];
+    let mut out = vec![0i32; open.len()];
     cdl_doji_star_into(open, high, low, close, &mut out)?;
     Ok(out)
 }
@@ -900,24 +798,7 @@ pub fn cdl_kicking<T: SeriesElement>(
     low: &[T],
     close: &[T],
 ) -> Result<Vec<i32>> {
-    let len = open.len();
-    if len == 0 {
-        return Err(Error::EmptyInput);
-    }
-    if high.len() != len || low.len() != len || close.len() != len {
-        return Err(Error::LengthMismatch {
-            description: "OHLC arrays have different lengths".to_string(),
-        });
-    }
-    if len < cdl_kicking_min_len() {
-        return Err(Error::InsufficientData {
-            required: 0,
-            actual: len,
-            indicator: "candlestick",
-        });
-    }
-
-    let mut out = vec![0i32; len];
+    let mut out = vec![0i32; open.len()];
     cdl_kicking_into(open, high, low, close, &mut out)?;
     Ok(out)
 }
@@ -1050,24 +931,7 @@ pub fn cdl_kicking_by_length<T: SeriesElement>(
     low: &[T],
     close: &[T],
 ) -> Result<Vec<i32>> {
-    let len = open.len();
-    if len == 0 {
-        return Err(Error::EmptyInput);
-    }
-    if high.len() != len || low.len() != len || close.len() != len {
-        return Err(Error::LengthMismatch {
-            description: "OHLC arrays have different lengths".to_string(),
-        });
-    }
-    if len < cdl_kicking_by_length_min_len() {
-        return Err(Error::InsufficientData {
-            required: 0,
-            actual: len,
-            indicator: "candlestick",
-        });
-    }
-
-    let mut out = vec![0i32; len];
+    let mut out = vec![0i32; open.len()];
     cdl_kicking_by_length_into(open, high, low, close, &mut out)?;
     Ok(out)
 }
@@ -1144,24 +1008,7 @@ pub fn cdl_matching_low<T: SeriesElement>(
     low: &[T],
     close: &[T],
 ) -> Result<Vec<i32>> {
-    let len = open.len();
-    if len == 0 {
-        return Err(Error::EmptyInput);
-    }
-    if high.len() != len || low.len() != len || close.len() != len {
-        return Err(Error::LengthMismatch {
-            description: "OHLC arrays have different lengths".to_string(),
-        });
-    }
-    if len < cdl_matching_low_min_len() {
-        return Err(Error::InsufficientData {
-            required: 0,
-            actual: len,
-            indicator: "candlestick",
-        });
-    }
-
-    let mut out = vec![0i32; len];
+    let mut out = vec![0i32; open.len()];
     cdl_matching_low_into(open, high, low, close, &mut out)?;
     Ok(out)
 }
@@ -1266,24 +1113,7 @@ pub fn cdl_homing_pigeon<T: SeriesElement>(
     low: &[T],
     close: &[T],
 ) -> Result<Vec<i32>> {
-    let len = open.len();
-    if len == 0 {
-        return Err(Error::EmptyInput);
-    }
-    if high.len() != len || low.len() != len || close.len() != len {
-        return Err(Error::LengthMismatch {
-            description: "OHLC arrays have different lengths".to_string(),
-        });
-    }
-    if len < cdl_homing_pigeon_min_len() {
-        return Err(Error::InsufficientData {
-            required: 0,
-            actual: len,
-            indicator: "candlestick",
-        });
-    }
-
-    let mut out = vec![0i32; len];
+    let mut out = vec![0i32; open.len()];
     cdl_homing_pigeon_into(open, high, low, close, &mut out)?;
     Ok(out)
 }
@@ -1386,24 +1216,7 @@ pub fn cdl_in_neck<T: SeriesElement>(
     low: &[T],
     close: &[T],
 ) -> Result<Vec<i32>> {
-    let len = open.len();
-    if len == 0 {
-        return Err(Error::EmptyInput);
-    }
-    if high.len() != len || low.len() != len || close.len() != len {
-        return Err(Error::LengthMismatch {
-            description: "OHLC arrays have different lengths".to_string(),
-        });
-    }
-    if len < cdl_in_neck_min_len() {
-        return Err(Error::InsufficientData {
-            required: 0,
-            actual: len,
-            indicator: "candlestick",
-        });
-    }
-
-    let mut out = vec![0i32; len];
+    let mut out = vec![0i32; open.len()];
     cdl_in_neck_into(open, high, low, close, &mut out)?;
     Ok(out)
 }
@@ -1523,24 +1336,7 @@ pub fn cdl_on_neck<T: SeriesElement>(
     low: &[T],
     close: &[T],
 ) -> Result<Vec<i32>> {
-    let len = open.len();
-    if len == 0 {
-        return Err(Error::EmptyInput);
-    }
-    if high.len() != len || low.len() != len || close.len() != len {
-        return Err(Error::LengthMismatch {
-            description: "OHLC arrays have different lengths".to_string(),
-        });
-    }
-    if len < cdl_on_neck_min_len() {
-        return Err(Error::InsufficientData {
-            required: 0,
-            actual: len,
-            indicator: "candlestick",
-        });
-    }
-
-    let mut out = vec![0i32; len];
+    let mut out = vec![0i32; open.len()];
     cdl_on_neck_into(open, high, low, close, &mut out)?;
     Ok(out)
 }
@@ -1661,24 +1457,7 @@ pub fn cdl_thrusting<T: SeriesElement>(
     low: &[T],
     close: &[T],
 ) -> Result<Vec<i32>> {
-    let len = open.len();
-    if len == 0 {
-        return Err(Error::EmptyInput);
-    }
-    if high.len() != len || low.len() != len || close.len() != len {
-        return Err(Error::LengthMismatch {
-            description: "OHLC arrays have different lengths".to_string(),
-        });
-    }
-    if len < cdl_thrusting_min_len() {
-        return Err(Error::InsufficientData {
-            required: 0,
-            actual: len,
-            indicator: "candlestick",
-        });
-    }
-
-    let mut out = vec![0i32; len];
+    let mut out = vec![0i32; open.len()];
     cdl_thrusting_into(open, high, low, close, &mut out)?;
     Ok(out)
 }
@@ -1804,24 +1583,7 @@ pub fn cdl_separating_lines<T: SeriesElement>(
     low: &[T],
     close: &[T],
 ) -> Result<Vec<i32>> {
-    let len = open.len();
-    if len == 0 {
-        return Err(Error::EmptyInput);
-    }
-    if high.len() != len || low.len() != len || close.len() != len {
-        return Err(Error::LengthMismatch {
-            description: "OHLC arrays have different lengths".to_string(),
-        });
-    }
-    if len < cdl_separating_lines_min_len() {
-        return Err(Error::InsufficientData {
-            required: 0,
-            actual: len,
-            indicator: "candlestick",
-        });
-    }
-
-    let mut out = vec![0i32; len];
+    let mut out = vec![0i32; open.len()];
     cdl_separating_lines_into(open, high, low, close, &mut out)?;
     Ok(out)
 }
@@ -1937,24 +1699,7 @@ pub fn cdl_counter_attack<T: SeriesElement>(
     low: &[T],
     close: &[T],
 ) -> Result<Vec<i32>> {
-    let len = open.len();
-    if len == 0 {
-        return Err(Error::EmptyInput);
-    }
-    if high.len() != len || low.len() != len || close.len() != len {
-        return Err(Error::LengthMismatch {
-            description: "OHLC arrays have different lengths".to_string(),
-        });
-    }
-    if len < cdl_counter_attack_min_len() {
-        return Err(Error::InsufficientData {
-            required: 0,
-            actual: len,
-            indicator: "candlestick",
-        });
-    }
-
-    let mut out = vec![0i32; len];
+    let mut out = vec![0i32; open.len()];
     cdl_counter_attack_into(open, high, low, close, &mut out)?;
     Ok(out)
 }
@@ -2072,24 +1817,7 @@ pub fn cdl_2crows<T: SeriesElement>(
     low: &[T],
     close: &[T],
 ) -> Result<Vec<i32>> {
-    let len = open.len();
-    if len == 0 {
-        return Err(Error::EmptyInput);
-    }
-    if high.len() != len || low.len() != len || close.len() != len {
-        return Err(Error::LengthMismatch {
-            description: "OHLC arrays have different lengths".to_string(),
-        });
-    }
-    if len < cdl_2crows_min_len() {
-        return Err(Error::InsufficientData {
-            required: 0,
-            actual: len,
-            indicator: "candlestick",
-        });
-    }
-
-    let mut out = vec![0i32; len];
+    let mut out = vec![0i32; open.len()];
     cdl_2crows_into(open, high, low, close, &mut out)?;
     Ok(out)
 }
@@ -2228,24 +1956,7 @@ pub fn cdl_hikkake<T: SeriesElement>(
     low: &[T],
     close: &[T],
 ) -> Result<Vec<i32>> {
-    let len = open.len();
-    if len == 0 {
-        return Err(Error::EmptyInput);
-    }
-    if high.len() != len || low.len() != len || close.len() != len {
-        return Err(Error::LengthMismatch {
-            description: "OHLC arrays have different lengths".to_string(),
-        });
-    }
-    if len < cdl_hikkake_min_len() {
-        return Err(Error::InsufficientData {
-            required: 0,
-            actual: len,
-            indicator: "candlestick",
-        });
-    }
-
-    let mut out = vec![0i32; len];
+    let mut out = vec![0i32; open.len()];
     cdl_hikkake_into(open, high, low, close, &mut out)?;
     Ok(out)
 }
@@ -2375,24 +2086,7 @@ pub fn cdl_hikkake_mod<T: SeriesElement>(
     low: &[T],
     close: &[T],
 ) -> Result<Vec<i32>> {
-    let len = open.len();
-    if len == 0 {
-        return Err(Error::EmptyInput);
-    }
-    if high.len() != len || low.len() != len || close.len() != len {
-        return Err(Error::LengthMismatch {
-            description: "OHLC arrays have different lengths".to_string(),
-        });
-    }
-    if len < cdl_hikkake_mod_min_len() {
-        return Err(Error::InsufficientData {
-            required: 0,
-            actual: len,
-            indicator: "candlestick",
-        });
-    }
-
-    let mut out = vec![0i32; len];
+    let mut out = vec![0i32; open.len()];
     cdl_hikkake_mod_into(open, high, low, close, &mut out)?;
     Ok(out)
 }
@@ -2558,6 +2252,29 @@ mod tests {
     }
 
     #[test]
+    fn test_cdl_kicking_by_length_bearish_strong_branch() {
+        let mut open = vec![100.0; 12];
+        let mut high = vec![105.0; 12];
+        let mut low = vec![95.0; 12];
+        let mut close = vec![103.0; 12];
+
+        // Previous: bullish marubozu
+        open[10] = 100.0;
+        high[10] = 110.0;
+        low[10] = 100.0;
+        close[10] = 110.0;
+
+        // Current: bearish marubozu with gap down and larger body than previous
+        open[11] = 98.0;
+        high[11] = 98.0;
+        low[11] = 82.0;
+        close[11] = 82.0;
+
+        let result = cdl_kicking_by_length(&open, &high, &low, &close).unwrap();
+        assert_eq!(result[11], PATTERN_BEARISH_STRONG);
+    }
+
+    #[test]
     fn test_cdl_matching_low() {
         let mut open = vec![100.0; 12];
         let mut high = vec![105.0; 12];
@@ -2583,5 +2300,299 @@ mod tests {
     fn test_empty_input() {
         let empty: Vec<f64> = vec![];
         assert!(cdl_engulfing(&empty, &empty, &empty, &empty).is_err());
+    }
+
+    #[test]
+    fn test_two_candle_wrappers_smoke_surface() {
+        let n = 640;
+        let mut open = Vec::with_capacity(n);
+        let mut high = Vec::with_capacity(n);
+        let mut low = Vec::with_capacity(n);
+        let mut close = Vec::with_capacity(n);
+
+        for i in 0..n {
+            let base = 300.0 - (i as f64) * 0.15;
+            open.push(base);
+            close.push(base - 0.12);
+            high.push(base + 6.0);
+            low.push(base - 6.0);
+        }
+
+        macro_rules! assert_len_ok {
+            ($expr:expr) => {{
+                let out = $expr.unwrap();
+                assert_eq!(out.len(), n);
+            }};
+        }
+
+        assert_len_ok!(cdl_engulfing(&open, &high, &low, &close));
+        assert_len_ok!(cdl_harami(&open, &high, &low, &close));
+        assert_len_ok!(cdl_harami_cross(&open, &high, &low, &close));
+        assert_len_ok!(cdl_piercing(&open, &high, &low, &close));
+        assert_len_ok!(cdl_dark_cloud_cover(&open, &high, &low, &close));
+        assert_len_ok!(cdl_doji_star(&open, &high, &low, &close));
+        assert_len_ok!(cdl_kicking(&open, &high, &low, &close));
+        assert_len_ok!(cdl_kicking_by_length(&open, &high, &low, &close));
+        assert_len_ok!(cdl_matching_low(&open, &high, &low, &close));
+        assert_len_ok!(cdl_homing_pigeon(&open, &high, &low, &close));
+        assert_len_ok!(cdl_in_neck(&open, &high, &low, &close));
+        assert_len_ok!(cdl_on_neck(&open, &high, &low, &close));
+        assert_len_ok!(cdl_thrusting(&open, &high, &low, &close));
+        assert_len_ok!(cdl_separating_lines(&open, &high, &low, &close));
+        assert_len_ok!(cdl_counter_attack(&open, &high, &low, &close));
+        assert_len_ok!(cdl_2crows(&open, &high, &low, &close));
+        assert_len_ok!(cdl_hikkake(&open, &high, &low, &close));
+        assert_len_ok!(cdl_hikkake_mod(&open, &high, &low, &close));
+    }
+
+    #[test]
+    fn test_two_candle_error_surface_all_patterns() {
+        type TwoFn = fn(&[f64], &[f64], &[f64], &[f64]) -> crate::error::Result<Vec<i32>>;
+        type TwoIntoFn = fn(&[f64], &[f64], &[f64], &[f64], &mut [i32]) -> crate::error::Result<()>;
+
+        let n = 64;
+        let mut open = Vec::with_capacity(n);
+        let mut high = Vec::with_capacity(n);
+        let mut low = Vec::with_capacity(n);
+        let mut close = Vec::with_capacity(n);
+
+        for i in 0..n {
+            let base = 150.0 - (i as f64) * 0.2;
+            open.push(base);
+            close.push(base - 0.1);
+            high.push(base + 4.0);
+            low.push(base - 4.0);
+        }
+
+        let high_short = high[..(n - 1)].to_vec();
+        let low_short = low[..(n - 1)].to_vec();
+        let close_short = close[..(n - 1)].to_vec();
+        let empty: Vec<f64> = vec![];
+
+        let wrappers: [(&str, TwoFn); 18] = [
+            ("cdl_engulfing", cdl_engulfing),
+            ("cdl_harami", cdl_harami),
+            ("cdl_harami_cross", cdl_harami_cross),
+            ("cdl_piercing", cdl_piercing),
+            ("cdl_dark_cloud_cover", cdl_dark_cloud_cover),
+            ("cdl_doji_star", cdl_doji_star),
+            ("cdl_kicking", cdl_kicking),
+            ("cdl_kicking_by_length", cdl_kicking_by_length),
+            ("cdl_matching_low", cdl_matching_low),
+            ("cdl_homing_pigeon", cdl_homing_pigeon),
+            ("cdl_in_neck", cdl_in_neck),
+            ("cdl_on_neck", cdl_on_neck),
+            ("cdl_thrusting", cdl_thrusting),
+            ("cdl_separating_lines", cdl_separating_lines),
+            ("cdl_counter_attack", cdl_counter_attack),
+            ("cdl_2crows", cdl_2crows),
+            ("cdl_hikkake", cdl_hikkake),
+            ("cdl_hikkake_mod", cdl_hikkake_mod),
+        ];
+
+        for (name, f) in wrappers {
+            assert!(f(&empty, &empty, &empty, &empty).is_err(), "{name}");
+            assert!(f(&open, &high_short, &low, &close).is_err(), "{name}");
+            assert!(f(&open, &high, &low_short, &close).is_err(), "{name}");
+            assert!(f(&open, &high, &low, &close_short).is_err(), "{name}");
+        }
+
+        let into_fns: [(&str, TwoIntoFn); 18] = [
+            ("cdl_engulfing_into", cdl_engulfing_into),
+            ("cdl_harami_into", cdl_harami_into),
+            ("cdl_harami_cross_into", cdl_harami_cross_into),
+            ("cdl_piercing_into", cdl_piercing_into),
+            ("cdl_dark_cloud_cover_into", cdl_dark_cloud_cover_into),
+            ("cdl_doji_star_into", cdl_doji_star_into),
+            ("cdl_kicking_into", cdl_kicking_into),
+            ("cdl_kicking_by_length_into", cdl_kicking_by_length_into),
+            ("cdl_matching_low_into", cdl_matching_low_into),
+            ("cdl_homing_pigeon_into", cdl_homing_pigeon_into),
+            ("cdl_in_neck_into", cdl_in_neck_into),
+            ("cdl_on_neck_into", cdl_on_neck_into),
+            ("cdl_thrusting_into", cdl_thrusting_into),
+            ("cdl_separating_lines_into", cdl_separating_lines_into),
+            ("cdl_counter_attack_into", cdl_counter_attack_into),
+            ("cdl_2crows_into", cdl_2crows_into),
+            ("cdl_hikkake_into", cdl_hikkake_into),
+            ("cdl_hikkake_mod_into", cdl_hikkake_mod_into),
+        ];
+
+        let mut out_ok = vec![0_i32; n];
+        let mut out_short = vec![0_i32; n - 1];
+        for (name, f) in into_fns {
+            f(&open, &high, &low, &close, &mut out_ok).unwrap();
+            assert!(
+                f(&open, &high, &low, &close, &mut out_short).is_err(),
+                "{name}"
+            );
+            assert!(
+                f(&open, &high_short, &low, &close, &mut out_ok).is_err(),
+                "{name}"
+            );
+            assert!(
+                f(&open, &high, &low_short, &close, &mut out_ok).is_err(),
+                "{name}"
+            );
+            assert!(
+                f(&open, &high, &low, &close_short, &mut out_ok).is_err(),
+                "{name}"
+            );
+            assert!(
+                f(&empty, &empty, &empty, &empty, &mut []).is_err(),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_two_candle_f32_surface_matrix() {
+        let n = 320;
+        let mut open = Vec::with_capacity(n);
+        let mut high = Vec::with_capacity(n);
+        let mut low = Vec::with_capacity(n);
+        let mut close = Vec::with_capacity(n);
+
+        for i in 0..n {
+            let base = 170.0_f32 - (i as f32) * 0.13;
+            open.push(base);
+            close.push(base - 0.08);
+            high.push(base + 4.2);
+            low.push(base - 4.2);
+        }
+
+        macro_rules! assert_len_ok {
+            ($expr:expr) => {{
+                let out = $expr.unwrap();
+                assert_eq!(out.len(), n);
+            }};
+        }
+        macro_rules! assert_into_ok {
+            ($f:ident) => {{
+                let mut out = vec![0_i32; n];
+                $f(&open, &high, &low, &close, &mut out).unwrap();
+                assert_eq!(out.len(), n);
+            }};
+        }
+
+        assert_len_ok!(cdl_engulfing(&open, &high, &low, &close));
+        assert_len_ok!(cdl_harami(&open, &high, &low, &close));
+        assert_len_ok!(cdl_harami_cross(&open, &high, &low, &close));
+        assert_len_ok!(cdl_piercing(&open, &high, &low, &close));
+        assert_len_ok!(cdl_dark_cloud_cover(&open, &high, &low, &close));
+        assert_len_ok!(cdl_doji_star(&open, &high, &low, &close));
+        assert_len_ok!(cdl_kicking(&open, &high, &low, &close));
+        assert_len_ok!(cdl_kicking_by_length(&open, &high, &low, &close));
+        assert_len_ok!(cdl_matching_low(&open, &high, &low, &close));
+        assert_len_ok!(cdl_homing_pigeon(&open, &high, &low, &close));
+        assert_len_ok!(cdl_in_neck(&open, &high, &low, &close));
+        assert_len_ok!(cdl_on_neck(&open, &high, &low, &close));
+        assert_len_ok!(cdl_thrusting(&open, &high, &low, &close));
+        assert_len_ok!(cdl_separating_lines(&open, &high, &low, &close));
+        assert_len_ok!(cdl_counter_attack(&open, &high, &low, &close));
+        assert_len_ok!(cdl_2crows(&open, &high, &low, &close));
+        assert_len_ok!(cdl_hikkake(&open, &high, &low, &close));
+        assert_len_ok!(cdl_hikkake_mod(&open, &high, &low, &close));
+
+        assert_into_ok!(cdl_engulfing_into);
+        assert_into_ok!(cdl_harami_into);
+        assert_into_ok!(cdl_harami_cross_into);
+        assert_into_ok!(cdl_piercing_into);
+        assert_into_ok!(cdl_dark_cloud_cover_into);
+        assert_into_ok!(cdl_doji_star_into);
+        assert_into_ok!(cdl_kicking_into);
+        assert_into_ok!(cdl_kicking_by_length_into);
+        assert_into_ok!(cdl_matching_low_into);
+        assert_into_ok!(cdl_homing_pigeon_into);
+        assert_into_ok!(cdl_in_neck_into);
+        assert_into_ok!(cdl_on_neck_into);
+        assert_into_ok!(cdl_thrusting_into);
+        assert_into_ok!(cdl_separating_lines_into);
+        assert_into_ok!(cdl_counter_attack_into);
+        assert_into_ok!(cdl_2crows_into);
+        assert_into_ok!(cdl_hikkake_into);
+        assert_into_ok!(cdl_hikkake_mod_into);
+    }
+
+    #[test]
+    fn test_two_candle_f32_error_surface_all_patterns() {
+        type TwoFn = fn(&[f32], &[f32], &[f32], &[f32]) -> crate::error::Result<Vec<i32>>;
+        type TwoIntoFn = fn(&[f32], &[f32], &[f32], &[f32], &mut [i32]) -> crate::error::Result<()>;
+
+        let n = 64;
+        let mut open = Vec::with_capacity(n);
+        let mut high = Vec::with_capacity(n);
+        let mut low = Vec::with_capacity(n);
+        let mut close = Vec::with_capacity(n);
+
+        for i in 0..n {
+            let base = 155.0_f32 - (i as f32) * 0.2;
+            open.push(base);
+            close.push(base - 0.1);
+            high.push(base + 4.0);
+            low.push(base - 4.0);
+        }
+
+        let high_short = high[..(n - 1)].to_vec();
+        let low_short = low[..(n - 1)].to_vec();
+        let close_short = close[..(n - 1)].to_vec();
+        let empty: Vec<f32> = vec![];
+
+        let wrappers: [TwoFn; 18] = [
+            cdl_engulfing,
+            cdl_harami,
+            cdl_harami_cross,
+            cdl_piercing,
+            cdl_dark_cloud_cover,
+            cdl_doji_star,
+            cdl_kicking,
+            cdl_kicking_by_length,
+            cdl_matching_low,
+            cdl_homing_pigeon,
+            cdl_in_neck,
+            cdl_on_neck,
+            cdl_thrusting,
+            cdl_separating_lines,
+            cdl_counter_attack,
+            cdl_2crows,
+            cdl_hikkake,
+            cdl_hikkake_mod,
+        ];
+        for f in wrappers {
+            assert!(f(&empty, &empty, &empty, &empty).is_err());
+            assert!(f(&open, &high_short, &low, &close).is_err());
+            assert!(f(&open, &high, &low_short, &close).is_err());
+            assert!(f(&open, &high, &low, &close_short).is_err());
+        }
+
+        let into_fns: [TwoIntoFn; 18] = [
+            cdl_engulfing_into,
+            cdl_harami_into,
+            cdl_harami_cross_into,
+            cdl_piercing_into,
+            cdl_dark_cloud_cover_into,
+            cdl_doji_star_into,
+            cdl_kicking_into,
+            cdl_kicking_by_length_into,
+            cdl_matching_low_into,
+            cdl_homing_pigeon_into,
+            cdl_in_neck_into,
+            cdl_on_neck_into,
+            cdl_thrusting_into,
+            cdl_separating_lines_into,
+            cdl_counter_attack_into,
+            cdl_2crows_into,
+            cdl_hikkake_into,
+            cdl_hikkake_mod_into,
+        ];
+        let mut out_ok = vec![0_i32; n];
+        let mut out_short = vec![0_i32; n - 1];
+        for f in into_fns {
+            assert!(f(&open, &high, &low, &close, &mut out_short).is_err());
+            assert!(f(&open, &high_short, &low, &close, &mut out_ok).is_err());
+            assert!(f(&open, &high, &low_short, &close, &mut out_ok).is_err());
+            assert!(f(&open, &high, &low, &close_short, &mut out_ok).is_err());
+            assert!(f(&empty, &empty, &empty, &empty, &mut []).is_err());
+        }
     }
 }

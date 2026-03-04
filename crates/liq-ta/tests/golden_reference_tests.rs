@@ -375,7 +375,7 @@ fn golden_rsi_f64_fast_mode() {
 }
 
 /// Precision test - validates High mode uses f64 accumulators.
-/// This test is ignored until Phase 2 implements f64 accumulators.
+/// This test is ignored until Stage 2 implements f64 accumulators.
 #[test]
 fn precision_rsi_f32_high_vs_f64_reference() {
     let data_f32 = generate_test_prices_f32(TEST_SIZE);
@@ -610,7 +610,7 @@ fn golden_vwap_f64_fast_mode() {
 }
 
 /// Precision test - validates High mode uses f64 accumulators.
-/// This test is ignored until Phase 2 implements f64 accumulators.
+/// This test is ignored until Stage 2 implements f64 accumulators.
 #[test]
 fn precision_vwap_f32_high_vs_f64_reference() {
     let (_, high_f32, low_f32, close_f32, volume_f32) = generate_test_ohlcv_f32(TEST_SIZE);
@@ -684,7 +684,7 @@ fn golden_obv_f64_fast_mode() {
 }
 
 /// Precision test - validates High mode uses f64 accumulators.
-/// This test is ignored until Phase 2 implements f64 accumulators.
+/// This test is ignored until Stage 2 implements f64 accumulators.
 #[test]
 fn precision_obv_f32_high_vs_f64_reference() {
     let (_, _, _, close_f32, volume_f32) = generate_test_ohlcv_f32(TEST_SIZE);

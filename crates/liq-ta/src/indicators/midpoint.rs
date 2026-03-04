@@ -152,7 +152,7 @@ pub fn midpoint_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [
     }
 
     // Generic fallback path with division
-    let two = T::from_usize(2)?;
+    let two = T::one() + T::one();
     let mut max_deque: crate::kernels::rolling_extrema::MonotonicDeque<T> =
         crate::kernels::rolling_extrema::MonotonicDeque::new(period);
     let mut min_deque: crate::kernels::rolling_extrema::MonotonicDeque<T> =
@@ -274,38 +274,16 @@ fn midpoint_deque_f32(
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 pub fn midpoint<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
-    use std::any::TypeId;
-
-    // Optimized allocation for f64/f32: avoid double-initialization
-    // midpoint_into() writes all elements, so this is pure double-write tax
-    if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
-        let mut output: Vec<f64> = Vec::with_capacity(data.len());
-        unsafe {
-            output.set_len(data.len());
-        }
-        midpoint_into(data_f64, period, &mut output)?;
-        Ok(unsafe { std::mem::transmute(output) })
-    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
-        let mut output: Vec<f32> = Vec::with_capacity(data.len());
-        unsafe {
-            output.set_len(data.len());
-        }
-        midpoint_into(data_f32, period, &mut output)?;
-        Ok(unsafe { std::mem::transmute(output) })
-    } else {
-        // Generic fallback: initialize to NaN
-        let mut output = vec![T::nan(); data.len()];
-        midpoint_into(data, period, &mut output)?;
-        Ok(output)
-    }
+    let mut output = vec![T::nan(); data.len()];
+    midpoint_into(data, period, &mut output)?;
+    Ok(output)
 }
 
 #[cfg(test)]
 mod tests {
     #![allow(clippy::all, clippy::pedantic, clippy::nursery)]
     use super::*;
+    use half::f16;
     use num_traits::Float;
 
     fn approx_eq<T: Float>(a: T, b: T, epsilon: T) -> bool {
@@ -539,5 +517,16 @@ mod tests {
         for i in 4..10 {
             assert!(result[i].is_finite());
         }
+    }
+
+    #[test]
+    fn test_midpoint_generic_f16_path_and_approx_eq_nan_branch() {
+        let data: Vec<f16> = (0..64)
+            .map(|i| f16::from_f32(5.0 + (i as f32) * 0.15 + (((i * 3) % 4) as f32) * 0.1))
+            .collect();
+        let out = midpoint(&data, 8).expect("midpoint f16 should succeed");
+        assert_eq!(out.len(), data.len());
+
+        assert!(approx_eq(f64::NAN, f64::NAN, EPSILON));
     }
 }

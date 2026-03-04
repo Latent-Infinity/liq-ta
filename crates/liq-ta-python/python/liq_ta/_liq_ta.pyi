@@ -9,6 +9,25 @@ from typing import Tuple
 import numpy as np
 from numpy.typing import NDArray
 
+def get_indicator_registry() -> list[
+    tuple[
+        str,
+        str,
+        str,
+        list[str],
+        list[str],
+        list[str],
+        bool,
+    ]
+]:
+    """Runtime indicator metadata source used by Python wrapper helpers.
+
+    Returns:
+        A list of tuples:
+        (name, category, input_shape, inputs, params, outputs, supports_out)
+    """
+    ...
+
 # Moving Averages
 
 def sma(
@@ -100,6 +119,156 @@ def macd(
     """
     ...
 
+def qqe(
+    data: NDArray[np.float64],
+    rsi_period: int = 14,
+    smoothing_period: int = 5,
+    wilders_period: int = 14,
+    factor: float = 4.236,
+) -> Tuple[NDArray[np.float64], NDArray[np.float64], NDArray[np.float64]]:
+    """Quantitative Qualitative Estimation.
+
+    Args:
+        data: Input price array
+        rsi_period: RSI period
+        smoothing_period: RSI smoothing EMA period
+        wilders_period: Volatility smoothing period
+        factor: Band multiplier
+
+    Returns:
+        Tuple of (qqe, upper_band, lower_band) arrays
+    """
+    ...
+
+def ao(
+    high: NDArray[np.float64],
+    low: NDArray[np.float64],
+) -> NDArray[np.float64]:
+    """Awesome Oscillator."""
+    ...
+
+def bulls_power(
+    high: NDArray[np.float64],
+    low: NDArray[np.float64],
+    close: NDArray[np.float64],
+    period: int,
+    out: NDArray[np.float64] | None = None,
+) -> NDArray[np.float64]:
+    """Bulls Power."""
+    ...
+
+def bears_power(
+    high: NDArray[np.float64],
+    low: NDArray[np.float64],
+    close: NDArray[np.float64],
+    period: int,
+    out: NDArray[np.float64] | None = None,
+) -> NDArray[np.float64]:
+    """Bears Power."""
+    ...
+
+def demarker(
+    high: NDArray[np.float64],
+    low: NDArray[np.float64],
+    period: int = 14,
+    out: NDArray[np.float64] | None = None,
+) -> NDArray[np.float64]:
+    """DeMarker."""
+    ...
+
+def osma(
+    data: NDArray[np.float64],
+    fast_period: int = 12,
+    slow_period: int = 26,
+    signal_period: int = 9,
+    out: NDArray[np.float64] | None = None,
+) -> NDArray[np.float64]:
+    """OSMA."""
+    ...
+
+def vortex(
+    high: NDArray[np.float64],
+    low: NDArray[np.float64],
+    close: NDArray[np.float64],
+    period: int = 14,
+) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """Vortex indicator."""
+    ...
+
+def rvi(
+    open: NDArray[np.float64],
+    high: NDArray[np.float64],
+    low: NDArray[np.float64],
+    close: NDArray[np.float64],
+    period: int = 10,
+    out: NDArray[np.float64] | None = None,
+) -> NDArray[np.float64]:
+    """Relative Vigor Index."""
+    ...
+
+def dpo(
+    data: NDArray[np.float64],
+    period: int,
+    out: NDArray[np.float64] | None = None,
+) -> NDArray[np.float64]:
+    """Detrended Price Oscillator."""
+    ...
+
+def connors_rsi(
+    data: NDArray[np.float64],
+    rsi_period: int = 3,
+    streak_period: int = 2,
+    rank_period: int = 100,
+    out: NDArray[np.float64] | None = None,
+) -> NDArray[np.float64]:
+    """Connors RSI."""
+    ...
+
+def stc(
+    data: NDArray[np.float64],
+    fast_period: int = 23,
+    slow_period: int = 50,
+    cycle_period: int = 10,
+    smooth_period: int = 3,
+    out: NDArray[np.float64] | None = None,
+) -> NDArray[np.float64]:
+    """Schaff Trend Cycle."""
+    ...
+
+def laguerre_rsi(
+    data: NDArray[np.float64],
+    gamma: float = 0.5,
+    out: NDArray[np.float64] | None = None,
+) -> NDArray[np.float64]:
+    """Laguerre RSI."""
+    ...
+
+def dss_bressert(
+    high: NDArray[np.float64],
+    low: NDArray[np.float64],
+    close: NDArray[np.float64],
+    stochastic_period: int = 14,
+    ema_period: int = 5,
+    out: NDArray[np.float64] | None = None,
+) -> NDArray[np.float64]:
+    """Double Smoothed Stochastic Bressert."""
+    ...
+
+def supertrend(
+    high: NDArray[np.float64],
+    low: NDArray[np.float64],
+    close: NDArray[np.float64],
+    period: int = 10,
+    multiplier: float = 3.0,
+) -> Tuple[
+    NDArray[np.float64],
+    NDArray[np.float64],
+    NDArray[np.float64],
+    NDArray[np.float64],
+]:
+    """Super Trend."""
+    ...
+
 def stochastic(
     high: NDArray[np.float64],
     low: NDArray[np.float64],
@@ -183,6 +352,59 @@ def adx(
     """
     ...
 
+def ichimoku(
+    high: NDArray[np.float64],
+    low: NDArray[np.float64],
+    close: NDArray[np.float64],
+    tenkan_period: int = 9,
+    kijun_period: int = 26,
+    senkou_b_period: int = 52,
+    displacement: int = 26,
+) -> Tuple[
+    NDArray[np.float64],
+    NDArray[np.float64],
+    NDArray[np.float64],
+    NDArray[np.float64],
+    NDArray[np.float64],
+]:
+    """Ichimoku Kinko Hyo.
+
+    Returns:
+        Tuple of (tenkan, kijun, senkou_a, senkou_b, chikou) arrays
+    """
+    ...
+
+def hma(
+    data: NDArray[np.float64],
+    period: int,
+    out: NDArray[np.float64] | None = None,
+) -> NDArray[np.float64]:
+    """Hull Moving Average."""
+    ...
+
+def gaussian_filter(
+    data: NDArray[np.float64],
+    period: int = 20,
+    sigma: float = 0.5,
+    out: NDArray[np.float64] | None = None,
+) -> NDArray[np.float64]:
+    """Gaussian smoothing filter."""
+    ...
+
+def gaussian_channel(
+    data: NDArray[np.float64],
+    period: int = 20,
+    sigma: float = 0.5,
+    multiplier: float = 2.0,
+) -> Tuple[
+    NDArray[np.float64],
+    NDArray[np.float64],
+    NDArray[np.float64],
+    NDArray[np.float64],
+]:
+    """Gaussian Channel."""
+    ...
+
 # Volatility Indicators
 
 def atr(
@@ -225,6 +447,83 @@ def true_range(
     """
     ...
 
+def chop(
+    high: NDArray[np.float64],
+    low: NDArray[np.float64],
+    close: NDArray[np.float64],
+    period: int,
+    out: NDArray[np.float64] | None = None,
+) -> NDArray[np.float64]:
+    """Choppiness Index."""
+    ...
+
+def ulcer_index(
+    data: NDArray[np.float64],
+    period: int,
+    out: NDArray[np.float64] | None = None,
+) -> NDArray[np.float64]:
+    """Ulcer Index."""
+    ...
+
+def hurst(
+    data: NDArray[np.float64],
+    period: int,
+    out: NDArray[np.float64] | None = None,
+) -> NDArray[np.float64]:
+    """Hurst Exponent."""
+    ...
+
+def autocorr(
+    data: NDArray[np.float64],
+    period: int = 32,
+    lag: int = 1,
+    out: NDArray[np.float64] | None = None,
+) -> NDArray[np.float64]:
+    """Autocorrelation."""
+    ...
+
+def hma_atr_bands(
+    high: NDArray[np.float64],
+    low: NDArray[np.float64],
+    close: NDArray[np.float64],
+    hma_period: int = 21,
+    atr_period: int = 14,
+    atr_multiplier: float = 2.0,
+) -> Tuple[NDArray[np.float64], NDArray[np.float64], NDArray[np.float64]]:
+    """HMA ATR Bands."""
+    ...
+
+def hma_bollinger_bands(
+    data: NDArray[np.float64],
+    hma_period: int = 21,
+    std_period: int = 20,
+    std_multiplier: float = 2.0,
+) -> Tuple[NDArray[np.float64], NDArray[np.float64], NDArray[np.float64]]:
+    """HMA Bollinger Bands."""
+    ...
+
+def vwap_atr_bands(
+    high: NDArray[np.float64],
+    low: NDArray[np.float64],
+    close: NDArray[np.float64],
+    volume: NDArray[np.float64],
+    atr_period: int = 14,
+    atr_multiplier: float = 2.0,
+) -> Tuple[NDArray[np.float64], NDArray[np.float64], NDArray[np.float64]]:
+    """VWAP ATR Bands."""
+    ...
+
+def vwap_bollinger_bands(
+    high: NDArray[np.float64],
+    low: NDArray[np.float64],
+    close: NDArray[np.float64],
+    volume: NDArray[np.float64],
+    std_period: int = 20,
+    std_multiplier: float = 2.0,
+) -> Tuple[NDArray[np.float64], NDArray[np.float64], NDArray[np.float64]]:
+    """VWAP Bollinger Bands."""
+    ...
+
 def bollinger(
     data: NDArray[np.float64],
     period: int = 20,
@@ -253,6 +552,20 @@ def donchian(
         high: High prices
         low: Low prices
         period: Lookback period (default: 20)
+
+    Returns:
+        Tuple of (upper, middle, lower) arrays
+    """
+    ...
+
+def keltner_channel(
+    high: NDArray[np.float64],
+    low: NDArray[np.float64],
+    close: NDArray[np.float64],
+    period: int = 20,
+    atr_multiplier: float = 2.0,
+) -> Tuple[NDArray[np.float64], NDArray[np.float64], NDArray[np.float64]]:
+    """Keltner Channel.
 
     Returns:
         Tuple of (upper, middle, lower) arrays

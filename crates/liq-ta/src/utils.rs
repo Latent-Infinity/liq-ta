@@ -250,4 +250,35 @@ mod tests {
         let all_nan = vec![f64::NAN, f64::NAN, f64::NAN];
         assert_eq!(count_nan_prefix(&all_nan), 3);
     }
+
+    #[test]
+    fn test_internal_invalid_helpers() {
+        assert!(is_invalid(f64::NAN));
+        assert!(is_invalid(f64::INFINITY));
+        assert!(is_invalid(f64::NEG_INFINITY));
+        assert!(!is_invalid(1.0_f64));
+
+        let data = vec![1.0_f64, f64::NAN, f64::INFINITY, -2.0, f64::NEG_INFINITY];
+        let mask = build_invalid_mask(&data);
+        assert_eq!(mask, vec![0_u8, 1, 1, 0, 1]);
+
+        assert_eq!(init_invalid_count(&mask, 0, 5), 3);
+        assert_eq!(init_invalid_count(&mask, 1, 3), 2);
+
+        let mut count = 2_usize;
+        update_invalid_count(&mut count, true, false);
+        assert_eq!(count, 1);
+        update_invalid_count(&mut count, false, true);
+        assert_eq!(count, 2);
+        update_invalid_count(&mut count, true, true);
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn test_boundary_and_relative_nan_paths() {
+        assert!(!approx_eq(1.0_f64, 1.1, 0.1));
+        assert!(approx_eq_relative(f64::NAN, f64::NAN, 1e-10));
+        assert!(!approx_eq_relative(f64::NAN, 1.0, 1e-10));
+        assert!(!approx_eq_relative(1.0, f64::NAN, 1e-10));
+    }
 }
