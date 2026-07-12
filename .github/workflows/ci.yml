@@ -78,17 +78,11 @@ jobs:
 
       - name: Build and install package
         working-directory: crates/liq-ta-python
-        shell: bash
-        run: |
-          source .venv/bin/activate || .venv/Scripts/activate
-          maturin develop
+        run: uv run maturin develop
 
       - name: Run Python tests
         working-directory: crates/liq-ta-python
-        shell: bash
-        run: |
-          source .venv/bin/activate || .venv/Scripts/activate
-          pytest tests/ -v
+        run: uv run pytest tests/ -v
 
   build-wheels:
     name: Build wheels (${{ matrix.os }})
@@ -104,7 +98,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           working-directory: crates/liq-ta-python
-          args: --release --out dist
+          args: --release --out dist --find-interpreter
           sccache: 'true'
           manylinux: auto
 

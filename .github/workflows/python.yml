@@ -58,7 +58,7 @@ jobs:
 
       - name: Run tests
         working-directory: crates/liq-ta-python
-        run: pytest tests/ -v
+        run: python -m pytest -o pythonpath= tests/ -v
 
   build-wheels:
     name: Build wheels on ${{ matrix.os }}
