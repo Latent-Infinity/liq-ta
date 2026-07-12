@@ -57,8 +57,8 @@ jobs:
           python -m pip install --no-index --find-links dist liq-ta
 
       - name: Run tests
-        working-directory: crates/liq-ta-python
-        run: python -m pytest tests/ -v
+        working-directory: ${{ runner.temp }}
+        run: python -m pytest "${{ github.workspace }}/crates/liq-ta-python/tests" -v
 
   build-wheels:
     name: Build wheels on ${{ matrix.os }}
