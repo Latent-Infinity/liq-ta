@@ -17,6 +17,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  PYO3_USE_ABI3_FORWARD_COMPATIBILITY: 1
 
 jobs:
   test:
@@ -51,7 +52,9 @@ jobs:
 
       - name: Build and install package
         working-directory: crates/liq-ta-python
-        run: maturin develop
+        run: |
+          maturin build --release --out dist
+          python -m pip install --no-index --find-links dist liq-ta
 
       - name: Run tests
         working-directory: crates/liq-ta-python

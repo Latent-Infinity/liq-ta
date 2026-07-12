@@ -480,8 +480,8 @@ fn williams_r_f64_index_tracking(
     };
 
     // Main loop for remaining values - TA-Lib's lazy rescan algorithm
-    let mut trailing_idx = 1usize;
     for today in (lookback + 1)..n {
+        let trailing_idx = today - lookback;
         // Check if lowest went out of window
         let mut tmp = low[today];
         if lowest_idx < trailing_idx {
@@ -527,8 +527,6 @@ fn williams_r_f64_index_tracking(
         } else {
             -100.0 * (highest - close[today]) / range
         };
-
-        trailing_idx += 1;
     }
 
     Ok(())
