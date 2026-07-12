@@ -58,7 +58,7 @@ jobs:
 
       - name: Run tests
         working-directory: ${{ runner.temp }}
-        run: python -m pytest "${{ github.workspace }}/crates/liq-ta-python/tests" -v
+        run: python -m pytest "${{ github.workspace }}/crates/liq-ta-python/tests" --import-mode=importlib -v
 
   build-wheels:
     name: Build wheels on ${{ matrix.os }}
@@ -88,13 +88,13 @@ jobs:
 
       - name: Build wheel
         working-directory: crates/liq-ta-python
-        run: maturin build --release
+        run: maturin build --release --out dist
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
           name: wheels-${{ matrix.os }}
-          path: crates/liq-ta-python/target/wheels/*.whl
+          path: crates/liq-ta-python/dist/*.whl
 
   # Build wheels for multiple Python versions and platforms
   build-sdist:
@@ -113,13 +113,13 @@ jobs:
 
       - name: Build sdist
         working-directory: crates/liq-ta-python
-        run: maturin sdist
+        run: maturin sdist --out dist
 
       - name: Upload sdist
         uses: actions/upload-artifact@v4
         with:
           name: sdist
-          path: crates/liq-ta-python/target/wheels/*.tar.gz
+          path: crates/liq-ta-python/dist/*.tar.gz
 
   # Optional: publish to PyPI (requires secrets configuration)
   # publish:
