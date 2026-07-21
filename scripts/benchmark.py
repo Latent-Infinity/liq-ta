@@ -8,7 +8,6 @@ Uses Criterion for benchmarking and provides clear, colorful comparison tables.
 
 import json
 import subprocess
-import sys
 from pathlib import Path
 from typing import Dict, List, Optional
 import statistics
@@ -443,7 +442,7 @@ def run(
         invalid = [i for i in indicators if i not in ALL_INDICATORS]
         if invalid:
             console.print(f"[red]Unknown indicators: {', '.join(invalid)}[/red]")
-            console.print(f"\nAvailable indicators:")
+            console.print("[red]Available indicators:[/red]")
             console.print(f"  {', '.join(ALL_INDICATORS)}")
             raise typer.Exit(1)
         to_run = indicators
