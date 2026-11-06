@@ -41,6 +41,14 @@ impl OutputDest {
     }
 }
 
+fn write_csv_field(writer: &mut dyn Write, field: &str) -> io::Result<()> {
+    if field.contains([',', '"', '\r', '\n']) {
+        write!(writer, "\"{}\"", field.replace('"', "\"\""))
+    } else {
+        writer.write_all(field.as_bytes())
+    }
+}
+
 /// Write single-column indicator output to CSV.
 ///
 /// # Arguments
@@ -66,16 +74,17 @@ pub fn write_single_output(
 
     // Write header
     if dates.is_some() {
-        writeln!(writer, "date,{header}")?;
-    } else {
-        writeln!(writer, "{header}")?;
+        write!(writer, "date,")?;
     }
+    write_csv_field(&mut writer, header)?;
+    writeln!(writer)?;
 
     // Write data rows, skipping lookback period
     for i in lookback..output.len() {
         if let Some(dates) = dates {
             if i < dates.len() {
-                write!(writer, "{},", dates[i])?;
+                write_csv_field(&mut writer, &dates[i])?;
+                write!(writer, ",")?;
             } else {
                 write!(writer, ",")?;
             }
@@ -118,16 +127,17 @@ pub fn write_multi_output(
     let mut writer = dest.writer()?;
 
     // Write header
-    if dates.is_some() {
+    let has_dates = dates.is_some();
+    if has_dates {
         write!(writer, "date")?;
-        for (name, _) in columns {
-            write!(writer, ",{name}")?;
-        }
-        writeln!(writer)?;
-    } else {
-        let headers: Vec<&str> = columns.iter().map(|(name, _)| *name).collect();
-        writeln!(writer, "{}", headers.join(","))?;
     }
+    for (idx, (name, _)) in columns.iter().enumerate() {
+        if has_dates || idx > 0 {
+            write!(writer, ",")?;
+        }
+        write_csv_field(&mut writer, name)?;
+    }
+    writeln!(writer)?;
 
     // Get length from first column
     let len = columns[0].1.len();
@@ -137,7 +147,7 @@ pub fn write_multi_output(
         if let Some(dates) = dates
             && i < dates.len()
         {
-            write!(writer, "{}", dates[i])?;
+            write_csv_field(&mut writer, &dates[i])?;
         }
 
         for (idx, (_, values)) in columns.iter().enumerate() {
@@ -180,6 +190,48 @@ pub fn write_to_stdout(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn single_output_preserves_date_with_csv_special_characters() {
+        let path =
+            std::env::temp_dir().join(format!("liq-ta-single-date-{}.csv", std::process::id()));
+        let dates = vec!["quoted \"date\",\ncontinued".to_string()];
+
+        write_to_file(&[1.0], "value,quoted", Some(&dates), 0, &path).unwrap();
+
+        let mut reader = csv::Reader::from_path(&path).unwrap();
+        assert_eq!(reader.headers().unwrap().get(1), Some("value,quoted"));
+        let record = reader.records().next().unwrap().unwrap();
+        assert_eq!(record.get(0), Some(dates[0].as_str()));
+        assert_eq!(record.get(1), Some("1"));
+        assert_eq!(record.len(), 2);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn multi_output_preserves_date_with_csv_special_characters() {
+        let path =
+            std::env::temp_dir().join(format!("liq-ta-multi-date-{}.csv", std::process::id()));
+        let dates = vec!["quoted \"date\",\ncontinued".to_string()];
+        let columns: &[(&str, &[f64])] = &[("first,quoted", &[1.0]), ("second", &[2.0])];
+
+        write_multi_output(
+            columns,
+            Some(&dates),
+            0,
+            &OutputDest::File(path.display().to_string()),
+        )
+        .unwrap();
+
+        let mut reader = csv::Reader::from_path(&path).unwrap();
+        assert_eq!(reader.headers().unwrap().get(1), Some("first,quoted"));
+        let record = reader.records().next().unwrap().unwrap();
+        assert_eq!(record.get(0), Some(dates[0].as_str()));
+        assert_eq!(record.get(1), Some("1"));
+        assert_eq!(record.get(2), Some("2"));
+        assert_eq!(record.len(), 3);
+        std::fs::remove_file(path).unwrap();
+    }
 
     // ==========================================================================
     // Task 3.3 Test Cases
