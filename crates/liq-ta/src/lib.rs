@@ -6,22 +6,16 @@
 //! # Features
 //!
 //! - **Performance**: O(n) algorithms with optimized memory access patterns
-//! - **SIMD**: Portable SIMD acceleration enabled by default (requires nightly Rust)
+//! - **Stable Rust**: Safe chunked numeric kernels with portable scalar lanes
 //! - **Accuracy**: Validated against spec fixtures with documented edge cases
 //! - **Generics**: Works with both `f32` and `f64` data types
 //! - **Safety**: Comprehensive error handling for edge cases
 //! - **Ergonomic**: Simple API with `_into` variants for zero-allocation use
 //!
-//! # SIMD Acceleration
+//! # Numeric Kernels
 //!
-//! This crate uses portable SIMD for high-performance computations and requires
-//! nightly Rust. SIMD provides 2.5-4x speedup for bulk reduction operations.
-//!
-//! SIMD acceleration is used automatically in:
-//! - [`indicators::sma()`] - SIMD for f64 initial window computation
-//! - [`indicators::bollinger()`] - SIMD for f64 initial sum and sum-of-squares
-//! - [`indicators::rolling_stddev`] - SIMD for f64 initial sum and sum-of-squares
-//! - [`kernels::simd`] module - Low-level SIMD kernels (sum, variance, correlation, etc.)
+//! Chunked kernels use safe scalar lanes and may be vectorized by the compiler.
+//! The `kernels::simd` module name remains available for existing callers.
 //!
 //! # Quick Start
 //!
@@ -121,8 +115,6 @@
 //! - **Full-length output**: Output length equals input length (NaN prefix for lookback)
 //! - **Deterministic**: Same inputs always produce identical outputs
 
-// Enable portable_simd feature (requires nightly Rust)
-#![feature(portable_simd)]
 #![deny(missing_docs)]
 #![warn(clippy::all)]
 #![warn(clippy::needless_collect)]
@@ -136,7 +128,7 @@
 #![allow(clippy::doc_markdown)] // Documentation uses finance/math terminology without backticks everywhere
 #![allow(clippy::must_use_candidate)] // API surface is intentionally selective about #[must_use]
 #![allow(clippy::missing_const_for_fn)] // Constness here is not a project requirement
-#![allow(clippy::ptr_as_ptr)] // Raw pointer casts are used in controlled SIMD/generic specializations
+#![allow(clippy::ptr_as_ptr)] // Raw pointer casts are used in controlled type specializations
 #![allow(clippy::transmute_ptr_to_ptr)] // Transmute-based casting is used in audited monomorphization paths
 #![allow(clippy::missing_transmute_annotations)] // Type context is explicit in surrounding code and tests
 #![allow(clippy::items_after_statements)] // Local helper placement keeps kernels adjacent to call-sites

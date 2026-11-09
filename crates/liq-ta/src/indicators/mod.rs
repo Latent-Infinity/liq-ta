@@ -164,7 +164,7 @@ pub use atr::{
     atr, atr_into, atr_lookback, atr_min_len, true_range, true_range_into, true_range_lookback,
 };
 
-// Bollinger Bands (uses SIMD internally for f64 when the simd feature is enabled)
+// Bollinger Bands
 pub use bollinger::{
     Bollinger, BollingerOutput, bollinger, bollinger_into, bollinger_lookback, bollinger_min_len,
     rolling_stddev, rolling_stddev_into,
@@ -220,7 +220,7 @@ pub use rsi::{rsi, rsi_into, rsi_lookback, rsi_min_len};
 // QQE
 pub use qqe::{QqeOutput, qqe, qqe_into, qqe_lookback, qqe_min_len};
 
-// Simple Moving Average (uses SIMD internally for f64 when the simd feature is enabled)
+// Simple Moving Average
 pub use sma::{sma, sma_from_idx_into, sma_into, sma_lookback, sma_min_len};
 
 // Stochastic Oscillator

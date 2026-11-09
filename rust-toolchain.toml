@@ -1,6 +1,4 @@
-# Nightly toolchain for portable SIMD support
-# This branch uses nightly features for performance optimization
-
 [toolchain]
-channel = "nightly"
+channel = "1.98.1"
+profile = "minimal"
 components = ["rustfmt", "clippy"]

@@ -1,42 +1,20 @@
-//! SIMD-accelerated kernels for high-performance computations.
+//! Chunked numeric kernels.
 //!
-//! This module provides SIMD-optimized implementations of common operations
-//! used in technical analysis indicators. These kernels use Rust's portable
-//! SIMD feature (`std::simd`) available on nightly.
-//!
-//! # Available Kernels
-//!
-//! - [`sum_f64`]: SIMD-accelerated sum reduction for f64 slices
-//! - [`sum_f32`]: SIMD-accelerated sum reduction for f32 slices
-//! - [`min_f64`]: SIMD-accelerated minimum reduction for f64 slices
-//! - [`max_f64`]: SIMD-accelerated maximum reduction for f64 slices
-//!
-//! # Performance
-//!
-//! These kernels provide 2-8x speedups over scalar implementations depending
-//! on data size and CPU architecture. They work best with large arrays
-//! (>64 elements) where SIMD overhead is amortized.
-//!
-//! # Example
-//!
-//! ```ignore
-//! use liq_ta::kernels::simd;
-//!
-//! let data: Vec<f64> = (0..1000).map(|x| x as f64).collect();
-//! let sum = simd::sum_f64(&data);
-//! ```
+//! The `simd` module name is retained for compatibility. Operations use safe
+//! scalar lanes; the compiler may vectorize them for the target platform.
 
-use std::simd::{Select, f32x8, f64x4, num::SimdFloat};
+mod scalar_backend;
+use scalar_backend::{F32x8, F64x4};
 
-/// The number of f64 elements processed per SIMD lane.
+/// The number of f64 elements processed per lane group.
 pub const F64_LANES: usize = 4;
 
-/// The number of f32 elements processed per SIMD lane.
+/// The number of f32 elements processed per lane group.
 pub const F32_LANES: usize = 8;
 
-/// Computes the sum of a slice of f64 values using SIMD.
+/// Computes the sum of a slice of f64 values in chunks.
 ///
-/// This function processes 4 elements at a time using 256-bit SIMD vectors,
+/// This function processes 4 elements at a time in fixed-width lane groups,
 /// then handles any remaining elements with scalar operations.
 ///
 /// # Arguments
@@ -49,9 +27,8 @@ pub const F32_LANES: usize = 8;
 ///
 /// # Performance
 ///
-/// - Uses 4-wide SIMD (f64x4) for the main loop
+/// - Uses four lanes (f64x4) for the main loop
 /// - Handles tail elements with scalar fallback
-/// - Expected 2-4x speedup over scalar for large arrays
 ///
 /// # Example
 ///
@@ -69,18 +46,18 @@ pub fn sum_f64(data: &[f64]) -> f64 {
     let chunks = data.len() / F64_LANES;
     let remainder = data.len() % F64_LANES;
 
-    // SIMD accumulator
-    let mut acc = f64x4::splat(0.0);
+    // lane accumulator
+    let mut acc = F64x4::splat(0.0);
 
     // Process chunks of 4 elements
     for i in 0..chunks {
         let offset = i * F64_LANES;
-        // Load 4 elements into SIMD vector
-        let chunk = f64x4::from_slice(&data[offset..offset + F64_LANES]);
+        // Load 4 elements into lane group
+        let chunk = F64x4::from_slice(&data[offset..offset + F64_LANES]);
         acc += chunk;
     }
 
-    // Reduce SIMD accumulator to scalar
+    // Reduce lane accumulator to scalar
     let mut sum = acc.reduce_sum();
 
     // Handle remaining elements
@@ -92,9 +69,9 @@ pub fn sum_f64(data: &[f64]) -> f64 {
     sum
 }
 
-/// Computes the sum of a slice of f32 values using SIMD.
+/// Computes the sum of a slice of f32 values in chunks.
 ///
-/// This function processes 8 elements at a time using 256-bit SIMD vectors,
+/// This function processes 8 elements at a time in fixed-width lane groups,
 /// then handles any remaining elements with scalar operations.
 ///
 /// # Arguments
@@ -107,9 +84,8 @@ pub fn sum_f64(data: &[f64]) -> f64 {
 ///
 /// # Performance
 ///
-/// - Uses 8-wide SIMD (f32x8) for the main loop
+/// - Uses eight lanes (f32x8) for the main loop
 /// - Handles tail elements with scalar fallback
-/// - Expected 4-8x speedup over scalar for large arrays
 #[inline]
 pub fn sum_f32(data: &[f32]) -> f32 {
     if data.is_empty() {
@@ -119,17 +95,17 @@ pub fn sum_f32(data: &[f32]) -> f32 {
     let chunks = data.len() / F32_LANES;
     let remainder = data.len() % F32_LANES;
 
-    // SIMD accumulator
-    let mut acc = f32x8::splat(0.0);
+    // lane accumulator
+    let mut acc = F32x8::splat(0.0);
 
     // Process chunks of 8 elements
     for i in 0..chunks {
         let offset = i * F32_LANES;
-        let chunk = f32x8::from_slice(&data[offset..offset + F32_LANES]);
+        let chunk = F32x8::from_slice(&data[offset..offset + F32_LANES]);
         acc += chunk;
     }
 
-    // Reduce SIMD accumulator to scalar
+    // Reduce lane accumulator to scalar
     let mut sum = acc.reduce_sum();
 
     // Handle remaining elements
@@ -141,7 +117,7 @@ pub fn sum_f32(data: &[f32]) -> f32 {
     sum
 }
 
-/// Computes the minimum of a slice of f64 values using SIMD.
+/// Computes the minimum of a slice of f64 values in chunks.
 ///
 /// # Arguments
 ///
@@ -164,20 +140,20 @@ pub fn min_f64(data: &[f64]) -> f64 {
     let remainder = data.len() % F64_LANES;
     let mut invalid = false;
 
-    // SIMD accumulator initialized to infinity
-    let mut acc = f64x4::splat(f64::INFINITY);
-    let mut invalid_mask = f64x4::splat(0.0).is_nan();
+    // lane accumulator initialized to infinity
+    let mut acc = F64x4::splat(f64::INFINITY);
+    let mut invalid_mask = F64x4::splat(0.0).is_nan();
 
     // Process chunks of 4 elements
     for i in 0..chunks {
         let offset = i * F64_LANES;
-        let chunk = f64x4::from_slice(&data[offset..offset + F64_LANES]);
+        let chunk = F64x4::from_slice(&data[offset..offset + F64_LANES]);
         let mask = chunk.is_finite();
         invalid_mask |= !mask;
         acc = acc.simd_min(chunk);
     }
 
-    // Reduce SIMD accumulator to scalar
+    // Reduce lane accumulator to scalar
     let mut min_val = acc.reduce_min();
 
     // Handle remaining elements
@@ -199,7 +175,7 @@ pub fn min_f64(data: &[f64]) -> f64 {
     }
 }
 
-/// Computes the maximum of a slice of f64 values using SIMD.
+/// Computes the maximum of a slice of f64 values in chunks.
 ///
 /// # Arguments
 ///
@@ -222,20 +198,20 @@ pub fn max_f64(data: &[f64]) -> f64 {
     let remainder = data.len() % F64_LANES;
     let mut invalid = false;
 
-    // SIMD accumulator initialized to negative infinity
-    let mut acc = f64x4::splat(f64::NEG_INFINITY);
-    let mut invalid_mask = f64x4::splat(0.0).is_nan();
+    // lane accumulator initialized to negative infinity
+    let mut acc = F64x4::splat(f64::NEG_INFINITY);
+    let mut invalid_mask = F64x4::splat(0.0).is_nan();
 
     // Process chunks of 4 elements
     for i in 0..chunks {
         let offset = i * F64_LANES;
-        let chunk = f64x4::from_slice(&data[offset..offset + F64_LANES]);
+        let chunk = F64x4::from_slice(&data[offset..offset + F64_LANES]);
         let mask = chunk.is_finite();
         invalid_mask |= !mask;
         acc = acc.simd_max(chunk);
     }
 
-    // Reduce SIMD accumulator to scalar
+    // Reduce lane accumulator to scalar
     let mut max_val = acc.reduce_max();
 
     // Handle remaining elements
@@ -257,7 +233,7 @@ pub fn max_f64(data: &[f64]) -> f64 {
     }
 }
 
-/// Computes the minimum of a slice of f32 values using SIMD.
+/// Computes the minimum of a slice of f32 values in chunks.
 #[inline]
 pub fn min_f32(data: &[f32]) -> f32 {
     if data.is_empty() {
@@ -268,12 +244,12 @@ pub fn min_f32(data: &[f32]) -> f32 {
     let remainder = data.len() % F32_LANES;
     let mut invalid = false;
 
-    let mut acc = f32x8::splat(f32::INFINITY);
-    let mut invalid_mask = f32x8::splat(0.0).is_nan();
+    let mut acc = F32x8::splat(f32::INFINITY);
+    let mut invalid_mask = F32x8::splat(0.0).is_nan();
 
     for i in 0..chunks {
         let offset = i * F32_LANES;
-        let chunk = f32x8::from_slice(&data[offset..offset + F32_LANES]);
+        let chunk = F32x8::from_slice(&data[offset..offset + F32_LANES]);
         let mask = chunk.is_finite();
         invalid_mask |= !mask;
         acc = acc.simd_min(chunk);
@@ -299,7 +275,7 @@ pub fn min_f32(data: &[f32]) -> f32 {
     }
 }
 
-/// Computes the maximum of a slice of f32 values using SIMD.
+/// Computes the maximum of a slice of f32 values in chunks.
 #[inline]
 pub fn max_f32(data: &[f32]) -> f32 {
     if data.is_empty() {
@@ -310,12 +286,12 @@ pub fn max_f32(data: &[f32]) -> f32 {
     let remainder = data.len() % F32_LANES;
     let mut invalid = false;
 
-    let mut acc = f32x8::splat(f32::NEG_INFINITY);
-    let mut invalid_mask = f32x8::splat(0.0).is_nan();
+    let mut acc = F32x8::splat(f32::NEG_INFINITY);
+    let mut invalid_mask = F32x8::splat(0.0).is_nan();
 
     for i in 0..chunks {
         let offset = i * F32_LANES;
-        let chunk = f32x8::from_slice(&data[offset..offset + F32_LANES]);
+        let chunk = F32x8::from_slice(&data[offset..offset + F32_LANES]);
         let mask = chunk.is_finite();
         invalid_mask |= !mask;
         acc = acc.simd_max(chunk);
@@ -341,7 +317,7 @@ pub fn max_f32(data: &[f32]) -> f32 {
     }
 }
 
-/// Computes sum and count of non-NaN elements simultaneously using SIMD.
+/// Computes sum and count of non-NaN elements simultaneously in chunks.
 ///
 /// This is useful for SMA where we need to track NaN counts efficiently.
 ///
@@ -357,13 +333,13 @@ pub fn sum_and_count_f64(data: &[f64]) -> (f64, usize) {
     let chunks = data.len() / F64_LANES;
     let remainder = data.len() % F64_LANES;
 
-    let mut sum_acc = f64x4::splat(0.0);
+    let mut sum_acc = F64x4::splat(0.0);
     let mut count = 0usize;
 
     // Process chunks of 4 elements
     for i in 0..chunks {
         let offset = i * F64_LANES;
-        let chunk = f64x4::from_slice(&data[offset..offset + F64_LANES]);
+        let chunk = F64x4::from_slice(&data[offset..offset + F64_LANES]);
 
         let mask = chunk.is_finite();
         let mask_arr = mask.to_array();
@@ -374,7 +350,7 @@ pub fn sum_and_count_f64(data: &[f64]) -> (f64, usize) {
         }
 
         // Replace non-finite values with 0 for sum
-        let zero = f64x4::splat(0.0);
+        let zero = F64x4::splat(0.0);
         let clean_chunk = mask.select(chunk, zero);
         sum_acc += clean_chunk;
     }
@@ -397,7 +373,7 @@ pub fn sum_and_count_f64(data: &[f64]) -> (f64, usize) {
 // Sum of Squares (for Variance/Standard Deviation)
 // =============================================================================
 
-/// Computes the sum of squares of a slice of f64 values using SIMD.
+/// Computes the sum of squares of a slice of f64 values in chunks.
 ///
 /// This is useful for variance and standard deviation calculations.
 ///
@@ -407,8 +383,7 @@ pub fn sum_and_count_f64(data: &[f64]) -> (f64, usize) {
 /// ```
 ///
 /// # Performance
-/// - Uses 4-wide SIMD for parallel squaring and summing
-/// - Expected 3-4x speedup over scalar for large arrays
+/// - Uses four lanes for independent squaring and summing
 #[inline]
 pub fn sum_of_squares_f64(data: &[f64]) -> f64 {
     if data.is_empty() {
@@ -418,11 +393,11 @@ pub fn sum_of_squares_f64(data: &[f64]) -> f64 {
     let chunks = data.len() / F64_LANES;
     let remainder = data.len() % F64_LANES;
 
-    let mut acc = f64x4::splat(0.0);
+    let mut acc = F64x4::splat(0.0);
 
     for i in 0..chunks {
         let offset = i * F64_LANES;
-        let chunk = f64x4::from_slice(&data[offset..offset + F64_LANES]);
+        let chunk = F64x4::from_slice(&data[offset..offset + F64_LANES]);
         acc += chunk * chunk;
     }
 
@@ -436,7 +411,7 @@ pub fn sum_of_squares_f64(data: &[f64]) -> f64 {
     sum_sq
 }
 
-/// Computes sum and sum of squares simultaneously using SIMD.
+/// Computes sum and sum of squares simultaneously in chunks.
 ///
 /// This is optimized for Bollinger Bands which needs both values.
 ///
@@ -445,7 +420,7 @@ pub fn sum_of_squares_f64(data: &[f64]) -> f64 {
 ///
 /// # Performance
 /// - Single pass through the data
-/// - Uses SIMD for both accumulations in parallel
+/// - Uses lane operations for both accumulations in one pass
 #[inline]
 pub fn sum_and_sum_sq_f64(data: &[f64]) -> (f64, f64) {
     if data.is_empty() {
@@ -455,12 +430,12 @@ pub fn sum_and_sum_sq_f64(data: &[f64]) -> (f64, f64) {
     let chunks = data.len() / F64_LANES;
     let remainder = data.len() % F64_LANES;
 
-    let mut sum_acc = f64x4::splat(0.0);
-    let mut sum_sq_acc = f64x4::splat(0.0);
+    let mut sum_acc = F64x4::splat(0.0);
+    let mut sum_sq_acc = F64x4::splat(0.0);
 
     for i in 0..chunks {
         let offset = i * F64_LANES;
-        let chunk = f64x4::from_slice(&data[offset..offset + F64_LANES]);
+        let chunk = F64x4::from_slice(&data[offset..offset + F64_LANES]);
         sum_acc += chunk;
         sum_sq_acc += chunk * chunk;
     }
@@ -477,7 +452,7 @@ pub fn sum_and_sum_sq_f64(data: &[f64]) -> (f64, f64) {
     (sum, sum_sq)
 }
 
-/// Computes sum, sum of squares, and count of non-NaN elements using SIMD.
+/// Computes sum, sum of squares, and count of non-NaN elements in chunks.
 ///
 /// This is optimized for Bollinger Bands when the data may contain NaN values.
 /// NaN values are excluded from both sums and the count.
@@ -487,7 +462,7 @@ pub fn sum_and_sum_sq_f64(data: &[f64]) -> (f64, f64) {
 ///
 /// # Performance
 /// - Single pass through the data
-/// - Uses SIMD for both accumulations in parallel
+/// - Uses lane operations for both accumulations in one pass
 /// - Masks out NaN values before accumulation
 #[inline]
 pub fn sum_and_sum_sq_and_count_f64(data: &[f64]) -> (f64, f64, usize) {
@@ -498,14 +473,14 @@ pub fn sum_and_sum_sq_and_count_f64(data: &[f64]) -> (f64, f64, usize) {
     let chunks = data.len() / F64_LANES;
     let remainder = data.len() % F64_LANES;
 
-    let mut sum_acc = f64x4::splat(0.0);
-    let mut sum_sq_acc = f64x4::splat(0.0);
+    let mut sum_acc = F64x4::splat(0.0);
+    let mut sum_sq_acc = F64x4::splat(0.0);
     let mut count = 0usize;
-    let zero = f64x4::splat(0.0);
+    let zero = F64x4::splat(0.0);
 
     for i in 0..chunks {
         let offset = i * F64_LANES;
-        let chunk = f64x4::from_slice(&data[offset..offset + F64_LANES]);
+        let chunk = F64x4::from_slice(&data[offset..offset + F64_LANES]);
 
         // Count finite values in this chunk
         let arr = chunk.to_array();
@@ -574,7 +549,7 @@ pub fn stddev_f64(data: &[f64]) -> f64 {
 // Dot Product (for WMA, Correlations)
 // =============================================================================
 
-/// Computes the dot product of two slices using SIMD.
+/// Computes the dot product of two slices in chunks.
 ///
 /// # Formula
 /// ```text
@@ -592,8 +567,7 @@ pub fn stddev_f64(data: &[f64]) -> f64 {
 /// Panics if slices have different lengths.
 ///
 /// # Performance
-/// - Uses 4-wide SIMD for parallel multiply-accumulate
-/// - Expected 3-4x speedup over scalar for large arrays
+/// - Uses four lanes for independent multiply-accumulate operations
 #[inline]
 pub fn dot_product_f64(a: &[f64], b: &[f64]) -> f64 {
     assert_eq!(
@@ -609,12 +583,12 @@ pub fn dot_product_f64(a: &[f64], b: &[f64]) -> f64 {
     let chunks = a.len() / F64_LANES;
     let remainder = a.len() % F64_LANES;
 
-    let mut acc = f64x4::splat(0.0);
+    let mut acc = F64x4::splat(0.0);
 
     for i in 0..chunks {
         let offset = i * F64_LANES;
-        let chunk_a = f64x4::from_slice(&a[offset..offset + F64_LANES]);
-        let chunk_b = f64x4::from_slice(&b[offset..offset + F64_LANES]);
+        let chunk_a = F64x4::from_slice(&a[offset..offset + F64_LANES]);
+        let chunk_b = F64x4::from_slice(&b[offset..offset + F64_LANES]);
         acc += chunk_a * chunk_b;
     }
 
@@ -628,7 +602,7 @@ pub fn dot_product_f64(a: &[f64], b: &[f64]) -> f64 {
     dot
 }
 
-/// Computes weighted sum using SIMD.
+/// Computes weighted sum in chunks.
 ///
 /// This is useful for WMA (Weighted Moving Average).
 ///
@@ -647,7 +621,7 @@ pub fn weighted_sum_f64(data: &[f64], weights: &[f64]) -> f64 {
 // Element-wise Operations
 // =============================================================================
 
-/// Multiplies all elements by a scalar and sums the result using SIMD.
+/// Multiplies all elements by a scalar and sums the result in chunks.
 ///
 /// # Formula
 /// ```text
@@ -664,12 +638,12 @@ pub fn scaled_sum_f64(data: &[f64], scalar: f64) -> f64 {
     let chunks = data.len() / F64_LANES;
     let remainder = data.len() % F64_LANES;
 
-    let scalar_vec = f64x4::splat(scalar);
-    let mut acc = f64x4::splat(0.0);
+    let scalar_vec = F64x4::splat(scalar);
+    let mut acc = F64x4::splat(0.0);
 
     for i in 0..chunks {
         let offset = i * F64_LANES;
-        let chunk = f64x4::from_slice(&data[offset..offset + F64_LANES]);
+        let chunk = F64x4::from_slice(&data[offset..offset + F64_LANES]);
         acc += chunk * scalar_vec;
     }
 
@@ -700,12 +674,12 @@ pub fn sum_squared_diff_f64(data: &[f64], mean: f64) -> f64 {
     let chunks = data.len() / F64_LANES;
     let remainder = data.len() % F64_LANES;
 
-    let mean_vec = f64x4::splat(mean);
-    let mut acc = f64x4::splat(0.0);
+    let mean_vec = F64x4::splat(mean);
+    let mut acc = F64x4::splat(0.0);
 
     for i in 0..chunks {
         let offset = i * F64_LANES;
-        let chunk = f64x4::from_slice(&data[offset..offset + F64_LANES]);
+        let chunk = F64x4::from_slice(&data[offset..offset + F64_LANES]);
         let diff = chunk - mean_vec;
         acc += diff * diff;
     }
@@ -725,7 +699,7 @@ pub fn sum_squared_diff_f64(data: &[f64], mean: f64) -> f64 {
 // Higher Moments (for Skewness and Kurtosis)
 // =============================================================================
 
-/// Computes all four raw moments (Σx, Σx², Σx³, Σx⁴) in a single SIMD pass.
+/// Computes all four raw moments (Σx, Σx², Σx³, Σx⁴) in a single pass.
 ///
 /// This is optimized for computing skewness and kurtosis together.
 ///
@@ -738,7 +712,7 @@ pub fn sum_squared_diff_f64(data: &[f64], mean: f64) -> f64 {
 ///
 /// # Performance
 /// - Single pass through data
-/// - Uses 4-wide SIMD for all four accumulations in parallel
+/// - Uses four lanes for all four accumulations in one pass
 #[inline]
 pub fn moments_f64(data: &[f64]) -> (f64, f64, f64, f64) {
     if data.is_empty() {
@@ -748,14 +722,14 @@ pub fn moments_f64(data: &[f64]) -> (f64, f64, f64, f64) {
     let chunks = data.len() / F64_LANES;
     let remainder = data.len() % F64_LANES;
 
-    let mut sum_acc = f64x4::splat(0.0);
-    let mut sum_sq_acc = f64x4::splat(0.0);
-    let mut sum_cb_acc = f64x4::splat(0.0);
-    let mut sum_qd_acc = f64x4::splat(0.0);
+    let mut sum_acc = F64x4::splat(0.0);
+    let mut sum_sq_acc = F64x4::splat(0.0);
+    let mut sum_cb_acc = F64x4::splat(0.0);
+    let mut sum_qd_acc = F64x4::splat(0.0);
 
     for i in 0..chunks {
         let offset = i * F64_LANES;
-        let chunk = f64x4::from_slice(&data[offset..offset + F64_LANES]);
+        let chunk = F64x4::from_slice(&data[offset..offset + F64_LANES]);
         let sq = chunk * chunk;
         sum_acc += chunk;
         sum_sq_acc += sq;
@@ -780,7 +754,7 @@ pub fn moments_f64(data: &[f64]) -> (f64, f64, f64, f64) {
     (sum, sum_sq, sum_cb, sum_qd)
 }
 
-/// Computes all four raw moments with NaN tracking in a single SIMD pass.
+/// Computes all four raw moments with NaN tracking in a single pass.
 ///
 /// # Returns
 /// A tuple of (sum, sum_sq, sum_cb, sum_qd, valid_count)
@@ -793,16 +767,16 @@ pub fn moments_and_count_f64(data: &[f64]) -> (f64, f64, f64, f64, usize) {
     let chunks = data.len() / F64_LANES;
     let remainder = data.len() % F64_LANES;
 
-    let mut sum_acc = f64x4::splat(0.0);
-    let mut sum_sq_acc = f64x4::splat(0.0);
-    let mut sum_cb_acc = f64x4::splat(0.0);
-    let mut sum_qd_acc = f64x4::splat(0.0);
+    let mut sum_acc = F64x4::splat(0.0);
+    let mut sum_sq_acc = F64x4::splat(0.0);
+    let mut sum_cb_acc = F64x4::splat(0.0);
+    let mut sum_qd_acc = F64x4::splat(0.0);
     let mut count = 0usize;
-    let zero = f64x4::splat(0.0);
+    let zero = F64x4::splat(0.0);
 
     for i in 0..chunks {
         let offset = i * F64_LANES;
-        let chunk = f64x4::from_slice(&data[offset..offset + F64_LANES]);
+        let chunk = F64x4::from_slice(&data[offset..offset + F64_LANES]);
 
         // Count finite values
         let arr = chunk.to_array();
@@ -842,7 +816,7 @@ pub fn moments_and_count_f64(data: &[f64]) -> (f64, f64, f64, f64, usize) {
     (sum, sum_sq, sum_cb, sum_qd, count)
 }
 
-/// Computes sum of cubes using SIMD.
+/// Computes sum of cubes in chunks.
 ///
 /// # Formula
 /// ```text
@@ -857,11 +831,11 @@ pub fn sum_cubes_f64(data: &[f64]) -> f64 {
     let chunks = data.len() / F64_LANES;
     let remainder = data.len() % F64_LANES;
 
-    let mut acc = f64x4::splat(0.0);
+    let mut acc = F64x4::splat(0.0);
 
     for i in 0..chunks {
         let offset = i * F64_LANES;
-        let chunk = f64x4::from_slice(&data[offset..offset + F64_LANES]);
+        let chunk = F64x4::from_slice(&data[offset..offset + F64_LANES]);
         acc += chunk * chunk * chunk;
     }
 
@@ -875,7 +849,7 @@ pub fn sum_cubes_f64(data: &[f64]) -> f64 {
     sum_cb
 }
 
-/// Computes sum of fourth powers using SIMD.
+/// Computes sum of fourth powers in chunks.
 ///
 /// # Formula
 /// ```text
@@ -890,11 +864,11 @@ pub fn sum_fourth_f64(data: &[f64]) -> f64 {
     let chunks = data.len() / F64_LANES;
     let remainder = data.len() % F64_LANES;
 
-    let mut acc = f64x4::splat(0.0);
+    let mut acc = F64x4::splat(0.0);
 
     for i in 0..chunks {
         let offset = i * F64_LANES;
-        let chunk = f64x4::from_slice(&data[offset..offset + F64_LANES]);
+        let chunk = F64x4::from_slice(&data[offset..offset + F64_LANES]);
         let sq = chunk * chunk;
         acc += sq * sq;
     }
@@ -910,7 +884,7 @@ pub fn sum_fourth_f64(data: &[f64]) -> f64 {
     sum_qd
 }
 
-/// Computes sum of absolute differences from mean using SIMD.
+/// Computes sum of absolute differences from mean in chunks.
 ///
 /// This is used for Mean Absolute Deviation (MAD).
 ///
@@ -927,12 +901,12 @@ pub fn sum_abs_dev_f64(data: &[f64], mean: f64) -> f64 {
     let chunks = data.len() / F64_LANES;
     let remainder = data.len() % F64_LANES;
 
-    let mean_vec = f64x4::splat(mean);
-    let mut acc = f64x4::splat(0.0);
+    let mean_vec = F64x4::splat(mean);
+    let mut acc = F64x4::splat(0.0);
 
     for i in 0..chunks {
         let offset = i * F64_LANES;
-        let chunk = f64x4::from_slice(&data[offset..offset + F64_LANES]);
+        let chunk = F64x4::from_slice(&data[offset..offset + F64_LANES]);
         let diff = chunk - mean_vec;
         acc += diff.abs();
     }
@@ -951,7 +925,7 @@ pub fn sum_abs_dev_f64(data: &[f64], mean: f64) -> f64 {
 // Covariance and Correlation helpers
 // =============================================================================
 
-/// Computes covariance components using SIMD.
+/// Computes covariance components in chunks.
 ///
 /// Returns (sum_xy, sum_x, sum_y, sum_x2, sum_y2) for correlation calculation.
 ///
@@ -972,16 +946,16 @@ pub fn covariance_components_f64(x: &[f64], y: &[f64]) -> (f64, f64, f64, f64, f
     let chunks = x.len() / F64_LANES;
     let remainder = x.len() % F64_LANES;
 
-    let mut sum_xy_acc = f64x4::splat(0.0);
-    let mut sum_x_acc = f64x4::splat(0.0);
-    let mut sum_y_acc = f64x4::splat(0.0);
-    let mut sum_xx_acc = f64x4::splat(0.0);
-    let mut sum_yy_acc = f64x4::splat(0.0);
+    let mut sum_xy_acc = F64x4::splat(0.0);
+    let mut sum_x_acc = F64x4::splat(0.0);
+    let mut sum_y_acc = F64x4::splat(0.0);
+    let mut sum_xx_acc = F64x4::splat(0.0);
+    let mut sum_yy_acc = F64x4::splat(0.0);
 
     for i in 0..chunks {
         let offset = i * F64_LANES;
-        let chunk_x = f64x4::from_slice(&x[offset..offset + F64_LANES]);
-        let chunk_y = f64x4::from_slice(&y[offset..offset + F64_LANES]);
+        let chunk_x = F64x4::from_slice(&x[offset..offset + F64_LANES]);
+        let chunk_y = F64x4::from_slice(&y[offset..offset + F64_LANES]);
 
         sum_xy_acc += chunk_x * chunk_y;
         sum_x_acc += chunk_x;
@@ -1010,7 +984,7 @@ pub fn covariance_components_f64(x: &[f64], y: &[f64]) -> (f64, f64, f64, f64, f
     (sum_xy, sum_x, sum_y, sum_xx, sum_yy)
 }
 
-/// Computes Pearson correlation coefficient using SIMD.
+/// Computes Pearson correlation coefficient in chunks.
 ///
 /// # Formula
 /// ```text
@@ -1039,7 +1013,7 @@ pub fn correlation_f64(x: &[f64], y: &[f64]) -> f64 {
 // True Range helpers (for ATR)
 // =============================================================================
 
-/// Computes the sum of absolute differences using SIMD.
+/// Computes the sum of absolute differences in chunks.
 ///
 /// # Formula
 /// ```text
@@ -1056,12 +1030,12 @@ pub fn sum_abs_diff_f64(a: &[f64], b: &[f64]) -> f64 {
     let chunks = a.len() / F64_LANES;
     let remainder = a.len() % F64_LANES;
 
-    let mut acc = f64x4::splat(0.0);
+    let mut acc = F64x4::splat(0.0);
 
     for i in 0..chunks {
         let offset = i * F64_LANES;
-        let chunk_a = f64x4::from_slice(&a[offset..offset + F64_LANES]);
-        let chunk_b = f64x4::from_slice(&b[offset..offset + F64_LANES]);
+        let chunk_a = F64x4::from_slice(&a[offset..offset + F64_LANES]);
+        let chunk_b = F64x4::from_slice(&b[offset..offset + F64_LANES]);
         let diff = chunk_a - chunk_b;
         acc += diff.abs();
     }
@@ -1080,7 +1054,7 @@ pub fn sum_abs_diff_f64(a: &[f64], b: &[f64]) -> f64 {
 // Lagged Subtraction (for MOM, ROC numerator)
 // =============================================================================
 
-/// Computes lagged subtraction using SIMD: `output[i] = current[i] - lagged[i]`
+/// Computes lagged subtraction in chunks: `output[i] = current[i] - lagged[i]`
 ///
 /// This is optimized for MOM (Momentum) and similar indicators that compute
 /// the difference between current and lagged values.
@@ -1091,8 +1065,7 @@ pub fn sum_abs_diff_f64(a: &[f64], b: &[f64]) -> f64 {
 /// * `output` - Output slice (must have same length as current)
 ///
 /// # Performance
-/// - Uses 4-wide SIMD for parallel subtraction
-/// - Expected 2-4x speedup over scalar for large arrays
+/// - Uses four lanes for independent subtraction
 #[inline]
 pub fn lagged_sub_f64(current: &[f64], lagged: &[f64], output: &mut [f64]) {
     debug_assert_eq!(current.len(), lagged.len());
@@ -1105,8 +1078,8 @@ pub fn lagged_sub_f64(current: &[f64], lagged: &[f64], output: &mut [f64]) {
     // Process chunks of 4 elements
     for i in 0..chunks {
         let offset = i * F64_LANES;
-        let cur_chunk = f64x4::from_slice(&current[offset..offset + F64_LANES]);
-        let lag_chunk = f64x4::from_slice(&lagged[offset..offset + F64_LANES]);
+        let cur_chunk = F64x4::from_slice(&current[offset..offset + F64_LANES]);
+        let lag_chunk = F64x4::from_slice(&lagged[offset..offset + F64_LANES]);
         let result = cur_chunk - lag_chunk;
         result.copy_to_slice(&mut output[offset..offset + F64_LANES]);
     }
@@ -1118,7 +1091,7 @@ pub fn lagged_sub_f64(current: &[f64], lagged: &[f64], output: &mut [f64]) {
     }
 }
 
-/// Computes lagged subtraction with infinity→NaN sanitization using SIMD.
+/// Computes lagged subtraction with infinity→NaN sanitization in chunks.
 ///
 /// This function performs `output[i] = current[i] - lagged[i]` and converts
 /// any resulting infinity values to NaN per project numeric policy.
@@ -1132,16 +1105,16 @@ pub fn lagged_sub_sanitize_f64(current: &[f64], lagged: &[f64], output: &mut [f6
     let chunks = n / F64_LANES;
     let remainder = n % F64_LANES;
 
-    let nan_vec = f64x4::splat(f64::NAN);
+    let nan_vec = F64x4::splat(f64::NAN);
 
     // Process chunks of 4 elements
     for i in 0..chunks {
         let offset = i * F64_LANES;
-        let cur_chunk = f64x4::from_slice(&current[offset..offset + F64_LANES]);
-        let lag_chunk = f64x4::from_slice(&lagged[offset..offset + F64_LANES]);
+        let cur_chunk = F64x4::from_slice(&current[offset..offset + F64_LANES]);
+        let lag_chunk = F64x4::from_slice(&lagged[offset..offset + F64_LANES]);
         let result = cur_chunk - lag_chunk;
 
-        // Convert infinity to NaN using SIMD select
+        // Convert infinity to NaN using the lane mask
         let is_inf = !result.is_finite() & !result.is_nan();
         let sanitized = is_inf.select(nan_vec, result);
 
@@ -1156,7 +1129,7 @@ pub fn lagged_sub_sanitize_f64(current: &[f64], lagged: &[f64], output: &mut [f6
     }
 }
 
-/// Computes lagged subtraction using SIMD for f32.
+/// Computes lagged subtraction in chunks for f32.
 #[inline]
 pub fn lagged_sub_f32(current: &[f32], lagged: &[f32], output: &mut [f32]) {
     debug_assert_eq!(current.len(), lagged.len());
@@ -1169,8 +1142,8 @@ pub fn lagged_sub_f32(current: &[f32], lagged: &[f32], output: &mut [f32]) {
     // Process chunks of 8 elements
     for i in 0..chunks {
         let offset = i * F32_LANES;
-        let cur_chunk = f32x8::from_slice(&current[offset..offset + F32_LANES]);
-        let lag_chunk = f32x8::from_slice(&lagged[offset..offset + F32_LANES]);
+        let cur_chunk = F32x8::from_slice(&current[offset..offset + F32_LANES]);
+        let lag_chunk = F32x8::from_slice(&lagged[offset..offset + F32_LANES]);
         let result = cur_chunk - lag_chunk;
         result.copy_to_slice(&mut output[offset..offset + F32_LANES]);
     }
@@ -1186,7 +1159,7 @@ pub fn lagged_sub_f32(current: &[f32], lagged: &[f32], output: &mut [f32]) {
 // True Range (for ATR, TRANGE indicators)
 // =============================================================================
 
-/// Computes True Range using SIMD: TR = max(hl, |hc|, |lc|)
+/// Computes True Range in chunks: TR = max(hl, |hc|, |lc|)
 ///
 /// True Range = max(high - low, |high - prev_close|, |low - prev_close|)
 ///
@@ -1197,7 +1170,7 @@ pub fn lagged_sub_f32(current: &[f32], lagged: &[f32], output: &mut [f32]) {
 /// * `output` - Output slice (indices 1..n filled, index 0 left unchanged)
 ///
 /// # Performance
-/// - Uses 4-wide SIMD for parallel computation
+/// - Uses four lanes for independent computation
 /// - Processes max(hl, hc, lc) in a single pass
 #[inline]
 pub fn true_range_f64(high: &[f64], low: &[f64], prev_close: &[f64], output: &mut [f64]) {
@@ -1211,17 +1184,17 @@ pub fn true_range_f64(high: &[f64], low: &[f64], prev_close: &[f64], output: &mu
     let chunks = compute_len / F64_LANES;
     let remainder = compute_len % F64_LANES;
 
-    // SIMD hot loop with efficient validity checking
+    // chunked loop with efficient validity checking
     // NaN propagates through subtraction/abs, so check intermediate results instead of inputs
-    let nan_vec = f64x4::splat(f64::NAN);
+    let nan_vec = F64x4::splat(f64::NAN);
 
     for c in 0..chunks {
         let offset = c * F64_LANES;
         let i = offset + 1;
 
-        let h = f64x4::from_slice(&high[i..i + F64_LANES]);
-        let l = f64x4::from_slice(&low[i..i + F64_LANES]);
-        let pc = f64x4::from_slice(&prev_close[offset..offset + F64_LANES]);
+        let h = F64x4::from_slice(&high[i..i + F64_LANES]);
+        let l = F64x4::from_slice(&low[i..i + F64_LANES]);
+        let pc = F64x4::from_slice(&prev_close[offset..offset + F64_LANES]);
 
         // NaN propagates naturally through these operations
         let hl = h - l;
@@ -1276,6 +1249,34 @@ mod tests {
     const EPSILON_F32: f32 = 1e-5;
 
     #[test]
+    fn finite_reductions_ignore_nonfinite_lanes_and_tail() {
+        let values = [
+            3.0,
+            f64::NAN,
+            f64::INFINITY,
+            -2.0,
+            5.0,
+            f64::NEG_INFINITY,
+            0.0,
+            4.0,
+            7.0,
+        ];
+
+        let (sum, squares, count) = sum_and_sum_sq_and_count_f64(&values);
+
+        assert_eq!((sum, squares, count), (17.0, 103.0, 6));
+    }
+
+    #[test]
+    fn f32_reduction_handles_cancellation_and_tail() {
+        let values = [1.0e8_f32, 1.0, -1.0e8, 1.0, 2.0, -2.0, 3.0, -3.0, 5.0];
+
+        let result = sum_f32(&values);
+
+        assert_eq!(result, 6.0);
+    }
+
+    #[test]
     fn test_sum_f64_empty() {
         assert_eq!(sum_f64(&[]), 0.0);
     }
@@ -1293,14 +1294,14 @@ mod tests {
 
     #[test]
     fn test_sum_f64_exact_lanes() {
-        // Exactly 4 elements (one SIMD chunk)
+        // Exactly 4 elements (one chunk)
         let data = vec![1.0, 2.0, 3.0, 4.0];
         assert!((sum_f64(&data) - 10.0).abs() < EPSILON);
     }
 
     #[test]
     fn test_sum_f64_multiple_lanes() {
-        // 8 elements (two SIMD chunks)
+        // 8 elements (two chunks)
         let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
         assert!((sum_f64(&data) - 36.0).abs() < EPSILON);
     }

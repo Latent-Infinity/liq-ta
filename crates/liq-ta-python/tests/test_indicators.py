@@ -418,6 +418,40 @@ class TestPolarsIntegration:
 class TestZeroCopy:
     """Zero-copy behavior validation tests."""
 
+    @pytest.mark.parametrize("indicator", [liq_ta.sma, liq_ta.wma])
+    @pytest.mark.parametrize("offset", [0, 1])
+    def test_output_cannot_overlap_input(self, indicator, offset):
+        values = np.arange(11, dtype=np.float64)
+        before = values.copy()
+        with pytest.raises(TypeError, match="already borrowed"):
+            indicator(values[:10], 2, out=values[offset : offset + 10])
+        np.testing.assert_array_equal(values, before)
+
+    @pytest.mark.parametrize("input_index", [0, 1, 2])
+    def test_output_cannot_overlap_any_multi_input(self, input_index):
+        inputs = [np.arange(10, dtype=np.float64) + i for i in range(3)]
+        before = [values.copy() for values in inputs]
+        with pytest.raises(TypeError, match="already borrowed"):
+            liq_ta.atr(*inputs, 2, out=inputs[input_index])
+        for values, original in zip(inputs, before, strict=True):
+            np.testing.assert_array_equal(values, original)
+
+    @pytest.mark.parametrize("indicator", [liq_ta.sma, liq_ta.wma])
+    def test_output_must_be_writeable(self, indicator):
+        values = np.arange(10, dtype=np.float64)
+        output = np.zeros_like(values)
+        output.flags.writeable = False
+        with pytest.raises(TypeError, match="not writeable"):
+            indicator(values, 2, out=output)
+        np.testing.assert_array_equal(output, np.zeros_like(values))
+
+    def test_output_must_be_contiguous(self):
+        values = np.arange(10, dtype=np.float64)
+        backing = np.zeros(20, dtype=np.float64)
+        with pytest.raises(TypeError, match="contiguous"):
+            liq_ta.sma(values, 2, out=backing[::2])
+        np.testing.assert_array_equal(backing, np.zeros_like(backing))
+
     def test_contiguous_array_works(self):
         """Contiguous arrays should work (zero-copy input)."""
         data = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype=np.float64)

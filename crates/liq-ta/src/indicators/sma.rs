@@ -13,9 +13,9 @@
 //!
 //! # Performance Optimizations
 //!
-//! - **SIMD fast path**: When all data is finite (no NaN/Inf), uses SIMD-accelerated
+//! - **Finite fast path**: When all data is finite (no NaN/Inf), uses a
 //!   rolling sum without per-element validity checks
-//! - **SIMD initial window**: Uses vectorized sum for the first window computation
+//! - **Initial window**: Uses a chunked sum for the first window computation
 //! - **Pre-computed reciprocal**: Multiplies by 1/period instead of dividing
 //!
 //! # Formula
@@ -371,7 +371,7 @@ pub const fn sma_min_len(period: usize) -> usize {
 ///
 /// - Time complexity: O(n) where n is the length of the input data
 /// - Space complexity: O(n) for the output vector
-/// - For f64 data: Uses SIMD-accelerated fast path when all values are finite
+/// - For f64 data: Uses a fast path when all values are finite
 ///
 /// # NaN Handling
 ///

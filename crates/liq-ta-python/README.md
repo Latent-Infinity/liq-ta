@@ -35,7 +35,9 @@ print(rsi)
 
 ## Zero-Copy API
 
-All functions support an optional `out=` parameter for zero-copy output, following NumPy conventions:
+Single-output indicators support an optional `out=` parameter for zero-copy output.
+The output must be writable, contiguous, and not overlap an input array; otherwise
+the call raises `TypeError` before writing.
 
 ```python
 import numpy as np

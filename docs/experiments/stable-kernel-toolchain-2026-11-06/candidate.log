@@ -1,0 +1,9 @@
+sum iterations=3000 length=131072 elapsed_ns=86114625 checksum=2808267857.1428657
+sum iterations=3000 length=131072 elapsed_ns=85652375 checksum=2808267857.1428657
+sum iterations=3000 length=131072 elapsed_ns=87806500 checksum=2808267857.1428657
+dot iterations=3000 length=131072 elapsed_ns=139813500 checksum=26876190306.121452
+dot iterations=3000 length=131072 elapsed_ns=139909083 checksum=26876190306.121452
+dot iterations=3000 length=131072 elapsed_ns=139116709 checksum=26876190306.121452
+moments iterations=3000 length=131072 elapsed_ns=278232584 checksum=29684458163.266403
+moments iterations=3000 length=131072 elapsed_ns=278241167 checksum=29684458163.266403
+moments iterations=3000 length=131072 elapsed_ns=278615875 checksum=29684458163.266403

@@ -6,12 +6,18 @@ on:
     paths:
       - 'crates/liq-ta-python/**'
       - 'crates/liq-ta/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
       - '.github/workflows/python.yml'
   pull_request:
     branches: [master, main]
     paths:
       - 'crates/liq-ta-python/**'
       - 'crates/liq-ta/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
       - '.github/workflows/python.yml'
   workflow_dispatch:
 
@@ -38,7 +44,10 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.98.1
+
+      - name: Record compiler version
+        run: rustc --version --verbose
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
@@ -53,7 +62,7 @@ jobs:
       - name: Build and install package
         working-directory: crates/liq-ta-python
         run: |
-          maturin build --release --out dist
+          maturin build --locked --release --out dist
           python -m pip install --no-index --find-links dist liq-ta
 
       - name: Run tests
@@ -76,7 +85,10 @@ jobs:
           python-version: '3.12'
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.98.1
+
+      - name: Record compiler version
+        run: rustc --version --verbose
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
@@ -88,13 +100,18 @@ jobs:
 
       - name: Build wheel
         working-directory: crates/liq-ta-python
-        run: maturin build --release --out dist
+        run: maturin build --locked --release --out dist
+
+      - name: Record wheel compiler metadata
+        run: rustc --version --verbose > crates/liq-ta-python/dist/rustc-version.txt
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
           name: wheels-${{ matrix.os }}
-          path: crates/liq-ta-python/dist/*.whl
+          path: |
+            crates/liq-ta-python/dist/*.whl
+            crates/liq-ta-python/dist/rustc-version.txt
 
   # Build wheels for multiple Python versions and platforms
   build-sdist:
@@ -102,6 +119,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@1.98.1
+
+      - name: Record compiler version
+        run: rustc --version --verbose
 
       - name: Set up Python
         uses: actions/setup-python@v5

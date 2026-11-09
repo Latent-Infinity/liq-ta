@@ -16,9 +16,8 @@
 //!
 //! # Performance
 //!
-//! This implementation uses SIMD vectorization for f64 data, achieving
-//! performance competitive with TA-Lib. Uses IEEE 754 natural NaN propagation
-//! for clean, zero-overhead NaN handling in the subtraction operation.
+//! This implementation uses chunked f64 subtraction and IEEE 754 NaN
+//! propagation.
 
 use std::any::TypeId;
 
@@ -99,7 +98,7 @@ pub fn mom_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -
 
     // Calculate MOM: current price - price N periods ago
     //
-    // PERFORMANCE CRITICAL: We use SIMD without pre-scan for maximum performance.
+    // The f64 path avoids a pre-scan.
     // IEEE 754 naturally propagates NaN through subtraction (NaN - x = NaN).
     // Infinity → NaN conversion is handled inside mom_compute_fast for f64.
     mom_compute_fast(data, period, lookback, output);
@@ -107,7 +106,7 @@ pub fn mom_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -
     Ok(())
 }
 
-/// SIMD-optimized computation with type-specialized fast paths.
+/// Computation with type-specialized fast paths.
 /// Uses IEEE 754 natural NaN propagation - no pre-scan or per-element checks needed.
 #[inline]
 fn mom_compute_fast<T: SeriesElement + 'static>(
@@ -118,7 +117,7 @@ fn mom_compute_fast<T: SeriesElement + 'static>(
 ) {
     let n = data.len();
 
-    // Use SIMD for f64
+    // Use chunked subtraction for f64
     if TypeId::of::<T>() == TypeId::of::<f64>() {
         // SAFETY: We've verified T is f64, and the slices have compatible layouts
         let data_f64: &[f64] =

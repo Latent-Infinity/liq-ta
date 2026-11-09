@@ -276,7 +276,7 @@ fn mfi_streaming_f64_optimized(
     Ok(())
 }
 
-/// SIMD-optimized fast path for f64 MFI computation.
+/// Fast path for f64 MFI computation.
 ///
 /// NOTE: Pre-scan optimization doesn't work for MFI because:
 /// - Must check 4 arrays (high, low, close, volume) = 400K elements for n=100K

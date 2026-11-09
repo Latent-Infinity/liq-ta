@@ -14,6 +14,9 @@ liq-ta is Latent Infinity Quant Technical Analysis: a high-performance technical
 - **Safe**: Comprehensive error handling with actionable messages
 - **Generic**: Works with both `f32` and `f64` data types
 
+The minimum supported Rust version is 1.95. Development and release builds use
+the repository's pinned Rust 1.98.1 toolchain.
+
 ## Quick Start
 
 Add to your `Cargo.toml`:
@@ -227,22 +230,10 @@ See [liq-ta-cli README](crates/liq-ta-cli/README.md) for full CLI documentation.
 
 ## Performance
 
-All indicators have O(n) time complexity with high throughput:
-
-| Indicator | Throughput (100K elements) |
-|-----------|---------------------------|
-| EMA | ~710 Melem/s |
-| VWAP | ~562 Melem/s |
-| SMA | ~420 Melem/s |
-| OBV | ~386 Melem/s |
-| Bollinger | ~386 Melem/s |
-| ATR | ~269 Melem/s |
-| RSI | ~265 Melem/s |
-| MACD | ~256 Melem/s |
-| ADX | ~240 Melem/s |
-| Donchian | ~150 Melem/s |
-| Williams %R | ~147 Melem/s |
-| Stochastic | ~78 Melem/s |
+Performance depends on the indicator, workload, compiler and target CPU.
+Numeric kernels use safe scalar lanes that the compiler may vectorize. The
+stable-toolchain migration and its measured tradeoffs are documented in the
+[numeric backend experiment](docs/experiments/stable-kernel-toolchain-2026-11-06/README.md).
 
 ### Running Benchmarks
 

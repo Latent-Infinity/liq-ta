@@ -7,7 +7,7 @@
 //!
 //! - [`mod@accumulators`]: Precision-aware accumulators (f64 internal state)
 //! - [`mod@rolling_extrema`]: Monotonic deque algorithm for O(n) rolling max/min
-//! - [`mod@simd`]: SIMD-accelerated reductions using portable SIMD
+//! - [`mod@simd`]: chunked reductions using scalar lanes
 //!
 //! # Performance
 //!
@@ -15,9 +15,8 @@
 //! rolling maximum and minimum values in O(n) time, compared to the O(n*k) naive
 //! approach. This provides 10-100x speedups for larger window sizes.
 //!
-//! The SIMD kernels use portable SIMD (requires nightly Rust) to accelerate
-//! reduction operations like sum, variance, dot product, and correlation,
-//! providing 2.5-4x speedups on typical data sizes.
+//! The chunked kernels use safe scalar lanes. Compilers may vectorize them
+//! depending on the target and optimization settings.
 //!
 //! The accumulators provide f64 internal precision for improved numeric stability
 //! when processing f32 inputs, with O(1) per-operation complexity.
@@ -25,7 +24,7 @@
 pub mod accumulators;
 pub mod rolling_extrema;
 
-/// SIMD-accelerated kernels (requires nightly Rust)
+/// Chunked numeric kernels (module name retained for compatibility)
 pub mod simd;
 
 // Re-export kernel types for convenient access.
@@ -49,7 +48,7 @@ pub use rolling_extrema::{
     rolling_min_into, rolling_min_nan_propagating,
 };
 
-// SIMD kernel exports
+// Chunked kernel exports
 pub use simd::{
     // Constants
     F32_LANES,

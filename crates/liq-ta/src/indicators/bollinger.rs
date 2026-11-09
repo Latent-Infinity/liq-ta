@@ -86,11 +86,10 @@ fn use_f64_accumulator<T: 'static>() -> bool {
     TypeId::of::<T>() == TypeId::of::<f32>() && current_precision_mode() == PrecisionMode::High
 }
 
-/// Helper to compute initial sum and sum of squares with NaN count using SIMD for f64.
+/// Helper to compute initial sum and sum of squares with NaN count for f64.
 ///
-/// Uses the NaN-aware SIMD kernel `sum_and_sum_sq_and_count_f64` which properly
-/// excludes NaN values from sums while counting them. Provides 2-4x speedup
-/// for both clean and NaN-containing data.
+/// Uses `sum_and_sum_sq_and_count_f64` to exclude nonfinite values from sums
+/// while counting them.
 #[inline]
 fn compute_initial_sums<T: SeriesElement + 'static>(data: &[T], period: usize) -> (T, T, usize) {
     use std::any::TypeId;
@@ -99,7 +98,7 @@ fn compute_initial_sums<T: SeriesElement + 'static>(data: &[T], period: usize) -
         let data_f64: &[f64] = unsafe { &*(data as *const [T] as *const [f64]) };
         let window = &data_f64[..period];
 
-        // Use NaN-aware SIMD kernel that excludes NaN from sums
+        // Use NaN-aware chunked kernel that excludes NaN from sums
         let (sum, sum_sq, valid_count) = simd::sum_and_sum_sq_and_count_f64(window);
         let nan_count = period - valid_count;
 
@@ -108,7 +107,7 @@ fn compute_initial_sums<T: SeriesElement + 'static>(data: &[T], period: usize) -
         let sum_sq_t: T = unsafe { *(&sum_sq as *const f64 as *const T) };
         return (sum_t, sum_sq_t, nan_count);
     }
-    // Fallback to scalar for f32 (no SIMD kernel yet)
+    // Fallback for f32
     let mut sum = T::zero();
     let mut sum_sq = T::zero();
     let mut nan_count = 0usize;
@@ -451,7 +450,7 @@ pub fn bollinger_into<T: SeriesElement + 'static>(
         output.lower[i] = T::nan();
     }
 
-    // Compute initial sum and sum of squares using SIMD for f64
+    // Compute initial sum and sum of squares in chunks for f64
     let (mut sum, mut sum_sq, mut nan_count) = compute_initial_sums(data, period);
 
     // Compute first valid values at index (period - 1)
@@ -623,7 +622,7 @@ fn rolling_stddev_compute<T: SeriesElement + 'static>(
     // Pre-compute reciprocal for efficient division
     let inv_period = T::one() / T::from_usize(period)?;
 
-    // Compute initial sum and sum of squares using SIMD for f64
+    // Compute initial sum and sum of squares in chunks for f64
     let (mut sum, mut sum_sq, mut nan_count) = compute_initial_sums(data, period);
 
     // Compute first valid value at index (period - 1)
@@ -729,7 +728,7 @@ pub fn rolling_stddev_into<T: SeriesElement + 'static>(
         *item = T::nan();
     }
 
-    // Compute initial sum and sum of squares using SIMD for f64
+    // Compute initial sum and sum of squares in chunks for f64
     let (mut sum, mut sum_sq, mut nan_count) = compute_initial_sums(data, period);
 
     // Compute first valid value at index (period - 1)

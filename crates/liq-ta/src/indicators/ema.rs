@@ -12,7 +12,7 @@
 //!
 //! # Performance Optimizations
 //!
-//! - **SIMD initial window**: Uses vectorized sum for the SMA seed computation
+//! - **Initial window**: Uses a chunked sum for the SMA seed computation
 //! - **Branchless fast path**: When all data is finite, uses tight loop without validity checks
 //! - **Pre-computed coefficients**: α and (1-α) computed once, used throughout
 //!

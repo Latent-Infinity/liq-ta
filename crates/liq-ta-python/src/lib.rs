@@ -41,7 +41,8 @@ macro_rules! single_output_indicator {
 
             match out {
                 Some(output) => {
-                    let slice = unsafe { output.as_slice_mut()? };
+                    let mut output_guard = output.try_readwrite()?;
+                    let slice = output_guard.as_slice_mut()?;
                     $rust_fn_into(input, period, slice).map_err(to_py_err)?;
                     Ok(output)
                 }
@@ -108,7 +109,8 @@ macro_rules! ohlc_indicator {
             let c = close.as_slice()?;
 
             if let Some(output) = out {
-                let slice = unsafe { output.as_slice_mut()? };
+                let mut output_guard = output.try_readwrite()?;
+                let slice = output_guard.as_slice_mut()?;
                 $rust_fn_into(h, l, c, period, slice).map_err(to_py_err)?;
                 Ok(output)
             } else {
@@ -187,7 +189,8 @@ fn wma<'py>(
     let input = data.as_slice()?;
 
     if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
+        let mut output_guard = output.try_readwrite()?;
+        let slice = output_guard.as_slice_mut()?;
         liq_ta::indicators::wma_into(input, period, slice).map_err(to_py_err)?;
         Ok(output)
     } else {
@@ -219,7 +222,8 @@ fn dema<'py>(
     let input = data.as_slice()?;
 
     if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
+        let mut output_guard = output.try_readwrite()?;
+        let slice = output_guard.as_slice_mut()?;
         liq_ta::indicators::dema_into(input, period, slice).map_err(to_py_err)?;
         Ok(output)
     } else {
@@ -251,7 +255,8 @@ fn tema<'py>(
     let input = data.as_slice()?;
 
     if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
+        let mut output_guard = output.try_readwrite()?;
+        let slice = output_guard.as_slice_mut()?;
         liq_ta::indicators::tema_into(input, period, slice).map_err(to_py_err)?;
         Ok(output)
     } else {
@@ -283,7 +288,8 @@ fn trima<'py>(
     let input = data.as_slice()?;
 
     if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
+        let mut output_guard = output.try_readwrite()?;
+        let slice = output_guard.as_slice_mut()?;
         liq_ta::indicators::trima_into(input, period, slice).map_err(to_py_err)?;
         Ok(output)
     } else {
@@ -314,7 +320,8 @@ fn midpoint<'py>(
     let input = data.as_slice()?;
 
     if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
+        let mut output_guard = output.try_readwrite()?;
+        let slice = output_guard.as_slice_mut()?;
         liq_ta::indicators::midpoint_into(input, period, slice).map_err(to_py_err)?;
         Ok(output)
     } else {
@@ -350,7 +357,8 @@ fn kama<'py>(
     let input = data.as_slice()?;
 
     if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
+        let mut output_guard = output.try_readwrite()?;
+        let slice = output_guard.as_slice_mut()?;
         liq_ta::indicators::kama_full_into(input, period, fast_period, slow_period, slice)
             .map_err(to_py_err)?;
         Ok(output)
@@ -386,7 +394,8 @@ fn midprice<'py>(
     let low_slice = low.as_slice()?;
 
     if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
+        let mut output_guard = output.try_readwrite()?;
+        let slice = output_guard.as_slice_mut()?;
         liq_ta::indicators::midprice_into(high_slice, low_slice, period, slice)
             .map_err(to_py_err)?;
         Ok(output)
@@ -422,7 +431,8 @@ fn t3<'py>(
     let input = data.as_slice()?;
 
     if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
+        let mut output_guard = output.try_readwrite()?;
+        let slice = output_guard.as_slice_mut()?;
         liq_ta::indicators::t3_full_into(input, period, vfactor, slice).map_err(to_py_err)?;
         Ok(output)
     } else {
@@ -461,7 +471,8 @@ fn sar<'py>(
     let low_slice = low.as_slice()?;
 
     if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
+        let mut output_guard = output.try_readwrite()?;
+        let slice = output_guard.as_slice_mut()?;
         liq_ta::indicators::sar_full_into(high_slice, low_slice, af_start, af_step, af_max, slice)
             .map_err(to_py_err)?;
         Ok(output)
@@ -523,7 +534,8 @@ fn sarext<'py>(
     };
 
     if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
+        let mut output_guard = output.try_readwrite()?;
+        let slice = output_guard.as_slice_mut()?;
         liq_ta::indicators::sarext_full_into(high_slice, low_slice, params, slice)
             .map_err(to_py_err)?;
         Ok(output)
@@ -555,7 +567,8 @@ fn ht_trendline<'py>(
     let input = data.as_slice()?;
 
     if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
+        let mut output_guard = output.try_readwrite()?;
+        let slice = output_guard.as_slice_mut()?;
         liq_ta::indicators::ht_trendline_into(input, slice).map_err(to_py_err)?;
         Ok(output)
     } else {
@@ -619,7 +632,8 @@ fn mavp<'py>(
     let periods_slice = periods.as_slice()?;
 
     if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
+        let mut output_guard = output.try_readwrite()?;
+        let slice = output_guard.as_slice_mut()?;
         liq_ta::indicators::mavp_into(input, periods_slice, min_period, max_period, slice)
             .map_err(to_py_err)?;
         Ok(output)
@@ -856,7 +870,8 @@ fn williams_r<'py>(
     let c = close.as_slice()?;
 
     if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
+        let mut output_guard = output.try_readwrite()?;
+        let slice = output_guard.as_slice_mut()?;
         liq_ta::indicators::williams_r_into(h, l, c, period, slice).map_err(to_py_err)?;
         Ok(output)
     } else {
@@ -887,7 +902,8 @@ fn mom<'py>(
     let input = data.as_slice()?;
 
     if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
+        let mut output_guard = output.try_readwrite()?;
+        let slice = output_guard.as_slice_mut()?;
         liq_ta::indicators::mom_into(input, period, slice).map_err(to_py_err)?;
         Ok(output)
     } else {
@@ -919,7 +935,8 @@ fn roc<'py>(
     let input = data.as_slice()?;
 
     if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
+        let mut output_guard = output.try_readwrite()?;
+        let slice = output_guard.as_slice_mut()?;
         liq_ta::indicators::roc_into(input, period, slice).map_err(to_py_err)?;
         Ok(output)
     } else {
@@ -951,7 +968,8 @@ fn rocp<'py>(
     let input = data.as_slice()?;
 
     if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
+        let mut output_guard = output.try_readwrite()?;
+        let slice = output_guard.as_slice_mut()?;
         liq_ta::indicators::rocp_into(input, period, slice).map_err(to_py_err)?;
         Ok(output)
     } else {
@@ -983,7 +1001,8 @@ fn rocr<'py>(
     let input = data.as_slice()?;
 
     if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
+        let mut output_guard = output.try_readwrite()?;
+        let slice = output_guard.as_slice_mut()?;
         liq_ta::indicators::rocr_into(input, period, slice).map_err(to_py_err)?;
         Ok(output)
     } else {
@@ -1015,7 +1034,8 @@ fn rocr100<'py>(
     let input = data.as_slice()?;
 
     if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
+        let mut output_guard = output.try_readwrite()?;
+        let slice = output_guard.as_slice_mut()?;
         liq_ta::indicators::rocr100_into(input, period, slice).map_err(to_py_err)?;
         Ok(output)
     } else {
@@ -1049,7 +1069,8 @@ fn apo<'py>(
     let input = data.as_slice()?;
 
     if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
+        let mut output_guard = output.try_readwrite()?;
+        let slice = output_guard.as_slice_mut()?;
         liq_ta::indicators::apo_into(input, fast_period, slow_period, slice).map_err(to_py_err)?;
         Ok(output)
     } else {
@@ -1083,7 +1104,8 @@ fn ppo<'py>(
     let input = data.as_slice()?;
 
     if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
+        let mut output_guard = output.try_readwrite()?;
+        let slice = output_guard.as_slice_mut()?;
         liq_ta::indicators::ppo_into(input, fast_period, slow_period, slice).map_err(to_py_err)?;
         Ok(output)
     } else {
@@ -1123,7 +1145,8 @@ fn bop<'py>(
     let c = close.as_slice()?;
 
     if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
+        let mut output_guard = output.try_readwrite()?;
+        let slice = output_guard.as_slice_mut()?;
         liq_ta::indicators::bop_into(o, h, l, c, slice).map_err(to_py_err)?;
         Ok(output)
     } else {
@@ -1187,7 +1210,8 @@ fn aroonosc<'py>(
     let l = low.as_slice()?;
 
     if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
+        let mut output_guard = output.try_readwrite()?;
+        let slice = output_guard.as_slice_mut()?;
         liq_ta::indicators::aroonosc_into(h, l, period, slice).map_err(to_py_err)?;
         Ok(output)
     } else {
@@ -1224,7 +1248,8 @@ fn cci<'py>(
     let c = close.as_slice()?;
 
     if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
+        let mut output_guard = output.try_readwrite()?;
+        let slice = output_guard.as_slice_mut()?;
         liq_ta::indicators::cci_into(h, l, c, period, slice).map_err(to_py_err)?;
         Ok(output)
     } else {
@@ -1255,7 +1280,8 @@ fn cmo<'py>(
     let input = data.as_slice()?;
 
     if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
+        let mut output_guard = output.try_readwrite()?;
+        let slice = output_guard.as_slice_mut()?;
         liq_ta::indicators::cmo_into(input, period, slice).map_err(to_py_err)?;
         Ok(output)
     } else {
@@ -1295,7 +1321,8 @@ fn mfi<'py>(
     let v = volume.as_slice()?;
 
     if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
+        let mut output_guard = output.try_readwrite()?;
+        let slice = output_guard.as_slice_mut()?;
         liq_ta::indicators::mfi_into(h, l, c, v, period, slice).map_err(to_py_err)?;
         Ok(output)
     } else {
@@ -1360,7 +1387,8 @@ fn trix<'py>(
     let input = data.as_slice()?;
 
     if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
+        let mut output_guard = output.try_readwrite()?;
+        let slice = output_guard.as_slice_mut()?;
         liq_ta::indicators::trix_into(input, period, slice).map_err(to_py_err)?;
         Ok(output)
     } else {
@@ -1401,7 +1429,8 @@ fn ultosc<'py>(
     let c = close.as_slice()?;
 
     if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
+        let mut output_guard = output.try_readwrite()?;
+        let slice = output_guard.as_slice_mut()?;
         liq_ta::indicators::ultosc_into(h, l, c, period1, period2, period3, slice)
             .map_err(to_py_err)?;
         Ok(output)
@@ -1440,7 +1469,8 @@ fn adxr<'py>(
     let c = close.as_slice()?;
 
     if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
+        let mut output_guard = output.try_readwrite()?;
+        let slice = output_guard.as_slice_mut()?;
         liq_ta::indicators::adxr_into(h, l, c, period, slice).map_err(to_py_err)?;
         Ok(output)
     } else {
@@ -1477,7 +1507,8 @@ fn dx<'py>(
     let c = close.as_slice()?;
 
     if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
+        let mut output_guard = output.try_readwrite()?;
+        let slice = output_guard.as_slice_mut()?;
         liq_ta::indicators::dx_into(h, l, c, period, slice).map_err(to_py_err)?;
         Ok(output)
     } else {
@@ -1511,7 +1542,8 @@ fn plus_dm<'py>(
     let l = low.as_slice()?;
 
     if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
+        let mut output_guard = output.try_readwrite()?;
+        let slice = output_guard.as_slice_mut()?;
         liq_ta::indicators::plus_dm_into(h, l, period, slice).map_err(to_py_err)?;
         Ok(output)
     } else {
@@ -1545,7 +1577,8 @@ fn minus_dm<'py>(
     let l = low.as_slice()?;
 
     if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
+        let mut output_guard = output.try_readwrite()?;
+        let slice = output_guard.as_slice_mut()?;
         liq_ta::indicators::minus_dm_into(h, l, period, slice).map_err(to_py_err)?;
         Ok(output)
     } else {
@@ -1591,7 +1624,8 @@ fn true_range<'py>(
     let c = close.as_slice()?;
 
     if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
+        let mut output_guard = output.try_readwrite()?;
+        let slice = output_guard.as_slice_mut()?;
         liq_ta::indicators::true_range_into(h, l, c, slice).map_err(to_py_err)?;
         Ok(output)
     } else {
@@ -1782,7 +1816,8 @@ fn rolling_stddev<'py>(
     let input = data.as_slice()?;
 
     if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
+        let mut output_guard = output.try_readwrite()?;
+        let slice = output_guard.as_slice_mut()?;
         liq_ta::indicators::rolling_stddev_into(input, period, slice).map_err(to_py_err)?;
         Ok(output)
     } else {
@@ -1818,7 +1853,8 @@ fn obv<'py>(
     let v = volume.as_slice()?;
 
     if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
+        let mut output_guard = output.try_readwrite()?;
+        let slice = output_guard.as_slice_mut()?;
         liq_ta::indicators::obv_into(c, v, slice).map_err(to_py_err)?;
         Ok(output)
     } else {
@@ -1856,7 +1892,8 @@ fn vwap<'py>(
     let v = volume.as_slice()?;
 
     if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
+        let mut output_guard = output.try_readwrite()?;
+        let slice = output_guard.as_slice_mut()?;
         liq_ta::indicators::vwap_into(h, l, c, v, slice).map_err(to_py_err)?;
         Ok(output)
     } else {
@@ -1894,7 +1931,8 @@ fn ad<'py>(
     let v = volume.as_slice()?;
 
     if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
+        let mut output_guard = output.try_readwrite()?;
+        let slice = output_guard.as_slice_mut()?;
         liq_ta::indicators::ad_into(h, l, c, v, slice).map_err(to_py_err)?;
         Ok(output)
     } else {
@@ -1936,7 +1974,8 @@ fn adosc<'py>(
     let v = volume.as_slice()?;
 
     if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
+        let mut output_guard = output.try_readwrite()?;
+        let slice = output_guard.as_slice_mut()?;
         liq_ta::indicators::adosc_into(h, l, c, v, fast_period, slow_period, slice)
             .map_err(to_py_err)?;
         Ok(output)
@@ -1971,7 +2010,8 @@ fn ht_dcperiod<'py>(
     let input = data.as_slice()?;
 
     if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
+        let mut output_guard = output.try_readwrite()?;
+        let slice = output_guard.as_slice_mut()?;
         liq_ta::indicators::ht_dcperiod_into(input, slice).map_err(to_py_err)?;
         Ok(output)
     } else {
@@ -2000,7 +2040,8 @@ fn ht_dcphase<'py>(
     let input = data.as_slice()?;
 
     if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
+        let mut output_guard = output.try_readwrite()?;
+        let slice = output_guard.as_slice_mut()?;
         liq_ta::indicators::ht_dcphase_into(input, slice).map_err(to_py_err)?;
         Ok(output)
     } else {
@@ -2077,7 +2118,8 @@ fn ht_trendmode<'py>(
     let input = data.as_slice()?;
 
     if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
+        let mut output_guard = output.try_readwrite()?;
+        let slice = output_guard.as_slice_mut()?;
         liq_ta::indicators::ht_trendmode_into(input, slice).map_err(to_py_err)?;
         Ok(output)
     } else {
@@ -2112,7 +2154,8 @@ fn var<'py>(
     let input = data.as_slice()?;
 
     if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
+        let mut output_guard = output.try_readwrite()?;
+        let slice = output_guard.as_slice_mut()?;
         liq_ta::indicators::var_into(input, period, slice).map_err(to_py_err)?;
         Ok(output)
     } else {
@@ -2146,7 +2189,8 @@ fn correl<'py>(
     let y = data1.as_slice()?;
 
     if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
+        let mut output_guard = output.try_readwrite()?;
+        let slice = output_guard.as_slice_mut()?;
         liq_ta::indicators::correl_into(x, y, period, slice).map_err(to_py_err)?;
         Ok(output)
     } else {
@@ -2180,7 +2224,8 @@ fn beta<'py>(
     let market = data1.as_slice()?;
 
     if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
+        let mut output_guard = output.try_readwrite()?;
+        let slice = output_guard.as_slice_mut()?;
         liq_ta::indicators::beta_into(asset, market, period, slice).map_err(to_py_err)?;
         Ok(output)
     } else {
@@ -2211,7 +2256,8 @@ fn linearreg<'py>(
     let input = data.as_slice()?;
 
     if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
+        let mut output_guard = output.try_readwrite()?;
+        let slice = output_guard.as_slice_mut()?;
         liq_ta::indicators::linearreg_into(input, period, slice).map_err(to_py_err)?;
         Ok(output)
     } else {
@@ -2242,7 +2288,8 @@ fn linearreg_slope<'py>(
     let input = data.as_slice()?;
 
     if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
+        let mut output_guard = output.try_readwrite()?;
+        let slice = output_guard.as_slice_mut()?;
         liq_ta::indicators::linearreg_slope_into(input, period, slice).map_err(to_py_err)?;
         Ok(output)
     } else {
@@ -2273,7 +2320,8 @@ fn linearreg_intercept<'py>(
     let input = data.as_slice()?;
 
     if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
+        let mut output_guard = output.try_readwrite()?;
+        let slice = output_guard.as_slice_mut()?;
         liq_ta::indicators::linearreg_intercept_into(input, period, slice).map_err(to_py_err)?;
         Ok(output)
     } else {
@@ -2304,7 +2352,8 @@ fn linearreg_angle<'py>(
     let input = data.as_slice()?;
 
     if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
+        let mut output_guard = output.try_readwrite()?;
+        let slice = output_guard.as_slice_mut()?;
         liq_ta::indicators::linearreg_angle_into(input, period, slice).map_err(to_py_err)?;
         Ok(output)
     } else {
@@ -2335,7 +2384,8 @@ fn tsf<'py>(
     let input = data.as_slice()?;
 
     if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
+        let mut output_guard = output.try_readwrite()?;
+        let slice = output_guard.as_slice_mut()?;
         liq_ta::indicators::tsf_into(input, period, slice).map_err(to_py_err)?;
         Ok(output)
     } else {
@@ -2377,7 +2427,8 @@ fn avgprice<'py>(
     let c = close.as_slice()?;
 
     if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
+        let mut output_guard = output.try_readwrite()?;
+        let slice = output_guard.as_slice_mut()?;
         liq_ta::indicators::avgprice_into(o, h, l, c, slice).map_err(to_py_err)?;
         Ok(output)
     } else {
@@ -2409,7 +2460,8 @@ fn medprice<'py>(
     let l = low.as_slice()?;
 
     if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
+        let mut output_guard = output.try_readwrite()?;
+        let slice = output_guard.as_slice_mut()?;
         liq_ta::indicators::medprice_into(h, l, slice).map_err(to_py_err)?;
         Ok(output)
     } else {
@@ -2444,7 +2496,8 @@ fn typprice<'py>(
     let c = close.as_slice()?;
 
     if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
+        let mut output_guard = output.try_readwrite()?;
+        let slice = output_guard.as_slice_mut()?;
         liq_ta::indicators::typprice_into(h, l, c, slice).map_err(to_py_err)?;
         Ok(output)
     } else {
@@ -2479,7 +2532,8 @@ fn wclprice<'py>(
     let c = close.as_slice()?;
 
     if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
+        let mut output_guard = output.try_readwrite()?;
+        let slice = output_guard.as_slice_mut()?;
         liq_ta::indicators::wclprice_into(h, l, c, slice).map_err(to_py_err)?;
         Ok(output)
     } else {
@@ -2513,7 +2567,8 @@ macro_rules! candlestick_fn {
 
             match out {
                 Some(output) => {
-                    let slice = unsafe { output.as_slice_mut()? };
+                    let mut output_guard = output.try_readwrite()?;
+                    let slice = output_guard.as_slice_mut()?;
                     $rust_fn_into(o, h, l, c, slice).map_err(to_py_err)?;
                     Ok(output)
                 }
@@ -2920,7 +2975,8 @@ fn gaussian_filter<'py>(
 ) -> PyResult<Bound<'py, PyArray1<f64>>> {
     let input = data.as_slice()?;
     if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
+        let mut output_guard = output.try_readwrite()?;
+        let slice = output_guard.as_slice_mut()?;
         liq_ta::indicators::gaussian_filter_into(input, period, sigma, slice).map_err(to_py_err)?;
         Ok(output)
     } else {
@@ -2994,7 +3050,8 @@ fn demarker<'py>(
     let h = high.as_slice()?;
     let l = low.as_slice()?;
     if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
+        let mut output_guard = output.try_readwrite()?;
+        let slice = output_guard.as_slice_mut()?;
         liq_ta::indicators::demarker_into(h, l, period, slice).map_err(to_py_err)?;
         Ok(output)
     } else {
@@ -3015,7 +3072,8 @@ fn osma<'py>(
 ) -> PyResult<Bound<'py, PyArray1<f64>>> {
     let input = data.as_slice()?;
     if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
+        let mut output_guard = output.try_readwrite()?;
+        let slice = output_guard.as_slice_mut()?;
         liq_ta::indicators::osma_into(input, fast_period, slow_period, signal_period, slice)
             .map_err(to_py_err)?;
         Ok(output)
@@ -3061,7 +3119,8 @@ fn rvi<'py>(
     let l = low.as_slice()?;
     let c = close.as_slice()?;
     if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
+        let mut output_guard = output.try_readwrite()?;
+        let slice = output_guard.as_slice_mut()?;
         liq_ta::indicators::rvi_into(o, h, l, c, period, slice).map_err(to_py_err)?;
         Ok(output)
     } else {
@@ -3089,7 +3148,8 @@ fn connors_rsi<'py>(
 ) -> PyResult<Bound<'py, PyArray1<f64>>> {
     let input = data.as_slice()?;
     if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
+        let mut output_guard = output.try_readwrite()?;
+        let slice = output_guard.as_slice_mut()?;
         liq_ta::indicators::connors_rsi_into(input, rsi_period, streak_period, rank_period, slice)
             .map_err(to_py_err)?;
         Ok(output)
@@ -3113,7 +3173,8 @@ fn stc<'py>(
 ) -> PyResult<Bound<'py, PyArray1<f64>>> {
     let input = data.as_slice()?;
     if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
+        let mut output_guard = output.try_readwrite()?;
+        let slice = output_guard.as_slice_mut()?;
         liq_ta::indicators::stc_into(
             input,
             fast_period,
@@ -3142,7 +3203,8 @@ fn laguerre_rsi<'py>(
 ) -> PyResult<Bound<'py, PyArray1<f64>>> {
     let input = data.as_slice()?;
     if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
+        let mut output_guard = output.try_readwrite()?;
+        let slice = output_guard.as_slice_mut()?;
         liq_ta::indicators::laguerre_rsi_into(input, gamma, slice).map_err(to_py_err)?;
         Ok(output)
     } else {
@@ -3166,7 +3228,8 @@ fn dss_bressert<'py>(
     let l = low.as_slice()?;
     let c = close.as_slice()?;
     if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
+        let mut output_guard = output.try_readwrite()?;
+        let slice = output_guard.as_slice_mut()?;
         liq_ta::indicators::dss_bressert_into(h, l, c, stochastic_period, ema_period, slice)
             .map_err(to_py_err)?;
         Ok(output)
@@ -3209,7 +3272,8 @@ fn autocorr<'py>(
 ) -> PyResult<Bound<'py, PyArray1<f64>>> {
     let input = data.as_slice()?;
     if let Some(output) = out {
-        let slice = unsafe { output.as_slice_mut()? };
+        let mut output_guard = output.try_readwrite()?;
+        let slice = output_guard.as_slice_mut()?;
         liq_ta::indicators::autocorr_into(input, period, lag, slice).map_err(to_py_err)?;
         Ok(output)
     } else {
@@ -3640,7 +3704,7 @@ mod tests {
 
     #[test]
     fn test_python_bindings_are_callable() {
-        let failures = Python::with_gil(|py| {
+        let failures = Python::attach(|py| {
             let module = PyModule::new(py, "_liq_ta")
                 .expect("Python module should be created for binding smoke test");
             _liq_ta(&module).expect("Python module should register all binding functions");

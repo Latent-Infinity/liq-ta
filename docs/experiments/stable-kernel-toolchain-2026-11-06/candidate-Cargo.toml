@@ -1,0 +1,13 @@
+[package]
+name = "numeric-bench"
+version = "0.1.0"
+edition = "2024"
+[dependencies]
+liq-ta = { path = "/var/folders/xf/c9939qyj0wx236rc2nrgrdhw0000gn/T/liq-ta-numeric-bench-k30tb6f7/candidate/crates/liq-ta" }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
