@@ -20,8 +20,57 @@ use crate::error::{CliError, Result};
 use csv::ReaderBuilder;
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{BufReader, Read};
+use std::io::{self, BufReader, Read};
 use std::path::Path;
+
+const MAX_INPUT_BYTES: usize = 16 * 1024 * 1024;
+const MAX_COLUMNS: usize = 64;
+const MAX_ROWS: usize = 1_000_000;
+const MAX_NUMERIC_CELLS: usize = 4_000_000;
+const MAX_RECORD_BYTES: usize = 64 * 1024;
+const MAX_FIELD_BYTES: usize = 16 * 1024;
+
+struct BoundedReader<R> {
+    reader: R,
+    remaining: usize,
+}
+
+impl<R: Read> Read for BoundedReader<R> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        if buffer.is_empty() {
+            return Ok(0);
+        }
+        if self.remaining == 0 {
+            return match self.reader.read(&mut [0])? {
+                0 => Ok(0),
+                _ => Err(io::Error::other("CSV exceeds the 16 MiB input limit")),
+            };
+        }
+        let limit = buffer.len().min(self.remaining);
+        let count = self.reader.read(&mut buffer[..limit])?;
+        self.remaining -= count;
+        Ok(count)
+    }
+}
+
+fn check_record_limits(record: &csv::StringRecord, line: usize) -> Result<()> {
+    let message = if record.len() > MAX_COLUMNS {
+        Some("CSV exceeds the 64-column limit")
+    } else if record.as_slice().len() > MAX_RECORD_BYTES {
+        Some("CSV record exceeds the 64 KiB decoded limit")
+    } else if record.iter().any(|field| field.len() > MAX_FIELD_BYTES) {
+        Some("CSV field exceeds the 16 KiB decoded limit")
+    } else {
+        None
+    };
+    match message {
+        Some(message) => Err(CliError::CsvParseError {
+            message: message.to_string(),
+            line: Some(line),
+        }),
+        None => Ok(()),
+    }
+}
 
 /// OHLC price data structure.
 #[derive(Debug, Clone)]
@@ -158,21 +207,22 @@ pub fn parse_csv<P: AsRef<Path>>(path: P) -> Result<ParsedCsv> {
 ///
 /// This is useful for testing or parsing from non-file sources.
 pub fn parse_csv_from_reader<R: Read>(reader: R) -> Result<ParsedCsv> {
+    let reader = BoundedReader {
+        reader,
+        remaining: MAX_INPUT_BYTES,
+    };
     let mut csv_reader = ReaderBuilder::new()
         .has_headers(true)
         .flexible(true)
         .from_reader(reader);
 
     // Get headers
-    let headers: Vec<String> = csv_reader
-        .headers()
-        .map_err(|e| CliError::CsvParseError {
-            message: e.to_string(),
-            line: Some(1),
-        })?
-        .iter()
-        .map(String::from)
-        .collect();
+    let header_record = csv_reader.headers().map_err(|e| CliError::CsvParseError {
+        message: e.to_string(),
+        line: Some(1),
+    })?;
+    check_record_limits(header_record, 1)?;
+    let headers: Vec<String> = header_record.iter().map(String::from).collect();
 
     if headers.is_empty() {
         return Err(CliError::CsvParseError {
@@ -208,6 +258,15 @@ pub fn parse_csv_from_reader<R: Read>(reader: R) -> Result<ParsedCsv> {
             message: e.to_string(),
             line: Some(line_idx + 2), // +2 for header and 0-indexing
         })?;
+        check_record_limits(&record, line_idx + 2)?;
+        if row_count >= MAX_ROWS
+            || (!columns.is_empty() && row_count >= MAX_NUMERIC_CELLS / columns.len())
+        {
+            return Err(CliError::CsvParseError {
+                message: "CSV exceeds the row or retained numeric-cell limit".to_string(),
+                line: Some(line_idx + 2),
+            });
+        }
 
         // Extract date if present
         if let Some(date_idx) = date_column_idx {
@@ -349,6 +408,57 @@ pub fn parse_ohlcv<P: AsRef<Path>>(path: P) -> Result<OhlcvData> {
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    #[test]
+    fn csv_limits_raw_input_without_treating_excess_as_eof() {
+        const MAX_BYTES: u64 = 16 * 1024 * 1024;
+        for (size, accepted) in [(MAX_BYTES, true), (MAX_BYTES + 1, false)] {
+            let reader = Cursor::new(b"date\n").chain(std::io::repeat(b'\n').take(size - 5));
+            assert_eq!(parse_csv_from_reader(reader).is_ok(), accepted);
+        }
+    }
+
+    #[test]
+    fn csv_limits_header_and_extra_record_columns() {
+        for (count, accepted) in [(64, true), (65, false)] {
+            let header = vec!["x"; count].join(",");
+            assert_eq!(parse_csv_from_reader(header.as_bytes()).is_ok(), accepted);
+            let row = format!("date\n{}\n", vec!["x"; count].join(","));
+            assert_eq!(parse_csv_from_reader(row.as_bytes()).is_ok(), accepted);
+        }
+    }
+
+    #[test]
+    fn csv_limits_decoded_fields_and_quoted_multiline_records() {
+        for (size, accepted) in [(16 * 1024, true), (16 * 1024 + 1, false)] {
+            let value = format!("{}\n", "x".repeat(size - 1));
+            let input = format!("date\n\"{value}\"\n");
+            assert_eq!(parse_csv_from_reader(input.as_bytes()).is_ok(), accepted);
+            let header = format!("{}\n", "x".repeat(size));
+            assert_eq!(parse_csv_from_reader(header.as_bytes()).is_ok(), accepted);
+        }
+    }
+
+    #[test]
+    fn csv_limits_decoded_record_size() {
+        for (extra, accepted) in [("", true), (",y", false)] {
+            let field = "x".repeat(16 * 1024);
+            let input = format!("{field},{field},{field},{field}{extra}\n");
+            assert_eq!(parse_csv_from_reader(input.as_bytes()).is_ok(), accepted);
+        }
+    }
+
+    #[test]
+    fn csv_limits_rows_and_retained_cells() {
+        for (rows, accepted) in [(1_000_000, true), (1_000_001, false)] {
+            let input = format!("date\n{}", "x\n".repeat(rows));
+            assert_eq!(parse_csv_from_reader(input.as_bytes()).is_ok(), accepted);
+        }
+        for (rows, accepted) in [(800_000, true), (800_001, false)] {
+            let input = format!("a,b,c,d,e\n{}", ",,,,\n".repeat(rows));
+            assert_eq!(parse_csv_from_reader(input.as_bytes()).is_ok(), accepted);
+        }
+    }
 
     // ==========================================================================
     // Task 3.1 Test Cases

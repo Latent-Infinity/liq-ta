@@ -171,6 +171,11 @@ liq-ta vwap ohlcv.csv
 
 ## Input CSV Format
 
+CSV input is limited to 16 MiB, 64 columns, 1,000,000 data rows, and
+4,000,000 retained numeric cells. Each decoded record is limited to 64 KiB
+and each field to 16 KiB, including headers and ignored fields. Inputs that
+exceed a limit return a data error (exit code 2); they are not truncated.
+
 The CLI auto-detects columns based on headers. Supported column names:
 
 - **Close prices**: `close`, `price`, `adj_close`, `adjusted_close`
