@@ -94,10 +94,10 @@ pub enum Error {
     /// for the requested operation.
     ///
     /// # How to Fix
-    /// Use a period of at least 1. Common periods are 14 for RSI/ATR,
-    /// 20 for Bollinger Bands, and 12/26/9 for MACD.
+    /// Use a period that satisfies the indicator's requirements. Common periods
+    /// are 14 for RSI/ATR, 20 for Bollinger Bands, and 12/26/9 for MACD.
     #[error(
-        "invalid period {period}: {reason}. Use a positive integer (common values: RSI=14, SMA/EMA=20, MACD=12/26/9)"
+        "invalid period {period}: {reason}. Use a period satisfying the indicator's requirements (common values: RSI=14, SMA/EMA=20, MACD=12/26/9)"
     )]
     InvalidPeriod {
         /// The invalid period value that was provided.

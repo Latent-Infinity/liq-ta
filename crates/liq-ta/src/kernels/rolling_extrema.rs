@@ -124,7 +124,7 @@ impl<T: SeriesElement> MonotonicDeque<T> {
     pub fn new(period: usize) -> Self {
         Self {
             deque: VecDeque::with_capacity(period),
-            invalid_indices: VecDeque::with_capacity(period),
+            invalid_indices: VecDeque::new(),
             period,
             _phantom: std::marker::PhantomData,
         }
@@ -1799,4 +1799,32 @@ pub fn compute_stochastic_full_vhgw_f32(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod deque_tests {
+    use super::MonotonicDeque;
+
+    #[test]
+    fn invalid_indices_allocate_lazily_and_expire() {
+        let data = [1.0_f64, f64::NAN, f64::INFINITY, 3.0, 2.0];
+        let mut max = MonotonicDeque::new(2);
+        let mut min = MonotonicDeque::new(2);
+        assert_eq!(max.invalid_indices.capacity(), 0);
+        assert_eq!(min.invalid_indices.capacity(), 0);
+        for i in 0..data.len() {
+            max.push_max(i, &data);
+            min.push_min(i, &data);
+            if (1..=3).contains(&i) {
+                assert!(max.get_extremum(&data).is_nan());
+                assert!(min.get_extremum(&data).is_nan());
+            }
+        }
+        assert_eq!(max.get_extremum(&data), 3.0);
+        assert_eq!(min.get_extremum(&data), 2.0);
+        max.clear();
+        min.clear();
+        assert!(max.get_extremum(&data).is_nan());
+        assert!(min.get_extremum(&data).is_nan());
+    }
 }

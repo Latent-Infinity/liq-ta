@@ -560,29 +560,12 @@ pub fn ad<T: SeriesElement + 'static>(
     close: &[T],
     volume: &[T],
 ) -> Result<Vec<T>> {
-    use std::any::TypeId;
     let len = high.len();
     if len == 0 {
         return Err(Error::EmptyInput);
     }
 
-    // Optimization: For f64/f32, allocate uninitialized memory since ad_into
-    // fully overwrites every element.
-    let mut output = if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let mut v: Vec<T> = Vec::with_capacity(len);
-        unsafe {
-            v.set_len(len);
-        } // Safe: ad_into writes all len elements
-        v
-    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let mut v: Vec<T> = Vec::with_capacity(len);
-        unsafe {
-            v.set_len(len);
-        } // Safe: ad_into writes all len elements
-        v
-    } else {
-        vec![T::zero(); len]
-    };
+    let mut output = vec![T::zero(); len];
 
     ad_into(high, low, close, volume, &mut output)?;
     Ok(output)

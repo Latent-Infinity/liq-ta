@@ -7,7 +7,7 @@
 //! # Column Detection
 //!
 //! The parser automatically detects columns based on header names (case-insensitive):
-//! - `close`, `price`, `adj close`, `adjusted close` → close prices
+//! - `close`, `price`, `adj close`, `adjusted close`, `adj_close`, `adjusted_close` → close prices
 //! - `open` → open prices
 //! - `high` → high prices
 //! - `low` → low prices
@@ -141,6 +141,8 @@ impl ParsedCsv {
             .or_else(|| self.column("price"))
             .or_else(|| self.column("adj close"))
             .or_else(|| self.column("adjusted close"))
+            .or_else(|| self.column("adj_close"))
+            .or_else(|| self.column("adjusted_close"))
     }
 
     /// Take ownership of close prices, trying multiple common column names.
@@ -149,6 +151,8 @@ impl ParsedCsv {
             .or_else(|| self.take_column("price"))
             .or_else(|| self.take_column("adj close"))
             .or_else(|| self.take_column("adjusted close"))
+            .or_else(|| self.take_column("adj_close"))
+            .or_else(|| self.take_column("adjusted_close"))
     }
 }
 
@@ -311,7 +315,7 @@ pub fn parse_csv_from_reader<R: Read>(reader: R) -> Result<ParsedCsv> {
 pub fn parse_close_prices<P: AsRef<Path>>(path: P) -> Result<Vec<f64>> {
     let mut parsed = parse_csv(path)?;
     parsed.take_close().ok_or_else(|| CliError::CsvParseError {
-        message: "no close price column found (expected 'close', 'price', or 'adj close')"
+        message: "no close price column found (expected 'close', 'price', 'adj close', 'adjusted close', 'adj_close', or 'adjusted_close')"
             .to_string(),
         line: None,
     })
@@ -343,7 +347,7 @@ pub fn parse_ohlc<P: AsRef<Path>>(path: P) -> Result<OhlcData> {
         })?;
 
     let close = parsed.take_close().ok_or_else(|| CliError::CsvParseError {
-        message: "no close price column found".to_string(),
+        message: "no close price column found (expected 'close', 'price', 'adj close', 'adjusted close', 'adj_close', or 'adjusted_close')".to_string(),
         line: None,
     })?;
 
@@ -382,7 +386,7 @@ pub fn parse_ohlcv<P: AsRef<Path>>(path: P) -> Result<OhlcvData> {
         })?;
 
     let close = parsed.take_close().ok_or_else(|| CliError::CsvParseError {
-        message: "no close price column found".to_string(),
+        message: "no close price column found (expected 'close', 'price', 'adj close', 'adjusted close', 'adj_close', or 'adjusted_close')".to_string(),
         line: None,
     })?;
 
@@ -611,6 +615,13 @@ mod tests {
         let cursor = Cursor::new(csv_data);
         let parsed = parse_csv_from_reader(cursor).unwrap();
         assert!(parsed.close().is_some());
+
+        for alias in ["adj_close", "adjusted_close", "adjusted close"] {
+            let data = format!("{alias}\n44.0\n44.5\n");
+            let mut parsed = parse_csv_from_reader(Cursor::new(data)).unwrap();
+            assert_eq!(parsed.close().unwrap(), &[44.0, 44.5]);
+            assert_eq!(parsed.take_close().unwrap(), vec![44.0, 44.5]);
+        }
     }
 
     #[test]

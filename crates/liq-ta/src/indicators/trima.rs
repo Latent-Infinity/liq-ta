@@ -814,21 +814,14 @@ fn trima_into_generic_inline_nan<T: SeriesElement>(
 pub fn trima<T: SeriesElement + 'static>(data: &[T], period: usize) -> Result<Vec<T>> {
     use std::any::TypeId;
 
-    // Wrapper optimization: uninitialized allocation for f64/f32
     if TypeId::of::<T>() == TypeId::of::<f64>() {
         let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
-        let mut output: Vec<f64> = Vec::with_capacity(data.len());
-        unsafe {
-            output.set_len(data.len());
-        }
+        let mut output: Vec<f64> = vec![0.0; data.len()];
         trima_into(data_f64, period, &mut output)?;
         Ok(unsafe { std::mem::transmute(output) })
     } else if TypeId::of::<T>() == TypeId::of::<f32>() {
         let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
-        let mut output: Vec<f32> = Vec::with_capacity(data.len());
-        unsafe {
-            output.set_len(data.len());
-        }
+        let mut output: Vec<f32> = vec![0.0; data.len()];
         trima_into(data_f32, period, &mut output)?;
         Ok(unsafe { std::mem::transmute(output) })
     } else {

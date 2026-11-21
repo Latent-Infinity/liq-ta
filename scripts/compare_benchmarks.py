@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Compare aggregated benchmark results between two baseline runs.
+Historical round/group baselines only; the current runner does not create them.
 
 Usage:
     python3 scripts/compare_benchmarks.py \\

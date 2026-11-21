@@ -52,12 +52,17 @@
 //! - **All losses (no gains)**: RSI = 0 (maximum bearish momentum)
 //! - **No movement (no gains or losses)**: RSI = 50 (neutral midpoint)
 //!
+//! A NaN or infinity in a price makes the first RSI calculation that uses it
+//! NaN; the recursive smoothing state remains NaN for all subsequent values.
+//!
 //! # Precision Behavior
 //!
 //! When `PrecisionMode::High` is active and input type is `f32`:
 //! - Wilder smoothing state (avg_gain, avg_loss) maintained in `f64`
 //! - Prevents drift accumulation over long series
 //! - RSI computation and boundary checks performed in `f64`
+//!
+//! In f32 Fast mode, intermediate arithmetic can overflow even with finite prices.
 //!
 //! **Tolerance**: abs(0.01) when comparing f32 High mode to f64 reference.
 //! RSI is bounded 0-100, so absolute tolerance is appropriate.
@@ -116,6 +121,7 @@ pub const fn rsi_lookback(period: usize) -> usize {
 ///
 /// This is the smallest input size that will produce at least one valid output.
 /// For RSI, this is `period + 1` because we need `period` price changes.
+/// Saturates at `usize::MAX` when the required length is not representable.
 ///
 /// # Example
 ///
@@ -128,7 +134,7 @@ pub const fn rsi_lookback(period: usize) -> usize {
 #[inline]
 #[must_use]
 pub const fn rsi_min_len(period: usize) -> usize {
-    period + 1
+    period.saturating_add(1)
 }
 
 /// Computes the Relative Strength Index (RSI) using Wilder's smoothing.
@@ -146,12 +152,14 @@ pub const fn rsi_min_len(period: usize) -> usize {
 /// A `Result` containing a `Vec<T>` with the RSI values, or an error if validation fails.
 /// The first `period` values are NaN (insufficient lookback data for both the initial
 /// price change and the smoothing period).
+/// NaN or infinity in a price propagates NaN through all RSI values from the
+/// first calculation using that price onward.
 ///
 /// # Errors
 ///
 /// Returns an error if:
 /// - The input data is empty (`Error::EmptyInput`)
-/// - The period is zero (`Error::InvalidPeriod`)
+/// - The period is zero or cannot be incremented (`Error::InvalidPeriod`)
 /// - The input data is shorter than period + 1 (`Error::InsufficientData`)
 ///
 /// # Performance
@@ -188,36 +196,13 @@ pub fn rsi<T: SeriesElement + 'static>(data: &[T], period: usize) -> Result<Vec<
     // Validate inputs
     validate_rsi_inputs(data, period)?;
 
-    // Optimization: For f64/f32, allocate uninitialized memory since compute_rsi_core writes all elements
-    // (lookback NaNs + computed RSI values). This avoids the double-write tax (Section 5.4).
-    use std::any::TypeId;
-
-    if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
-        let mut result: Vec<f64> = Vec::with_capacity(data.len());
-        unsafe {
-            result.set_len(data.len());
-        } // Safe: compute_rsi_core writes all elements
-        compute_rsi_core(data_f64, period, &mut result)?;
-        Ok(unsafe { std::mem::transmute(result) })
-    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
-        let mut result: Vec<f32> = Vec::with_capacity(data.len());
-        unsafe {
-            result.set_len(data.len());
-        } // Safe: compute_rsi_core writes all elements
-        if use_f64_precision::<T>() {
-            compute_rsi_core_f64(data_f32, period, &mut result)?;
-        } else {
-            compute_rsi_core(data_f32, period, &mut result)?;
-        }
-        Ok(unsafe { std::mem::transmute(result) })
+    let mut result = vec![T::nan(); data.len()];
+    if use_f64_precision::<T>() {
+        compute_rsi_core_f64(data, period, &mut result)?;
     } else {
-        // Generic fallback: safe initialization
-        let mut result = vec![T::nan(); data.len()];
         compute_rsi_core(data, period, &mut result)?;
-        Ok(result)
     }
+    Ok(result)
 }
 
 /// Computes the Relative Strength Index into a pre-allocated output buffer.
@@ -233,14 +218,16 @@ pub fn rsi<T: SeriesElement + 'static>(data: &[T], period: usize) -> Result<Vec<
 ///
 /// # Returns
 ///
-/// A `Result` containing the number of valid RSI values computed (`data.len()` - period),
+/// A `Result` containing the number of output positions after the lookback (`data.len()` - period),
 /// or an error if validation fails.
+/// NaN or infinity in a price propagates through the recursive state as
+/// described by [`rsi`].
 ///
 /// # Errors
 ///
 /// Returns an error if:
 /// - The input data is empty (`Error::EmptyInput`)
-/// - The period is zero (`Error::InvalidPeriod`)
+/// - The period is zero or cannot be incremented (`Error::InvalidPeriod`)
 /// - The input data is shorter than period + 1 (`Error::InsufficientData`)
 /// - The output buffer is shorter than the input data
 ///
@@ -287,7 +274,7 @@ pub fn rsi_into<T: SeriesElement + 'static>(
         compute_rsi_core(data, period, output)?;
     }
 
-    // Return count of valid (non-NaN) values
+    // Return the number of positions after the lookback.
     Ok(data.len() - period)
 }
 
@@ -305,9 +292,13 @@ fn validate_rsi_inputs<T: SeriesElement>(data: &[T], period: usize) -> Result<()
     // RSI needs at least period + 1 data points:
     // - period data points to calculate the first period changes
     // - but we need period changes, which requires period + 1 prices
-    if data.len() < period + 1 {
+    let required = period.checked_add(1).ok_or(Error::InvalidPeriod {
+        period,
+        reason: "period plus one exceeds usize::MAX",
+    })?;
+    if data.len() < required {
         return Err(Error::InsufficientData {
-            required: period + 1,
+            required,
             actual: data.len(),
             indicator: "rsi",
         });
@@ -565,6 +556,122 @@ mod tests {
     const EPSILON_F32: f32 = 1e-5;
     // Looser epsilon for RSI calculations involving multiple operations
     const RSI_EPSILON: f64 = 1e-6;
+
+    #[test]
+    fn f32_subnormal_changes_and_fast_overflow() {
+        use crate::precision::{PrecisionMode, with_precision_mode};
+
+        let tiny = f32::from_bits(1);
+        for mode in [PrecisionMode::High, PrecisionMode::Fast] {
+            with_precision_mode(mode, || {
+                let result = rsi(&[0.0_f32, tiny, 0.0], 1).unwrap();
+                assert_eq!(&result[1..], &[100.0, 0.0]);
+            });
+        }
+        with_precision_mode(PrecisionMode::Fast, || {
+            let m = f32::MAX;
+            assert!(rsi(&[-m, m, -m], 2).unwrap()[2].is_nan());
+        });
+    }
+
+    #[test]
+    fn f32_modes_match_reference_and_propagate_nonfinite_prices() {
+        use crate::precision::{PrecisionMode, with_precision_mode};
+
+        for mode in [PrecisionMode::High, PrecisionMode::Fast] {
+            with_precision_mode(mode, || {
+                for data in [
+                    [1.0_f32, 2.0, 3.0, 4.0, 5.0, 6.0],
+                    [6.0, 5.0, 4.0, 3.0, 2.0, 1.0],
+                    [2.0; 6],
+                    [1.0, 3.0, 2.0, 4.0, 1.0, 2.0],
+                ] {
+                    let reference = rsi(&data.map(f64::from), 2).unwrap();
+                    let actual = rsi(&data, 2).unwrap();
+                    let mut out = [42.0_f32; 7];
+                    assert_eq!(rsi_into(&data, 2, &mut out).unwrap(), 4);
+                    assert_eq!(out[6], 42.0);
+                    for i in 0..6 {
+                        assert!(actual[i] == out[i] || (actual[i].is_nan() && out[i].is_nan()));
+                        if i >= 2 {
+                            assert!((f64::from(actual[i]) - reference[i]).abs() < 0.01);
+                        }
+                    }
+                }
+                for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+                    for index in [0, 1, 2, 4] {
+                        let mut data = [1.0_f32, 2.0, 1.0, 2.0, 1.0, 2.0];
+                        data[index] = bad;
+                        let actual = rsi(&data, 2).unwrap();
+                        let mut out = [0.0; 6];
+                        assert_eq!(rsi_into(&data, 2, &mut out).unwrap(), 4);
+                        for i in 0..6 {
+                            assert!(actual[i] == out[i] || (actual[i].is_nan() && out[i].is_nan()));
+                        }
+                        assert!(actual[index.max(2)..].iter().all(|x| x.is_nan()));
+                        if index > 2 {
+                            assert!(actual[index - 1].is_finite());
+                        }
+                    }
+                }
+            });
+        }
+    }
+
+    #[test]
+    fn high_f32_rsi_extremes_match_f64_reference() {
+        use crate::precision::{PrecisionMode, with_precision_mode};
+
+        with_precision_mode(PrecisionMode::High, || {
+            let data = [-f32::MAX, f32::MAX, -f32::MAX, f32::MAX, 0.0, -f32::MAX];
+            let reference = rsi(&data.map(f64::from), 2).unwrap();
+            let actual = rsi(&data, 2).unwrap();
+            let mut out = [0.0; 6];
+            assert_eq!(rsi_into(&data, 2, &mut out).unwrap(), 4);
+            for i in 2..6 {
+                assert!((f64::from(actual[i]) - reference[i]).abs() < 0.01);
+                assert_eq!(actual[i], out[i]);
+            }
+        });
+    }
+
+    #[test]
+    fn max_period_is_rejected_and_minimum_saturates() {
+        let data = [1.0_f32, 2.0];
+        let mut out = [0.0; 2];
+        assert!(matches!(
+            rsi(&data, usize::MAX),
+            Err(Error::InvalidPeriod { .. })
+        ));
+        assert!(matches!(
+            rsi_into(&data, usize::MAX, &mut out),
+            Err(Error::InvalidPeriod { .. })
+        ));
+        assert!(matches!(
+            rsi(&[] as &[f32], usize::MAX),
+            Err(Error::EmptyInput)
+        ));
+        assert_eq!(rsi_min_len(usize::MAX), usize::MAX);
+        assert_eq!(rsi_lookback(usize::MAX), usize::MAX);
+    }
+
+    #[test]
+    fn allocating_matches_into_in_both_modes() {
+        use crate::precision::{PrecisionMode, with_precision_mode};
+
+        let data = [10_000.0_f32, 10_001.0, 10_000.0, 10_002.0];
+        for mode in [PrecisionMode::High, PrecisionMode::Fast] {
+            with_precision_mode(mode, || {
+                let allocated = rsi(&data, 2).unwrap();
+                let mut output = [0.0; 4];
+                assert_eq!(rsi_into(&data, 2, &mut output).unwrap(), 2);
+                for (&a, &b) in allocated.iter().zip(&output) {
+                    assert!(a == b || (a.is_nan() && b.is_nan()));
+                }
+                assert_eq!(allocated[2], 50.0);
+            });
+        }
+    }
 
     // ==================== Basic Functionality Tests ====================
 

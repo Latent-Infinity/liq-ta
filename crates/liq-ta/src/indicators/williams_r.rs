@@ -188,18 +188,13 @@ pub fn williams_r<T: SeriesElement + 'static>(
 
     let n = high.len();
 
-    // Optimization: For f64/f32, allocate uninitialized memory since compute_williams_r_core writes all elements
-    // (lookback NaNs + computed Williams %R values). This avoids the double-write tax (Section 5.4).
     use std::any::TypeId;
 
     if TypeId::of::<T>() == TypeId::of::<f64>() {
         let high_f64: &[f64] = unsafe { std::mem::transmute(high) };
         let low_f64: &[f64] = unsafe { std::mem::transmute(low) };
         let close_f64: &[f64] = unsafe { std::mem::transmute(close) };
-        let mut result: Vec<f64> = Vec::with_capacity(n);
-        unsafe {
-            result.set_len(n);
-        } // Safe: compute_williams_r_core writes all elements
+        let mut result: Vec<f64> = vec![0.0; n];
 
         // Fill lookback period with NaN
         let lookback = williams_r_lookback(period);
@@ -213,10 +208,7 @@ pub fn williams_r<T: SeriesElement + 'static>(
         let high_f32: &[f32] = unsafe { std::mem::transmute(high) };
         let low_f32: &[f32] = unsafe { std::mem::transmute(low) };
         let close_f32: &[f32] = unsafe { std::mem::transmute(close) };
-        let mut result: Vec<f32> = Vec::with_capacity(n);
-        unsafe {
-            result.set_len(n);
-        } // Safe: compute_williams_r_core writes all elements
+        let mut result: Vec<f32> = vec![0.0; n];
 
         // Fill lookback period with NaN
         let lookback = williams_r_lookback(period);

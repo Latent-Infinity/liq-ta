@@ -293,16 +293,12 @@ pub fn ema_with_alpha<T: SeriesElement + 'static>(
 
     use std::any::TypeId;
 
-    // Dispatch to specialized kernels for f64/f32 (no UB: kernels initialize all outputs)
+    // Dispatch to specialized kernels for f64/f32
     if TypeId::of::<T>() == TypeId::of::<f64>() {
         let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
         let alpha_f64: f64 = unsafe { std::mem::transmute_copy(&alpha) };
 
-        // Safe uninitialized allocation: ema_core_f64 writes ALL elements
-        let mut result: Vec<f64> = Vec::with_capacity(data.len());
-        unsafe {
-            result.set_len(data.len());
-        }
+        let mut result: Vec<f64> = vec![0.0; data.len()];
 
         ema_core_f64(data_f64, period, alpha_f64, &mut result);
         Ok(unsafe { std::mem::transmute(result) })
@@ -310,11 +306,7 @@ pub fn ema_with_alpha<T: SeriesElement + 'static>(
         let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
         let alpha_f32: f32 = unsafe { std::mem::transmute_copy(&alpha) };
 
-        // Safe uninitialized allocation: ema_core_f32 writes ALL elements
-        let mut result: Vec<f32> = Vec::with_capacity(data.len());
-        unsafe {
-            result.set_len(data.len());
-        }
+        let mut result: Vec<f32> = vec![0.0; data.len()];
 
         ema_core_f32(data_f32, period, alpha_f32, &mut result);
         Ok(unsafe { std::mem::transmute(result) })
@@ -503,7 +495,7 @@ fn ema_core_f64(data: &[f64], period: usize, alpha: f64, output: &mut [f64]) {
         return;
     }
 
-    // Always initialize NaN prefix (fixes UB)
+    // Initialize the NaN prefix.
     output[..period - 1].fill(f64::NAN);
 
     // Compute SMA seed

@@ -50,6 +50,11 @@
 //!
 //! - The first `period` values are NaN (insufficient data for initial calculation)
 //! - ATR requires previous close for TR calculation, so index 0 has no TR value
+//! - A NaN or infinity used in a True Range calculation produces NaN. In ATR,
+//!   that NaN persists in the recursive smoothing state and all later outputs.
+//! - In f32 High mode, an output may overflow to infinity even though the f64
+//!   smoothing state remains finite and later outputs can become representable.
+//! - In f32 Fast mode, intermediate arithmetic can overflow on finite inputs.
 //!
 //! # Example
 //!
@@ -113,6 +118,7 @@ pub const fn atr_lookback(period: usize) -> usize {
 ///
 /// This is the smallest input size that will produce at least one valid output.
 /// For ATR, this is `period + 1` (one extra for the initial True Range).
+/// Saturates at `usize::MAX` when the required length is not representable.
 ///
 /// # Example
 ///
@@ -125,7 +131,7 @@ pub const fn atr_lookback(period: usize) -> usize {
 #[inline]
 #[must_use]
 pub const fn atr_min_len(period: usize) -> usize {
-    period + 1
+    period.saturating_add(1)
 }
 
 /// Returns the lookback period for True Range.
@@ -185,8 +191,8 @@ pub const fn true_range_min_len() -> usize {
 /// # Errors
 ///
 /// Returns an error if:
-/// - Any input series is empty (`Error::EmptyInput`)
-/// - The series have different lengths (`Error::InsufficientData`)
+/// - `high` is empty (`Error::EmptyInput`)
+/// - The series have different lengths (`Error::LengthMismatch`)
 ///
 /// # Performance
 ///
@@ -213,54 +219,15 @@ pub fn true_range<T: SeriesElement + 'static>(
     low: &[T],
     close: &[T],
 ) -> Result<Vec<T>> {
-    use std::any::TypeId;
-
-    // Validate inputs
     validate_ohlc_inputs(high, low, close)?;
-
-    let n = high.len();
-
-    // Optimized allocation for f64/f32: avoid double-initialization
-    // true_range_into() writes all elements, so vec![T::nan(); n] is pure double-write tax
-    if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let h = unsafe { std::slice::from_raw_parts(high.as_ptr() as *const f64, high.len()) };
-        let l = unsafe { std::slice::from_raw_parts(low.as_ptr() as *const f64, low.len()) };
-        let c = unsafe { std::slice::from_raw_parts(close.as_ptr() as *const f64, close.len()) };
-
-        let mut tr: Vec<f64> = Vec::with_capacity(n);
-        unsafe {
-            tr.set_len(n);
-        }
-
-        true_range_f64_optimized(h, l, c, &mut tr);
-        return Ok(unsafe { std::mem::transmute(tr) });
-    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let h = unsafe { std::slice::from_raw_parts(high.as_ptr() as *const f32, high.len()) };
-        let l = unsafe { std::slice::from_raw_parts(low.as_ptr() as *const f32, low.len()) };
-        let c = unsafe { std::slice::from_raw_parts(close.as_ptr() as *const f32, close.len()) };
-
-        let mut tr: Vec<f32> = Vec::with_capacity(n);
-        unsafe {
-            tr.set_len(n);
-        }
-
-        let out = unsafe { std::slice::from_raw_parts_mut(tr.as_mut_ptr(), n) };
-        true_range_into(h, l, c, out)?;
-        return Ok(unsafe { std::mem::transmute(tr) });
-    }
-
-    // Generic fallback: initialize to NaN
-    let mut tr = vec![T::nan(); n];
-    for i in 1..n {
-        tr[i] = compute_true_range(high[i], low[i], close[i - 1]);
-    }
+    let mut tr = vec![T::nan(); high.len()];
+    true_range_into(high, low, close, &mut tr)?;
 
     Ok(tr)
 }
 
 /// Optimized f64 true range computation (TA-Lib style).
 /// Uses local variables and incremental max for better compiler optimization.
-/// Assumes data is clean (no NaN/Inf) for maximum performance - use generic path if needed.
 #[inline]
 fn true_range_f64_optimized(high: &[f64], low: &[f64], close: &[f64], output: &mut [f64]) {
     let n = high.len();
@@ -269,11 +236,14 @@ fn true_range_f64_optimized(high: &[f64], low: &[f64], close: &[f64], output: &m
     output[0] = f64::NAN;
 
     // Tight loop with local variables (TA-Lib approach)
-    // Note: No NaN checking for performance - NaN will propagate naturally via arithmetic
     for i in 1..n {
         let temp_high = high[i];
         let temp_low = low[i];
         let prev_close = close[i - 1];
+        if !temp_high.is_finite() || !temp_low.is_finite() || !prev_close.is_finite() {
+            output[i] = f64::NAN;
+            continue;
+        }
 
         // Compute max(hl, hc, lc) incrementally like TA-Lib
         let mut greatest = temp_high - temp_low;
@@ -303,13 +273,13 @@ fn true_range_f64_optimized(high: &[f64], low: &[f64], close: &[f64], output: &m
 ///
 /// # Returns
 ///
-/// A `Result` containing the number of valid TR values (n - 1).
+/// A `Result` containing the number of output positions after the lookback (n - 1).
 ///
 /// # Errors
 ///
 /// Returns an error if:
-/// - Any input series is empty (`Error::EmptyInput`)
-/// - The series have different lengths (`Error::InsufficientData`)
+/// - `high` is empty (`Error::EmptyInput`)
+/// - The series have different lengths (`Error::LengthMismatch`)
 /// - The output buffer is shorter than the input data
 ///
 /// # Example
@@ -377,8 +347,9 @@ pub fn true_range_into<T: SeriesElement + 'static>(
 /// # Precision Behavior
 ///
 /// When `PrecisionMode::High` is active and input type is `f32`:
-/// - ATR smoothing state is maintained in `f64` to prevent drift accumulation
+/// - True Range arithmetic and ATR smoothing state are maintained in `f64`
 /// - Particularly important for long periods (> 14) where cumulative error builds
+/// In f32 Fast mode, intermediate arithmetic can overflow even with finite prices.
 ///
 /// # Arguments
 ///
@@ -391,13 +362,16 @@ pub fn true_range_into<T: SeriesElement + 'static>(
 ///
 /// A `Result` containing a `Vec<T>` with the ATR values, or an error if validation fails.
 /// The first `period` values are NaN (insufficient data for initial calculation).
+/// NaN or infinity in a price used by True Range makes that and all subsequent
+/// ATR values NaN. An f32 High-mode output can overflow to infinity while its
+/// finite f64 state continues smoothing and may later yield finite outputs.
 ///
 /// # Errors
 ///
 /// Returns an error if:
-/// - Any input series is empty (`Error::EmptyInput`)
-/// - The period is zero (`Error::InvalidPeriod`)
-/// - The series have different lengths (`Error::InsufficientData`)
+/// - `high` is empty (`Error::EmptyInput`)
+/// - The period is zero or cannot be incremented (`Error::InvalidPeriod`)
+/// - The series have different lengths (`Error::LengthMismatch`)
 /// - The input data is shorter than period + 1 (`Error::InsufficientData`)
 ///
 /// # Performance
@@ -467,15 +441,17 @@ pub fn atr<T: SeriesElement + 'static>(
 ///
 /// # Returns
 ///
-/// A `Result` containing the number of valid ATR values computed (n - period),
+/// A `Result` containing the number of output positions after the lookback (n - period),
 /// or an error if validation fails.
+/// Nonfinite input used by True Range propagates NaN through the recursive state,
+/// as described by [`atr`].
 ///
 /// # Errors
 ///
 /// Returns an error if:
-/// - Any input series is empty (`Error::EmptyInput`)
-/// - The period is zero (`Error::InvalidPeriod`)
-/// - The series have different lengths (`Error::InsufficientData`)
+/// - `high` is empty (`Error::EmptyInput`)
+/// - The period is zero or cannot be incremented (`Error::InvalidPeriod`)
+/// - The series have different lengths (`Error::LengthMismatch`)
 /// - The input data is shorter than period + 1 (`Error::InsufficientData`)
 /// - The output buffer is shorter than the input data
 ///
@@ -521,7 +497,7 @@ pub fn atr_into<T: SeriesElement + 'static>(
     // Compute ATR values
     compute_atr_core(high, low, close, period, output)?;
 
-    // Return count of valid (non-NaN) values
+    // Return the number of positions after the lookback.
     Ok(n - period)
 }
 
@@ -570,9 +546,13 @@ fn validate_atr_inputs<T: SeriesElement>(
     // - We need `period` TR values for the initial SMA
     // - So we need indices 1..=period to have TR values
     // - This means we need at least period + 1 data points
-    if high.len() < period + 1 {
+    let required = period.checked_add(1).ok_or(Error::InvalidPeriod {
+        period,
+        reason: "period plus one exceeds usize::MAX",
+    })?;
+    if high.len() < required {
         return Err(Error::InsufficientData {
-            required: period + 1,
+            required,
             actual: high.len(),
             indicator: "atr",
         });
@@ -673,21 +653,12 @@ fn compute_atr_core_f64<T: SeriesElement>(
     // Step 1: Calculate initial sum of True Range values in f64
     let mut sum_tr: f64 = 0.0;
     for i in 1..=period {
-        let tr = compute_true_range(high[i], low[i], close[i - 1]);
-        if is_invalid(tr) {
-            // If any TR in initial window is NaN, propagate it
-            output[period] = T::nan();
-            // Continue with NaN state
-            let mut atr_prev_f64 = f64::NAN;
-            for j in (period + 1)..n {
-                let tr_j = compute_true_range(high[j], low[j], close[j - 1]);
-                let tr_f64 = tr_j.to_f64().unwrap_or(f64::NAN);
-                atr_prev_f64 = (atr_prev_f64 * period_minus_one_f64 + tr_f64) / period_f64;
-                output[j] = T::from_f64(atr_prev_f64)?;
-            }
-            return Ok(());
-        }
-        sum_tr += tr.to_f64().unwrap_or(0.0);
+        let tr = compute_true_range(
+            high[i].to_f64().unwrap_or(f64::NAN),
+            low[i].to_f64().unwrap_or(f64::NAN),
+            close[i - 1].to_f64().unwrap_or(f64::NAN),
+        );
+        sum_tr += tr;
     }
 
     // Calculate initial ATR (SMA of first period TR values) in f64
@@ -696,8 +667,11 @@ fn compute_atr_core_f64<T: SeriesElement>(
 
     // Step 2: Apply Wilder's smoothing with f64 state
     for i in (period + 1)..n {
-        let tr = compute_true_range(high[i], low[i], close[i - 1]);
-        let tr_f64 = tr.to_f64().unwrap_or(f64::NAN);
+        let tr_f64 = compute_true_range(
+            high[i].to_f64().unwrap_or(f64::NAN),
+            low[i].to_f64().unwrap_or(f64::NAN),
+            close[i - 1].to_f64().unwrap_or(f64::NAN),
+        );
 
         // Wilder's formula in f64: ATR = (prev_ATR * (period-1) + TR) / period
         atr_prev_f64 = (atr_prev_f64 * period_minus_one_f64 + tr_f64) / period_f64;
@@ -728,6 +702,148 @@ mod tests {
     const EPSILON_F32: f32 = 1e-5;
     // Looser epsilon for ATR calculations involving multiple operations
     const ATR_EPSILON: f64 = 1e-6;
+
+    #[test]
+    fn f32_subnormal_zero_range_and_fast_overflow() {
+        use crate::precision::{PrecisionMode, with_precision_mode};
+
+        let tiny = f32::from_bits(1);
+        for mode in [PrecisionMode::High, PrecisionMode::Fast] {
+            with_precision_mode(mode, || {
+                let high = [0.0_f32, tiny, tiny];
+                let low = [0.0_f32; 3];
+                let close = [0.0_f32; 3];
+                assert_eq!(atr(&high, &low, &close, 1).unwrap()[1..], [tiny, tiny]);
+            });
+        }
+        with_precision_mode(PrecisionMode::High, || {
+            let flat = [7.0_f32; 4];
+            assert_eq!(atr(&flat, &flat, &flat, 2).unwrap()[2..], [0.0, 0.0]);
+        });
+        with_precision_mode(PrecisionMode::Fast, || {
+            let high = [0.0_f32, 3e38, 0.0];
+            let low = [0.0_f32, -3e38, 0.0];
+            assert!(atr(&high, &low, &[0.0; 3], 2).unwrap()[2].is_infinite());
+        });
+    }
+
+    #[test]
+    fn f32_modes_preserve_nonfinite_propagation_and_buffer_parity() {
+        use crate::precision::{PrecisionMode, with_precision_mode};
+
+        for mode in [PrecisionMode::High, PrecisionMode::Fast] {
+            with_precision_mode(mode, || {
+                for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+                    for (series, index) in [(0, 1), (1, 3), (2, 2)] {
+                        let mut high = [3.0_f32; 6];
+                        let mut low = [1.0_f32; 6];
+                        let mut close = [2.0_f32; 6];
+                        match series {
+                            0 => high[index] = bad,
+                            1 => low[index] = bad,
+                            _ => close[index] = bad,
+                        }
+                        let first_bad = if series == 2 { index + 1 } else { index };
+                        let tr = true_range(&high, &low, &close).unwrap();
+                        let mut tr_out = [42.0; 7];
+                        assert_eq!(
+                            true_range_into(&high, &low, &close, &mut tr_out).unwrap(),
+                            5
+                        );
+                        assert!(tr[first_bad].is_nan());
+                        assert_eq!(tr_out[6], 42.0);
+                        let allocated = atr(&high, &low, &close, 2).unwrap();
+                        let mut out = [42.0; 7];
+                        assert_eq!(atr_into(&high, &low, &close, 2, &mut out).unwrap(), 4);
+                        assert_eq!(out[6], 42.0);
+                        for i in 0..6 {
+                            assert!(tr[i] == tr_out[i] || (tr[i].is_nan() && tr_out[i].is_nan()));
+                            assert!(
+                                allocated[i] == out[i]
+                                    || (allocated[i].is_nan() && out[i].is_nan())
+                            );
+                        }
+                        assert!(allocated[first_bad.max(2)..].iter().all(|x| x.is_nan()));
+                    }
+                }
+                assert!(matches!(
+                    true_range(&[1.0_f32], &[], &[1.0]),
+                    Err(Error::LengthMismatch { .. })
+                ));
+            });
+        }
+    }
+
+    #[test]
+    fn high_f32_atr_uses_f64_ranges_and_keeps_unrounded_state() {
+        use crate::precision::{PrecisionMode, with_precision_mode};
+
+        with_precision_mode(PrecisionMode::High, || {
+            let m = f32::MAX;
+            for (high, low) in [
+                ([0.0, m, 0.0, 0.0, 0.0], [0.0, -m, 0.0, 0.0, 0.0]),
+                ([0.0, m, m, 0.0, 0.0], [0.0, -m, -m, 0.0, 0.0]),
+                ([0.0, 0.0, 0.0, m, 0.0], [0.0, 0.0, 0.0, -m, 0.0]),
+            ] {
+                let close = [0.0_f32; 5];
+                let h64 = high.map(f64::from);
+                let l64 = low.map(f64::from);
+                let c64 = close.map(f64::from);
+                let reference = atr(&h64, &l64, &c64, 2).unwrap();
+                let actual = atr(&high, &low, &close, 2).unwrap();
+                let mut out = [0.0; 5];
+                assert_eq!(atr_into(&high, &low, &close, 2, &mut out).unwrap(), 3);
+                for i in 2..5 {
+                    assert_eq!(actual[i], reference[i] as f32);
+                    assert_eq!(actual[i], out[i]);
+                }
+                assert!(actual[4].is_finite());
+            }
+            let high = [0.0_f32, 3e38, 0.0];
+            let low = [0.0_f32, -3e38, 0.0];
+            let actual = atr(&high, &low, &[0.0; 3], 2).unwrap();
+            assert_eq!(actual[2], 3e38_f32);
+        });
+    }
+
+    #[test]
+    fn max_period_is_rejected_and_minimum_saturates() {
+        let data = [1.0_f32, 2.0];
+        let mut out = [0.0; 2];
+        assert!(matches!(
+            atr(&data, &data, &data, usize::MAX),
+            Err(Error::InvalidPeriod { .. })
+        ));
+        assert!(matches!(
+            atr_into(&data, &data, &data, usize::MAX, &mut out),
+            Err(Error::InvalidPeriod { .. })
+        ));
+        assert!(matches!(
+            atr(&[] as &[f32], &[], &[], usize::MAX),
+            Err(Error::EmptyInput)
+        ));
+        assert_eq!(atr_min_len(usize::MAX), usize::MAX);
+        assert_eq!(atr_lookback(usize::MAX), usize::MAX);
+    }
+
+    #[test]
+    fn true_range_allocated_and_into_handle_nonfinite() {
+        let high = [2.0_f64, 3.0, 4.0, 5.0];
+        let low = [1.0, 2.0, 3.0, 4.0];
+        let close = [1.5, f64::INFINITY, 3.5, 4.5];
+        let allocated = true_range(&high, &low, &close).unwrap();
+        let mut output = [0.0; 4];
+        true_range_into(&high, &low, &close, &mut output).unwrap();
+        for (&a, &b) in allocated.iter().zip(&output) {
+            assert!(a == b || (a.is_nan() && b.is_nan()));
+        }
+        assert!(allocated[2].is_nan());
+        assert_eq!(allocated[3], 1.5);
+        let h = [2.0_f32, 3.0];
+        let l = [1.0_f32, 2.0];
+        let c = [1.5_f32, 2.5];
+        assert_eq!(true_range(&h, &l, &c).unwrap()[1], 1.5);
+    }
 
     // ==================== True Range Tests ====================
 

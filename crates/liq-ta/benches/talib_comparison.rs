@@ -1,16 +1,7 @@
-//! Performance comparison between liq-ta and TA-Lib (via FFI).
+//! Historical performance comparison between liq-ta and TA-Lib (via FFI).
 //!
-//! Run with: `cargo bench -p liq-ta --bench talib_comparison`
-//!
-//! Requires TA-Lib to be installed on the system.
-//!
-//! ## Configuration
-//!
-//! Uses criterion.toml for default settings:
-//! - 5s warmup, 10s measurement, 500 samples
-//! - 2% noise threshold, 95% confidence level
-//!
-//! Slower benchmarks (t3, cmo, cci, stochastic, var) use extended 15s measurement time.
+//! This file is not a registered Cargo benchmark and its TA-Lib dependency is
+//! not configured. See `docs/benchmarking-guide.md` for runnable benchmarks.
 
 #![allow(clippy::cast_precision_loss)]
 #![allow(clippy::unreadable_literal)]

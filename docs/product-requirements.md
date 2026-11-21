@@ -1,5 +1,10 @@
 # liq-ta Product Requirements Document
 
+> Historical requirements and experiment record: validated performance claims,
+> including blanket O(n) and allocation claims, are not guarantees about the
+> current implementation. Caller-provided output may use internal scratch; see
+> the [benchmarking guide](benchmarking-guide.md) for current runnable suites.
+
 **Version**: 3.0
 **Last Updated**: December 2025
 **Status**: Production Architecture Defined

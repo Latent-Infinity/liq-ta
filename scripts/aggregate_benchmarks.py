@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Aggregate benchmark results across multiple rounds using robust statistics.
+Historical round/group baselines only; the current runner does not create them.
 
 This script:
 1. Reads Criterion JSON results from multiple benchmark rounds

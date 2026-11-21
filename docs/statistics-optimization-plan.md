@@ -1,5 +1,9 @@
 # Statistics Indicators Optimization Plan
 
+> Historical plan and results, not current performance claims. The TA-Lib
+> comparison commands and infrastructure described below are no longer
+> registered or runnable; see the [current guide](benchmarking-guide.md).
+
 ## Overview
 This document tracks the optimization of 11 statistical indicators identified with O(n·k) complexity that can be optimized to O(n) using rolling sum/rolling window algorithms.
 

@@ -1,5 +1,9 @@
 # Gravity Check Audit: Performance Phase
 
+> Historical audit, not a current performance assessment. Its blanket O(n),
+> benchmark-coverage, and zero-allocation assertions are not established for
+> all current indicators; caller-provided outputs may use internal scratch.
+
 **Date:** 2026-01-16
 **Auditor:** auto-claude
 **Phase:** Gravity Check Stage 9 - Performance

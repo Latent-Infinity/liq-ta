@@ -4,7 +4,7 @@ High-performance technical analysis library for Python, powered by Rust.
 
 ## Features
 
-- **Fast**: Rust-powered O(n) algorithms with optimized memory access patterns
+- **Fast**: Rust-powered algorithms with optimized memory access patterns
 - **NumPy Native**: Zero-copy NumPy array support for seamless integration
 - **Comprehensive**: All major technical indicators (SMA, EMA, RSI, MACD, Bollinger Bands, etc.)
 - **Type Safe**: Full type hints for IDE support
@@ -46,18 +46,12 @@ import liq_ta
 prices = np.random.randn(1_000_000)
 output = np.empty(len(prices), dtype=np.float64)
 
-# Zero-copy: ~2x faster than allocating version
+# Write directly into the caller-provided output
 liq_ta.sma(prices, 20, out=output)
 
 # All single-output functions support out= parameter:
 # sma, ema, ema_wilder, rsi, williams_r, atr, true_range, rolling_stddev, obv, vwap
 ```
-
-**Performance comparison (1M elements):**
-| Function | Time | Notes |
-|----------|------|-------|
-| `sma(data, 20)` | ~23ms | Allocates new array |
-| `sma(data, 20, out=out)` | ~11ms | Zero-copy to pre-allocated |
 
 ## Available Indicators
 

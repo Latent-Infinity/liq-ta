@@ -139,24 +139,7 @@ pub fn tema<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
     let three = T::from_usize(3)?;
     let lookback = tema_lookback(period);
 
-    // Optimization: For f64/f32, allocate uninitialized memory since we write all elements
-    // (lookback NaNs + computed TEMA values). This avoids the double-write tax (Section 5.4).
-    use std::any::TypeId;
-    let mut result = if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let mut v: Vec<T> = Vec::with_capacity(data.len());
-        unsafe {
-            v.set_len(data.len());
-        } // Safe: we write all elements below
-        v
-    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let mut v: Vec<T> = Vec::with_capacity(data.len());
-        unsafe {
-            v.set_len(data.len());
-        } // Safe: we write all elements below
-        v
-    } else {
-        vec![T::nan(); data.len()]
-    };
+    let mut result = vec![T::nan(); data.len()];
 
     // Fill lookback period with NaN
     for item in result.iter_mut().take(lookback) {
@@ -268,24 +251,7 @@ pub fn tema_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) 
         return Ok(data.len());
     }
 
-    // Optimization: For f64/f32, allocate uninitialized memory for intermediate EMA1
-    // since ema_into writes all elements (lookback NaNs + computed values)
-    use std::any::TypeId;
-    let mut ema1 = if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let mut v: Vec<T> = Vec::with_capacity(data.len());
-        unsafe {
-            v.set_len(data.len());
-        } // Safe: ema_into writes all elements
-        v
-    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let mut v: Vec<T> = Vec::with_capacity(data.len());
-        unsafe {
-            v.set_len(data.len());
-        } // Safe: ema_into writes all elements
-        v
-    } else {
-        vec![T::nan(); data.len()]
-    };
+    let mut ema1 = vec![T::nan(); data.len()];
 
     // Calculate EMA of input
     ema_into(data, period, &mut ema1)?;

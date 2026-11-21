@@ -44,6 +44,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Reject CHOP periods below 2, where logarithmic normalization is undefined;
+  Rust returns `InvalidPeriod`, Python raises `ValueError`, and the CLI exits 3.
+- Avoid intermediate overflow in CHOP, Ulcer Index, and high-precision `f32` ATR.
+- Initialize indicator output storage before creating typed slices.
+- Align Bollinger `f32` buffer and allocating precision, reject invalid periods, and
+  prevent RSI and ATR period overflow.
+- Correct Ulcer Index drawdowns and DeMarker invalid-window propagation. Ulcer
+  output starts at index `period - 1`; until index `2 * period - 2`, early
+  drawdowns use the shorter peak history available (standard implementations
+  return NaN there).
+- Reduce rolling-window work in AO, CHOP, CMO, Ulcer Index, and DeMarker without
+  subtracting expired values; CMO and DeMarker use exponent-scaled sums, and AO
+  scaled midpoints, only when plain `f64` window sums overflow. Remove AO
+  output-buffer scratch allocations and
+  correct CMO recovery after large movements.
+- Honor AO's `f32` precision mode: High retains small signals through `f64`
+  accumulation; Fast uses native `f32` and may round differently than before.
+- Clarify that Stochastic buffer-reuse APIs can still allocate internal scratch.
+- Accept documented CSV close aliases and close/volume-only OBV input, reject
+  non-finite Bollinger parameters, and align batch processor defaults.
+- Send CLI diagnostics to stderr so they do not contaminate CSV output.
+- Replace the unavailable TA-Lib benchmark workflow with the registered
+  indicator suite; retain historical benchmark records.
+
 - **CRITICAL: ADX Wilder Smoothing Math Bug** (2025-12-28)
   - Fixed incorrect Wilder smoothing formula that caused unbounded ADX values (could exceed 100)
   - Corrected from `prev - prev/period + current` to `(prev*(period-1) + current)/period`

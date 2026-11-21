@@ -367,26 +367,8 @@ pub fn midprice<T: SeriesElement + 'static>(
     low: &[T],
     period: usize,
 ) -> Result<Vec<T>> {
-    use std::any::TypeId;
     let len = high.len();
-
-    // Optimization: For f64/f32, allocate uninitialized memory since midprice_into
-    // fully overwrites every element (lookback NaNs + computed region).
-    let mut output = if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let mut v: Vec<T> = Vec::with_capacity(len);
-        unsafe {
-            v.set_len(len);
-        } // Safe: midprice_into writes all len elements
-        v
-    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let mut v: Vec<T> = Vec::with_capacity(len);
-        unsafe {
-            v.set_len(len);
-        } // Safe: midprice_into writes all len elements
-        v
-    } else {
-        vec![T::nan(); len]
-    };
+    let mut output = vec![T::nan(); len];
 
     midprice_into(high, low, period, &mut output)?;
     Ok(output)

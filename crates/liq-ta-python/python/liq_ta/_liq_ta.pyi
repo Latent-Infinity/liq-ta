@@ -454,7 +454,7 @@ def chop(
     period: int,
     out: NDArray[np.float64] | None = None,
 ) -> NDArray[np.float64]:
-    """Choppiness Index."""
+    """Choppiness Index; period must be at least 2 or ValueError is raised."""
     ...
 
 def ulcer_index(
@@ -462,7 +462,12 @@ def ulcer_index(
     period: int,
     out: NDArray[np.float64] | None = None,
 ) -> NDArray[np.float64]:
-    """Ulcer Index."""
+    """Ulcer Index (RMS percent drawdown from the rolling peak close).
+
+    Output starts at index ``period - 1``. Until index ``2 * period - 2``,
+    early drawdowns use the shorter peak history available, where standard
+    implementations return NaN.
+    """
     ...
 
 def hurst(

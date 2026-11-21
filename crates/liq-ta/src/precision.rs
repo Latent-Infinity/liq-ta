@@ -11,10 +11,10 @@
 //!
 //! # Modes
 //!
-//! - [`PrecisionMode::High`] (default): Uses f64 accumulators for f32 inputs.
-//!   Provides better precision at a small performance cost (~15-20% overhead).
-//! - [`PrecisionMode::Fast`]: Uses native-type accumulators. Matches the
-//!   original liq-ta behavior for maximum throughput.
+//! - [`PrecisionMode::High`] (default): Uses f64 accumulators for f32 inputs
+//!   to improve numeric stability.
+//! - [`PrecisionMode::Fast`]: Uses native-type accumulators.
+//!   Performance and rounding differences depend on the indicator and input.
 //!
 //! Note: f64 inputs always use f64 accumulators in both modes.
 //!
@@ -73,7 +73,7 @@
 //!
 //! | Input Type | PrecisionMode::High | PrecisionMode::Fast |
 //! |------------|---------------------|---------------------|
-//! | f32 | f64 accumulators, f32 output | f32 accumulators (original) |
+//! | f32 | f64 accumulators, f32 output | f32 accumulators |
 //! | f64 | f64 accumulators (no change) | f64 accumulators (no change) |
 //!
 //! # Limitations
@@ -95,16 +95,14 @@ use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 pub enum PrecisionMode {
     /// High precision mode (default).
     ///
-    /// Uses f64 accumulators for f32 inputs. Provides better numeric stability
-    /// at a small performance cost (~15-20% overhead for variance-based indicators,
-    /// ~15% for others).
+    /// Uses f64 accumulators for f32 inputs to improve numeric stability.
     #[default]
     High = 0,
 
     /// Fast mode.
     ///
-    /// Uses native-type accumulators. Matches original liq-ta behavior for
-    /// maximum throughput. Should perform within 2% of pre-change baseline.
+    /// Uses native-type accumulators; performance and rounding differences
+    /// depend on the indicator and input.
     Fast = 1,
 }
 

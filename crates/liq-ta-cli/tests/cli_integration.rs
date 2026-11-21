@@ -12,28 +12,9 @@ fn fixtures_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
 }
 
-/// Get the path to the compiled CLI binary.
-fn cli_binary() -> PathBuf {
-    let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    path.pop(); // crates
-    path.pop(); // liq-ta
-    path.push("target");
-
-    // Check both debug and release
-    let debug_path = path.join("debug").join("liq-ta");
-    let release_path = path.join("release").join("liq-ta");
-
-    if release_path.exists() {
-        release_path
-    } else {
-        debug_path
-    }
-}
-
 /// Run the CLI with given arguments and return the output.
 fn run_cli(args: &[&str]) -> Output {
-    let binary = cli_binary();
-    Command::new(&binary)
+    Command::new(env!("CARGO_BIN_EXE_liq-ta"))
         .args(args)
         .output()
         .expect("Failed to execute CLI")
@@ -45,6 +26,89 @@ fn run_cli_stdout(args: &[&str]) -> String {
     String::from_utf8_lossy(&output.stdout).to_string()
 }
 
+#[test]
+fn chop_rejects_undefined_periods() {
+    let input = fixtures_dir().join("ohlc.csv");
+    for period in ["0", "1"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_liq-ta"))
+            .args(["chop", input.to_str().unwrap(), period])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(3));
+        assert!(output.stdout.is_empty());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("period must be at least 2"));
+    }
+}
+
+#[test]
+fn test_close_aliases_obv_and_nonfinite_bollinger() {
+    let input =
+        std::env::temp_dir().join(format!("liq-ta-cli-regression-{}.csv", std::process::id()));
+    let path = input.to_str().unwrap();
+    let run = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_liq-ta"))
+            .args(args)
+            .output()
+            .unwrap()
+    };
+
+    for (alias, volume) in [
+        ("close", "volume"),
+        ("adj_close", "vol"),
+        ("adjusted_close", "volume"),
+    ] {
+        fs::write(
+            &input,
+            format!(
+                "date,{alias},{volume}\n2026-01-01,10,100\n2026-01-02,11,50\n2026-01-03,9,20\n"
+            ),
+        )
+        .unwrap();
+        let sma = run(&["sma", path, "2"]);
+        assert!(
+            sma.status.success(),
+            "{}",
+            String::from_utf8_lossy(&sma.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&sma.stdout),
+            "date,sma_2\n2026-01-02,10.5\n2026-01-03,10\n"
+        );
+
+        let obv = run(&["obv", path]);
+        assert!(
+            obv.status.success(),
+            "{}",
+            String::from_utf8_lossy(&obv.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&obv.stdout),
+            "date,obv\n2026-01-01,100\n2026-01-02,150\n2026-01-03,130\n"
+        );
+    }
+
+    for deviation in ["NaN", "inf", "-inf"] {
+        let output = run(&["bollinger", path, &format!("2,{deviation}")]);
+        assert_eq!(output.status.code(), Some(1));
+    }
+
+    fs::write(&input, "date,close\n2026-01-01,10\n").unwrap();
+    let missing_volume = run(&["obv", path]);
+    assert_eq!(missing_volume.status.code(), Some(2));
+    fs::write(&input, "date,close,volume\n2026-01-01,bad,10\n").unwrap();
+    let malformed = run(&["obv", path]);
+    assert_eq!(malformed.status.code(), Some(2));
+    fs::write(&input, "date,volume\n2026-01-01,10\n").unwrap();
+    assert_eq!(run(&["obv", path]).status.code(), Some(2));
+    fs::write(
+        &input,
+        format!("close,volume\n{},10\n", "1".repeat(16 * 1024 + 1)),
+    )
+    .unwrap();
+    assert_eq!(run(&["obv", path]).status.code(), Some(2));
+    fs::remove_file(input).unwrap();
+}
+
 // =============================================================================
 // Task 3.7 Test Cases
 // =============================================================================
@@ -53,7 +117,7 @@ fn run_cli_stdout(args: &[&str]) -> String {
 fn test_end_to_end_csv_to_sma_to_csv_output() {
     let input = fixtures_dir().join("simple_close.csv");
     let temp_dir = std::env::temp_dir();
-    let output = temp_dir.join("test_sma_output.csv");
+    let output = temp_dir.join(format!("liq-ta-sma-output-{}.csv", std::process::id()));
 
     // New argument order: input first, then period
     let output_result = run_cli(&[
@@ -87,7 +151,7 @@ fn test_end_to_end_csv_to_sma_to_csv_output() {
 fn test_end_to_end_csv_to_macd_to_csv_output() {
     let input = fixtures_dir().join("simple_close.csv");
     let temp_dir = std::env::temp_dir();
-    let output = temp_dir.join("test_macd_output.csv");
+    let output = temp_dir.join(format!("liq-ta-macd-output-{}.csv", std::process::id()));
 
     // New argument order: input first, then params
     let output_result = run_cli(&[
@@ -98,22 +162,10 @@ fn test_end_to_end_csv_to_macd_to_csv_output() {
         output.to_str().unwrap(),
     ]);
 
-    // Note: MACD may have insufficient data for small test files
-    // The test verifies the CLI runs correctly even if output is minimal
-    if output_result.status.success() && output.exists() {
-        let content = fs::read_to_string(&output).unwrap();
-        let lines: Vec<&str> = content.lines().collect();
-
-        // MACD should have multi-column output
-        if !lines.is_empty() {
-            assert!(
-                lines[0].contains("macd")
-                    || lines[0].contains("signal")
-                    || lines[0].contains("histogram"),
-                "Header should contain MACD column names"
-            );
-        }
-    }
+    assert!(output_result.status.success());
+    let content = fs::read_to_string(&output).unwrap();
+    let header = content.lines().next().unwrap();
+    assert!(header.contains("macd") && header.contains("signal") && header.contains("histogram"));
 
     fs::remove_file(&output).ok();
 }
@@ -131,29 +183,18 @@ fn test_exit_code_success() {
 fn test_exit_code_missing_file() {
     let output = run_cli(&["sma", "/nonexistent/file.csv", "3"]);
 
-    assert!(
-        !output.status.success(),
-        "Exit code should be non-zero for missing file"
-    );
-
-    // Per PRD §5.4: exit code 2 for data error
-    let code = output.status.code().unwrap_or(-1);
-    assert!(code > 0, "Should have non-zero exit code");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("[io_error]"));
 }
 
 #[test]
-fn test_exit_code_invalid_arguments() {
-    let output = run_cli(&["macd", "input.csv", "12,26"]); // Missing signal period
-
-    // Invalid argument format - may fail at argument parsing or computation
-    // Either way, should not be successful
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let failed = !output.status.success() || stderr.contains("error") || stdout.contains("error");
-
-    // Note: Some errors may be caught at runtime, not at argument parsing
-    // This test ensures the error path is exercised
-    assert!(failed || !stderr.is_empty() || !output.status.success());
+fn invalid_macd_parameters_exit_with_argument_error() {
+    let input = fixtures_dir().join("simple_close.csv");
+    let output = run_cli(&["macd", input.to_str().unwrap(), "12,26"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("[invalid_argument]"));
 }
 
 #[test]
@@ -195,7 +236,7 @@ fn test_lookback_rows_dropped_per_prd() {
 fn test_date_column_preserved() {
     let input = fixtures_dir().join("ohlc.csv");
     let temp_dir = std::env::temp_dir();
-    let output = temp_dir.join("test_date_preserved.csv");
+    let output = temp_dir.join(format!("liq-ta-date-output-{}.csv", std::process::id()));
 
     let output_result = run_cli(&[
         "sma",
@@ -205,19 +246,9 @@ fn test_date_column_preserved() {
         output.to_str().unwrap(),
     ]);
 
-    if output_result.status.success() && output.exists() {
-        let content = fs::read_to_string(&output).unwrap();
-        let lines: Vec<&str> = content.lines().collect();
-
-        // First line should have date column
-        if !lines.is_empty() {
-            // Date column should be preserved
-            assert!(
-                lines[0].starts_with("date") || lines[0].contains("date"),
-                "Date column should be in output"
-            );
-        }
-    }
+    assert!(output_result.status.success());
+    let content = fs::read_to_string(&output).unwrap();
+    assert!(content.lines().next().unwrap().contains("date"));
 
     fs::remove_file(&output).ok();
 }
@@ -257,64 +288,6 @@ fn test_ema_end_to_end() {
     let lines: Vec<&str> = stdout.lines().collect();
     assert!(!lines.is_empty(), "EMA should produce output");
     assert!(lines[0].contains("ema"), "Header should contain 'ema'");
-}
-
-#[test]
-fn test_rsi_end_to_end() {
-    let input = fixtures_dir().join("simple_close.csv");
-
-    let _stdout = run_cli_stdout(&["rsi", input.to_str().unwrap(), "3"]);
-
-    // RSI may not produce output with small test data
-    // Just verify it runs without crashing
-}
-
-#[test]
-fn test_bollinger_end_to_end() {
-    let input = fixtures_dir().join("simple_close.csv");
-
-    let _output = run_cli(&["bollinger", input.to_str().unwrap(), "3,2.0"]);
-
-    // Verify it runs (may not have enough data for meaningful output)
-    // Exit code doesn't have to be 0 if insufficient data
-}
-
-#[test]
-fn test_atr_requires_ohlc() {
-    let input = fixtures_dir().join("ohlc.csv");
-
-    let _stdout = run_cli_stdout(&["atr", input.to_str().unwrap(), "2"]);
-
-    // ATR needs OHLC data and has lookback
-    // Just verify it produces some output or handles gracefully
-}
-
-#[test]
-fn test_stochastic_requires_ohlc() {
-    let input = fixtures_dir().join("ohlc.csv");
-
-    let _output = run_cli(&["stochastic", input.to_str().unwrap(), "3,2"]);
-
-    // Stochastic needs OHLC data
-    // Just verify it runs without crashing
-}
-
-#[test]
-fn test_keltner_requires_ohlc() {
-    let input = fixtures_dir().join("ohlc.csv");
-    let _output = run_cli(&["keltner", input.to_str().unwrap(), "5,2.0"]);
-}
-
-#[test]
-fn test_ichimoku_requires_ohlc() {
-    let input = fixtures_dir().join("ohlc.csv");
-    let _output = run_cli(&["ichimoku", input.to_str().unwrap(), "3,5,7,2"]);
-}
-
-#[test]
-fn test_qqe_end_to_end() {
-    let input = fixtures_dir().join("simple_close.csv");
-    let _output = run_cli(&["qqe", input.to_str().unwrap(), "3,2,2,4.236"]);
 }
 
 #[test]
@@ -381,72 +354,14 @@ fn test_stage3_new_commands_smoke() {
 fn test_supertrend_invalid_args() {
     let input = fixtures_dir().join("ohlc.csv");
     let output = run_cli(&["supertrend", input.to_str().unwrap(), "3,-1.0"]);
-    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
 }
 
 #[test]
 fn test_gaussian_channel_invalid_args() {
     let input = fixtures_dir().join("simple_close.csv");
     let output = run_cli(&["gaussian-channel", input.to_str().unwrap(), "3,0.5"]);
-    assert!(!output.status.success());
-}
-
-#[test]
-fn test_output_to_stdout() {
-    let input = fixtures_dir().join("simple_close.csv");
-
-    let output = run_cli(&["sma", input.to_str().unwrap(), "2"]);
-
-    // When no -o flag, output goes to stdout
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(!stdout.is_empty(), "Output should go to stdout");
-}
-
-#[test]
-fn test_output_to_file() {
-    let input = fixtures_dir().join("simple_close.csv");
-    let temp_dir = std::env::temp_dir();
-    let output_path = temp_dir.join("test_output_file.csv");
-
-    let _ = run_cli(&[
-        "sma",
-        input.to_str().unwrap(),
-        "2",
-        "-o",
-        output_path.to_str().unwrap(),
-    ]);
-
-    // Output file should be created
-    assert!(output_path.exists(), "Output file should be created");
-
-    let content = fs::read_to_string(&output_path).unwrap();
-    assert!(!content.is_empty(), "Output file should not be empty");
-
-    fs::remove_file(&output_path).ok();
-}
-
-#[test]
-fn test_error_message_actionable() {
-    let output = run_cli(&["sma", "/nonexistent/path/to/file.csv", "3"]);
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-
-    // Error message should provide helpful information
-    // (Either in stderr or through exit code)
-    assert!(
-        !output.status.success() || !stderr.is_empty(),
-        "Error should be communicated"
-    );
-}
-
-#[test]
-fn test_default_period_used_when_omitted() {
-    let input = fixtures_dir().join("simple_close.csv");
-
-    // SMA with just input file (no period) should use default
-    let _output = run_cli(&["sma", input.to_str().unwrap()]);
-
-    // This tests that default period (20) is used
-    // With 5 data points, may not have enough data
-    // Just verify it doesn't crash
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
 }

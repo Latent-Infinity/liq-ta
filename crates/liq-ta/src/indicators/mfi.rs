@@ -585,29 +585,8 @@ pub fn mfi<T: SeriesElement>(
     volume: &[T],
     period: usize,
 ) -> Result<Vec<T>> {
-    use std::any::TypeId;
-
     let n = high.len();
-
-    // Optimization: For f64/f32, allocate uninitialized memory since mfi_into
-    // fully overwrites every element (lookback + computed region).
-    // This avoids the ~10-15µs penalty of initializing 100K elements to NaN.
-    let mut output = if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let mut v: Vec<T> = Vec::with_capacity(n);
-        unsafe {
-            v.set_len(n);
-        } // Safe: mfi_into writes all n elements
-        v
-    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let mut v: Vec<T> = Vec::with_capacity(n);
-        unsafe {
-            v.set_len(n);
-        } // Safe: mfi_into writes all n elements
-        v
-    } else {
-        // For other types, use safe initialization
-        vec![T::nan(); n]
-    };
+    let mut output = vec![T::nan(); n];
 
     mfi_into(high, low, close, volume, period, &mut output)?;
     Ok(output)

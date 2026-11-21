@@ -204,7 +204,7 @@ pub fn stochastic<T: SeriesElement>(
 
 /// Computes the Stochastic Oscillator into pre-allocated output buffers.
 ///
-/// This is the `_into` variant of [`stochastic`] for buffer reuse.
+/// Reuses output buffers but may allocate internal scratch.
 ///
 /// # Arguments
 ///
@@ -344,7 +344,7 @@ pub struct StochasticOutput<T> {
 /// # Performance
 ///
 /// - Time complexity: O(n) where n is the length of the input data
-/// - Space complexity: O(n) for the output vectors
+/// - Space complexity: O(n) for outputs and internal scratch
 ///
 /// # NaN Handling
 ///
@@ -382,8 +382,8 @@ pub fn stochastic_fast<T: SeriesElement>(
 
 /// Computes the Fast Stochastic Oscillator into pre-allocated output buffers.
 ///
-/// This variant allows reusing existing buffers to avoid allocations in
-/// performance-critical code paths.
+/// This variant reuses output buffers. The f32 and f64 fast paths still
+/// allocate O(n) internal scratch space; other paths may also allocate scratch.
 ///
 /// # Arguments
 ///
@@ -563,6 +563,8 @@ pub fn stochastic_slow<T: SeriesElement>(
 
 /// Computes the Slow Stochastic Oscillator into pre-allocated output buffers.
 ///
+/// May allocate internal scratch.
+///
 /// # Errors
 ///
 /// Returns an error if:
@@ -659,6 +661,8 @@ pub fn stochastic_full<T: SeriesElement>(
 }
 
 /// Computes the Full Stochastic Oscillator into pre-allocated output buffers.
+///
+/// May allocate internal scratch.
 ///
 /// # Errors
 ///
@@ -1060,7 +1064,7 @@ fn pop_expired(q: &mut IdxRing, window_start: usize) {
 
 /// Streaming single-pass Fast Stochastic implementation.
 /// Uses monotonic deques for O(n) rolling min/max + streaming SMA for %D.
-/// No intermediate allocations.
+/// Allocates rolling deque and SMA buffers.
 #[inline(never)]
 fn compute_stochastic_fast_streaming<T: SeriesElement + 'static>(
     high: &[T],
@@ -1138,6 +1142,7 @@ fn compute_stochastic_fast_streaming<T: SeriesElement + 'static>(
 
 /// Streaming single-pass Full Stochastic implementation.
 /// Uses monotonic deques for rolling min/max + cascaded SMAs.
+/// Allocates rolling deque and SMA buffers.
 #[inline(never)]
 fn compute_stochastic_full_streaming<T: SeriesElement + 'static>(
     high: &[T],
@@ -1527,6 +1532,8 @@ impl Stochastic {
     }
 
     /// Computes the Stochastic Oscillator into a pre-allocated output struct.
+    ///
+    /// May allocate internal scratch.
     ///
     /// Returns `(k_valid_count, d_valid_count)`.
     ///

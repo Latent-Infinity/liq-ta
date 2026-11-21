@@ -660,21 +660,14 @@ fn var_f64_precision_slow<T: SeriesElement>(
 pub fn var<T: SeriesElement + 'static>(data: &[T], period: usize) -> Result<Vec<T>> {
     use std::any::TypeId;
 
-    // Wrapper optimization: uninitialized allocation for f64/f32 (§5.4)
     if TypeId::of::<T>() == TypeId::of::<f64>() {
         let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
-        let mut output: Vec<f64> = Vec::with_capacity(data.len());
-        unsafe {
-            output.set_len(data.len());
-        }
+        let mut output: Vec<f64> = vec![0.0; data.len()];
         var_into(data_f64, period, &mut output)?;
         Ok(unsafe { std::mem::transmute(output) })
     } else if TypeId::of::<T>() == TypeId::of::<f32>() {
         let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
-        let mut output: Vec<f32> = Vec::with_capacity(data.len());
-        unsafe {
-            output.set_len(data.len());
-        }
+        let mut output: Vec<f32> = vec![0.0; data.len()];
         var_into(data_f32, period, &mut output)?;
         Ok(unsafe { std::mem::transmute(output) })
     } else {
@@ -751,22 +744,14 @@ pub fn stddev_into<T: SeriesElement + 'static>(
 pub fn stddev<T: SeriesElement + 'static>(data: &[T], period: usize) -> Result<Vec<T>> {
     use std::any::TypeId;
 
-    // Wrapper optimization: uninitialized allocation for f64/f32 (§5.4)
-    // stddev_into() writes all elements (via var_into()), so this avoids double-write tax
     if TypeId::of::<T>() == TypeId::of::<f64>() {
         let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
-        let mut output: Vec<f64> = Vec::with_capacity(data.len());
-        unsafe {
-            output.set_len(data.len());
-        }
+        let mut output: Vec<f64> = vec![0.0; data.len()];
         stddev_into(data_f64, period, &mut output)?;
         Ok(unsafe { std::mem::transmute(output) })
     } else if TypeId::of::<T>() == TypeId::of::<f32>() {
         let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
-        let mut output: Vec<f32> = Vec::with_capacity(data.len());
-        unsafe {
-            output.set_len(data.len());
-        }
+        let mut output: Vec<f32> = vec![0.0; data.len()];
         stddev_into(data_f32, period, &mut output)?;
         Ok(unsafe { std::mem::transmute(output) })
     } else {
@@ -923,18 +908,12 @@ pub fn skew<T: SeriesElement + 'static>(data: &[T], period: usize) -> Result<Vec
 
     if TypeId::of::<T>() == TypeId::of::<f64>() {
         let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
-        let mut output: Vec<f64> = Vec::with_capacity(data.len());
-        unsafe {
-            output.set_len(data.len());
-        }
+        let mut output: Vec<f64> = vec![0.0; data.len()];
         skew_into(data_f64, period, &mut output)?;
         Ok(unsafe { std::mem::transmute(output) })
     } else if TypeId::of::<T>() == TypeId::of::<f32>() {
         let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
-        let mut output: Vec<f32> = Vec::with_capacity(data.len());
-        unsafe {
-            output.set_len(data.len());
-        }
+        let mut output: Vec<f32> = vec![0.0; data.len()];
         skew_into(data_f32, period, &mut output)?;
         Ok(unsafe { std::mem::transmute(output) })
     } else {
@@ -1092,18 +1071,12 @@ pub fn kurt<T: SeriesElement + 'static>(data: &[T], period: usize) -> Result<Vec
 
     if TypeId::of::<T>() == TypeId::of::<f64>() {
         let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
-        let mut output: Vec<f64> = Vec::with_capacity(data.len());
-        unsafe {
-            output.set_len(data.len());
-        }
+        let mut output: Vec<f64> = vec![0.0; data.len()];
         kurt_into(data_f64, period, &mut output)?;
         Ok(unsafe { std::mem::transmute(output) })
     } else if TypeId::of::<T>() == TypeId::of::<f32>() {
         let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
-        let mut output: Vec<f32> = Vec::with_capacity(data.len());
-        unsafe {
-            output.set_len(data.len());
-        }
+        let mut output: Vec<f32> = vec![0.0; data.len()];
         kurt_into(data_f32, period, &mut output)?;
         Ok(unsafe { std::mem::transmute(output) })
     } else {
@@ -1255,19 +1228,13 @@ pub fn cov<T: SeriesElement + 'static>(data0: &[T], data1: &[T], period: usize) 
     if TypeId::of::<T>() == TypeId::of::<f64>() {
         let data0_f64: &[f64] = unsafe { std::mem::transmute(data0) };
         let data1_f64: &[f64] = unsafe { std::mem::transmute(data1) };
-        let mut output: Vec<f64> = Vec::with_capacity(data0.len());
-        unsafe {
-            output.set_len(data0.len());
-        }
+        let mut output: Vec<f64> = vec![0.0; data0.len()];
         cov_into(data0_f64, data1_f64, period, &mut output)?;
         Ok(unsafe { std::mem::transmute(output) })
     } else if TypeId::of::<T>() == TypeId::of::<f32>() {
         let data0_f32: &[f32] = unsafe { std::mem::transmute(data0) };
         let data1_f32: &[f32] = unsafe { std::mem::transmute(data1) };
-        let mut output: Vec<f32> = Vec::with_capacity(data0.len());
-        unsafe {
-            output.set_len(data0.len());
-        }
+        let mut output: Vec<f32> = vec![0.0; data0.len()];
         cov_into(data0_f32, data1_f32, period, &mut output)?;
         Ok(unsafe { std::mem::transmute(output) })
     } else {
@@ -1410,18 +1377,12 @@ pub fn zscore<T: SeriesElement + 'static>(data: &[T], period: usize) -> Result<V
 
     if TypeId::of::<T>() == TypeId::of::<f64>() {
         let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
-        let mut output: Vec<f64> = Vec::with_capacity(data.len());
-        unsafe {
-            output.set_len(data.len());
-        }
+        let mut output: Vec<f64> = vec![0.0; data.len()];
         zscore_into(data_f64, period, &mut output)?;
         Ok(unsafe { std::mem::transmute(output) })
     } else if TypeId::of::<T>() == TypeId::of::<f32>() {
         let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
-        let mut output: Vec<f32> = Vec::with_capacity(data.len());
-        unsafe {
-            output.set_len(data.len());
-        }
+        let mut output: Vec<f32> = vec![0.0; data.len()];
         zscore_into(data_f32, period, &mut output)?;
         Ok(unsafe { std::mem::transmute(output) })
     } else {
@@ -1555,18 +1516,12 @@ pub fn mad<T: SeriesElement + 'static>(data: &[T], period: usize) -> Result<Vec<
 
     if TypeId::of::<T>() == TypeId::of::<f64>() {
         let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
-        let mut output: Vec<f64> = Vec::with_capacity(data.len());
-        unsafe {
-            output.set_len(data.len());
-        }
+        let mut output: Vec<f64> = vec![0.0; data.len()];
         mad_into(data_f64, period, &mut output)?;
         Ok(unsafe { std::mem::transmute(output) })
     } else if TypeId::of::<T>() == TypeId::of::<f32>() {
         let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
-        let mut output: Vec<f32> = Vec::with_capacity(data.len());
-        unsafe {
-            output.set_len(data.len());
-        }
+        let mut output: Vec<f32> = vec![0.0; data.len()];
         mad_into(data_f32, period, &mut output)?;
         Ok(unsafe { std::mem::transmute(output) })
     } else {
@@ -1709,18 +1664,12 @@ pub fn sem<T: SeriesElement + 'static>(data: &[T], period: usize) -> Result<Vec<
 
     if TypeId::of::<T>() == TypeId::of::<f64>() {
         let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
-        let mut output: Vec<f64> = Vec::with_capacity(data.len());
-        unsafe {
-            output.set_len(data.len());
-        }
+        let mut output: Vec<f64> = vec![0.0; data.len()];
         sem_into(data_f64, period, &mut output)?;
         Ok(unsafe { std::mem::transmute(output) })
     } else if TypeId::of::<T>() == TypeId::of::<f32>() {
         let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
-        let mut output: Vec<f32> = Vec::with_capacity(data.len());
-        unsafe {
-            output.set_len(data.len());
-        }
+        let mut output: Vec<f32> = vec![0.0; data.len()];
         sem_into(data_f32, period, &mut output)?;
         Ok(unsafe { std::mem::transmute(output) })
     } else {
@@ -1899,19 +1848,13 @@ pub fn correl<T: SeriesElement + 'static>(
     if TypeId::of::<T>() == TypeId::of::<f64>() {
         let data0_f64: &[f64] = unsafe { std::mem::transmute(data0) };
         let data1_f64: &[f64] = unsafe { std::mem::transmute(data1) };
-        let mut output: Vec<f64> = Vec::with_capacity(data0.len());
-        unsafe {
-            output.set_len(data0.len());
-        }
+        let mut output: Vec<f64> = vec![0.0; data0.len()];
         correl_into(data0_f64, data1_f64, period, &mut output)?;
         Ok(unsafe { std::mem::transmute(output) })
     } else if TypeId::of::<T>() == TypeId::of::<f32>() {
         let data0_f32: &[f32] = unsafe { std::mem::transmute(data0) };
         let data1_f32: &[f32] = unsafe { std::mem::transmute(data1) };
-        let mut output: Vec<f32> = Vec::with_capacity(data0.len());
-        unsafe {
-            output.set_len(data0.len());
-        }
+        let mut output: Vec<f32> = vec![0.0; data0.len()];
         correl_into(data0_f32, data1_f32, period, &mut output)?;
         Ok(unsafe { std::mem::transmute(output) })
     } else {
@@ -2078,19 +2021,13 @@ pub fn beta<T: SeriesElement + 'static>(data0: &[T], data1: &[T], period: usize)
     if TypeId::of::<T>() == TypeId::of::<f64>() {
         let data0_f64: &[f64] = unsafe { std::mem::transmute(data0) };
         let data1_f64: &[f64] = unsafe { std::mem::transmute(data1) };
-        let mut output: Vec<f64> = Vec::with_capacity(data0.len());
-        unsafe {
-            output.set_len(data0.len());
-        }
+        let mut output: Vec<f64> = vec![0.0; data0.len()];
         beta_into(data0_f64, data1_f64, period, &mut output)?;
         Ok(unsafe { std::mem::transmute(output) })
     } else if TypeId::of::<T>() == TypeId::of::<f32>() {
         let data0_f32: &[f32] = unsafe { std::mem::transmute(data0) };
         let data1_f32: &[f32] = unsafe { std::mem::transmute(data1) };
-        let mut output: Vec<f32> = Vec::with_capacity(data0.len());
-        unsafe {
-            output.set_len(data0.len());
-        }
+        let mut output: Vec<f32> = vec![0.0; data0.len()];
         beta_into(data0_f32, data1_f32, period, &mut output)?;
         Ok(unsafe { std::mem::transmute(output) })
     } else {
@@ -2236,22 +2173,14 @@ pub fn linearreg_into<T: SeriesElement>(data: &[T], period: usize, output: &mut 
 pub fn linearreg<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
     use std::any::TypeId;
 
-    // Optimized allocation for f64/f32: avoid double-initialization
-    // linearreg_into() writes all elements, so this is pure double-write tax
     if TypeId::of::<T>() == TypeId::of::<f64>() {
         let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
-        let mut output: Vec<f64> = Vec::with_capacity(data.len());
-        unsafe {
-            output.set_len(data.len());
-        }
+        let mut output: Vec<f64> = vec![0.0; data.len()];
         linearreg_into(data_f64, period, &mut output)?;
         Ok(unsafe { std::mem::transmute(output) })
     } else if TypeId::of::<T>() == TypeId::of::<f32>() {
         let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
-        let mut output: Vec<f32> = Vec::with_capacity(data.len());
-        unsafe {
-            output.set_len(data.len());
-        }
+        let mut output: Vec<f32> = vec![0.0; data.len()];
         linearreg_into(data_f32, period, &mut output)?;
         Ok(unsafe { std::mem::transmute(output) })
     } else {
@@ -2399,22 +2328,14 @@ pub fn linearreg_slope_into<T: SeriesElement>(
 pub fn linearreg_slope<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
     use std::any::TypeId;
 
-    // Wrapper optimization: uninitialized allocation for f64/f32 (§5.4)
-    // linearreg_slope_into() writes all elements, so this avoids double-write tax
     if TypeId::of::<T>() == TypeId::of::<f64>() {
         let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
-        let mut output: Vec<f64> = Vec::with_capacity(data.len());
-        unsafe {
-            output.set_len(data.len());
-        }
+        let mut output: Vec<f64> = vec![0.0; data.len()];
         linearreg_slope_into(data_f64, period, &mut output)?;
         Ok(unsafe { std::mem::transmute(output) })
     } else if TypeId::of::<T>() == TypeId::of::<f32>() {
         let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
-        let mut output: Vec<f32> = Vec::with_capacity(data.len());
-        unsafe {
-            output.set_len(data.len());
-        }
+        let mut output: Vec<f32> = vec![0.0; data.len()];
         linearreg_slope_into(data_f32, period, &mut output)?;
         Ok(unsafe { std::mem::transmute(output) })
     } else {
@@ -2564,22 +2485,14 @@ pub fn linearreg_intercept_into<T: SeriesElement>(
 pub fn linearreg_intercept<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
     use std::any::TypeId;
 
-    // Wrapper optimization: uninitialized allocation for f64/f32 (§5.4)
-    // linearreg_intercept_into() writes all elements, so this avoids double-write tax
     if TypeId::of::<T>() == TypeId::of::<f64>() {
         let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
-        let mut output: Vec<f64> = Vec::with_capacity(data.len());
-        unsafe {
-            output.set_len(data.len());
-        }
+        let mut output: Vec<f64> = vec![0.0; data.len()];
         linearreg_intercept_into(data_f64, period, &mut output)?;
         Ok(unsafe { std::mem::transmute(output) })
     } else if TypeId::of::<T>() == TypeId::of::<f32>() {
         let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
-        let mut output: Vec<f32> = Vec::with_capacity(data.len());
-        unsafe {
-            output.set_len(data.len());
-        }
+        let mut output: Vec<f32> = vec![0.0; data.len()];
         linearreg_intercept_into(data_f32, period, &mut output)?;
         Ok(unsafe { std::mem::transmute(output) })
     } else {
@@ -2730,22 +2643,14 @@ pub fn linearreg_angle_into<T: SeriesElement>(
 pub fn linearreg_angle<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
     use std::any::TypeId;
 
-    // Wrapper optimization: uninitialized allocation for f64/f32 (§5.4)
-    // linearreg_angle_into() writes all elements, so this avoids double-write tax
     if TypeId::of::<T>() == TypeId::of::<f64>() {
         let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
-        let mut output: Vec<f64> = Vec::with_capacity(data.len());
-        unsafe {
-            output.set_len(data.len());
-        }
+        let mut output: Vec<f64> = vec![0.0; data.len()];
         linearreg_angle_into(data_f64, period, &mut output)?;
         Ok(unsafe { std::mem::transmute(output) })
     } else if TypeId::of::<T>() == TypeId::of::<f32>() {
         let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
-        let mut output: Vec<f32> = Vec::with_capacity(data.len());
-        unsafe {
-            output.set_len(data.len());
-        }
+        let mut output: Vec<f32> = vec![0.0; data.len()];
         linearreg_angle_into(data_f32, period, &mut output)?;
         Ok(unsafe { std::mem::transmute(output) })
     } else {
@@ -2894,22 +2799,14 @@ pub fn tsf_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -
 pub fn tsf<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
     use std::any::TypeId;
 
-    // Wrapper optimization: uninitialized allocation for f64/f32 (§5.4)
-    // tsf_into() writes all elements, so this avoids double-write tax
     if TypeId::of::<T>() == TypeId::of::<f64>() {
         let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
-        let mut output: Vec<f64> = Vec::with_capacity(data.len());
-        unsafe {
-            output.set_len(data.len());
-        }
+        let mut output: Vec<f64> = vec![0.0; data.len()];
         tsf_into(data_f64, period, &mut output)?;
         Ok(unsafe { std::mem::transmute(output) })
     } else if TypeId::of::<T>() == TypeId::of::<f32>() {
         let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
-        let mut output: Vec<f32> = Vec::with_capacity(data.len());
-        unsafe {
-            output.set_len(data.len());
-        }
+        let mut output: Vec<f32> = vec![0.0; data.len()];
         tsf_into(data_f32, period, &mut output)?;
         Ok(unsafe { std::mem::transmute(output) })
     } else {

@@ -1,5 +1,10 @@
 # liq-ta Optimization Guide
 
+> Historical optimization notes: measured results, implementation details, and
+> performance thresholds below are not current guarantees. Some examples
+> illustrate unsafe techniques that must not be copied. See the
+> [current benchmarking guide](benchmarking-guide.md) for runnable suites.
+
 This document is the **optimization playbook** for liq-ta indicators. It defines:
 - the **performance contract** (what “faster” means in this repo),
 - the **correctness contract** (NaN/Inf behavior),
@@ -611,12 +616,14 @@ for i in lookback..n {
 When optimizing an indicator, follow this sequence for maximum effectiveness:
 
 ### Step 1: Establish Baseline
+
+Choose a registered benchmark group, such as SMA, and record a baseline:
+
 ```bash
-cargo bench --bench talib_comparison -- 'indicator_name/.*100000' --noplot
+cargo bench --locked -p liq-ta --bench indicators -- 'sma/100000' --save-baseline before
 ```
-- Record baseline performance vs TA-Lib
-- Identify the performance gap (if any)
-- Note: If already at parity or faster, optimization may not be needed
+
+This measures liq-ta only; the historical TA-Lib comparison is not registered.
 
 ### Step 2: Classify Indicator Archetype
 Refer to section 4 table to identify:
@@ -670,10 +677,8 @@ Refer to section 4 table to identify:
 # Run tests
 cargo test --lib indicator_name --quiet
 
-# Benchmark with period sweep
-cargo bench --bench talib_comparison -- 'indicator_name/' --noplot
-
-# Check all periods {5, 13, 21, 55, 89} at sizes {100, 1K, 10K, 100K}
+# Compare the same workload against the saved baseline
+cargo bench --locked -p liq-ta --bench indicators -- 'sma/100000' --baseline before
 ```
 
 **Acceptance Criteria** (from section 2.3):

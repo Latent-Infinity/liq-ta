@@ -10,26 +10,25 @@
 //! # Algorithm
 //!
 //! This implementation uses an O(n) rolling calculation approach where:
-//! 1. Rolling SMA is computed using the rolling sum method
-//! 2. Rolling standard deviation is computed using Welford's algorithm (High mode)
-//!    or sum-of-squares (Fast mode)
-//! 3. Upper and lower bands are computed as middle ± k × stddev
+//! 1. Rolling mean and standard deviation use f64 Welford accumulators for f32
+//!    inputs in High mode; other cases use native rolling sums and sum-of-squares
+//! 2. Upper and lower bands are computed as middle ± k × stddev
 //!
 //! # Mathematical Conventions (PRD §4.8)
 //!
 //! - **Population Standard Deviation**: Uses ÷n, not ÷(n-1). This matches TA-Lib and most
 //!   financial charting platforms. Users migrating from sample-stddev implementations
 //!   (e.g., Excel) may see slightly narrower bands.
-//! - **Variance Algorithm**: Welford's algorithm is used in High precision mode for
-//!   improved numerical stability. Sum-of-squares is used in Fast mode for performance.
+//! - **Variance Algorithm**: Bollinger Bands use Welford's algorithm for f32 inputs
+//!   in High mode. Other inputs and `rolling_stddev` use native sum-of-squares.
 //! - **Precision Note**: Welford's algorithm handles large mean with small variance
 //!   without catastrophic cancellation.
 //!
 //! # Precision Behavior
 //!
 //! When `PrecisionMode::High` is active and input type is `f32`:
-//! - Rolling sum and sum-of-squares accumulators use `f64` internally
-//! - Variance computation performed in `f64`, then converted to `f32`
+//! - Welford's mean and variance accumulators use `f64` internally
+//! - Bands are computed in `f64`, then converted to `f32`
 //! - Significantly reduces catastrophic cancellation for near-constant data
 //!
 //! **Tolerance**: hybrid(rel=1e-5, abs=1e-7) when comparing f32 High mode to f64 reference.
@@ -230,31 +229,7 @@ pub fn bollinger<T: SeriesElement + 'static>(
     period: usize,
     num_std_dev: T,
 ) -> Result<BollingerOutput<T>> {
-    use std::any::TypeId;
-
-    // Preserve high-precision f32 behavior expected by precision tests.
-    if use_f64_accumulator::<T>() && TypeId::of::<T>() == TypeId::of::<f32>() {
-        let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
-        let mut middle: Vec<f32> = vec![f32::NAN; data.len()];
-        let mut upper: Vec<f32> = vec![f32::NAN; data.len()];
-        let mut lower: Vec<f32> = vec![f32::NAN; data.len()];
-
-        let num_std_dev_f32 = num_std_dev.to_f64().unwrap_or(2.0) as f32;
-        bollinger_f64_accum(
-            data_f32,
-            period,
-            num_std_dev_f32,
-            &mut middle,
-            &mut upper,
-            &mut lower,
-        )?;
-
-        return Ok(BollingerOutput {
-            middle: unsafe { std::mem::transmute(middle) },
-            upper: unsafe { std::mem::transmute(upper) },
-            lower: unsafe { std::mem::transmute(lower) },
-        });
-    }
+    // Both allocating and buffer APIs share validation and precision dispatch.
 
     let mut output = BollingerOutput {
         middle: vec![T::nan(); data.len()],
@@ -440,6 +415,18 @@ pub fn bollinger_into<T: SeriesElement + 'static>(
         });
     }
 
+    if use_f64_accumulator::<T>() {
+        bollinger_f64_accum(
+            data,
+            period,
+            num_std_dev,
+            &mut output.middle,
+            &mut output.upper,
+            &mut output.lower,
+        )?;
+        return Ok(data.len() - period + 1);
+    }
+
     // Pre-compute reciprocal for efficient division
     let inv_period = T::one() / T::from_usize(period)?;
 
@@ -570,46 +557,21 @@ pub fn rolling_stddev<T: SeriesElement + 'static>(data: &[T], period: usize) -> 
 
     // Edge case fast path: period==1 means stddev=0 (Section 5.5)
     if period == 1 {
-        return Ok(vec![T::zero(); data.len()]);
+        return Ok(data
+            .iter()
+            .map(|&value| {
+                if is_invalid(value) {
+                    T::nan()
+                } else {
+                    T::zero()
+                }
+            })
+            .collect());
     }
 
-    // Optimization: For f64/f32, allocate uninitialized memory (Section 5.4)
-    use std::any::TypeId;
-
-    if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
-        let mut result: Vec<f64> = Vec::with_capacity(data.len());
-        unsafe {
-            result.set_len(data.len());
-        }
-
-        // Fill lookback period with NaN
-        for item in result.iter_mut().take(period - 1) {
-            *item = f64::NAN;
-        }
-
-        rolling_stddev_compute(data_f64, period, &mut result)?;
-        Ok(unsafe { std::mem::transmute(result) })
-    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
-        let mut result: Vec<f32> = Vec::with_capacity(data.len());
-        unsafe {
-            result.set_len(data.len());
-        }
-
-        // Fill lookback period with NaN
-        for item in result.iter_mut().take(period - 1) {
-            *item = f32::NAN;
-        }
-
-        rolling_stddev_compute(data_f32, period, &mut result)?;
-        Ok(unsafe { std::mem::transmute(result) })
-    } else {
-        // Generic fallback: safe initialization
-        let mut result = vec![T::nan(); data.len()];
-        rolling_stddev_compute(data, period, &mut result)?;
-        Ok(result)
-    }
+    let mut result = vec![T::nan(); data.len()];
+    rolling_stddev_compute(data, period, &mut result)?;
+    Ok(result)
 }
 
 /// Core computation for rolling standard deviation.
@@ -718,6 +680,16 @@ pub fn rolling_stddev_into<T: SeriesElement + 'static>(
             actual: output.len(),
             indicator: "rolling_stddev",
         });
+    }
+    if period == 1 {
+        for (result, &value) in output.iter_mut().zip(data) {
+            *result = if is_invalid(value) {
+                T::nan()
+            } else {
+                T::zero()
+            };
+        }
+        return Ok(data.len());
     }
 
     // Pre-compute reciprocal for efficient division
@@ -935,6 +907,79 @@ mod tests {
 
     const EPSILON: f64 = 1e-10;
     const EPSILON_F32: f32 = 1e-5;
+
+    #[test]
+    fn f32_modes_share_validation_and_output() {
+        use crate::precision::with_precision_mode;
+
+        for mode in [PrecisionMode::High, PrecisionMode::Fast] {
+            with_precision_mode(mode, || {
+                let data = [10_000.0_f32, 10_001.0, f32::INFINITY, 10_002.0, 10_003.0];
+                let allocated = bollinger(&data, 2, 2.0).unwrap();
+                let mut output = BollingerOutput {
+                    middle: vec![0.0; data.len()],
+                    upper: vec![0.0; data.len()],
+                    lower: vec![0.0; data.len()],
+                };
+                assert_eq!(bollinger_into(&data, 2, 2.0, &mut output).unwrap(), 4);
+                for (a, b) in [
+                    (&allocated.middle, &output.middle),
+                    (&allocated.upper, &output.upper),
+                    (&allocated.lower, &output.lower),
+                ] {
+                    for (&x, &y) in a.iter().zip(b) {
+                        assert!(x == y || (x.is_nan() && y.is_nan()));
+                    }
+                    assert!(a[2].is_nan() && a[3].is_nan());
+                    assert!(!a[4].is_nan());
+                }
+                if mode == PrecisionMode::High {
+                    assert_eq!(output.middle[1], 10_000.5);
+                    assert_eq!(output.upper[1], 10_001.5);
+                    assert_eq!(output.lower[1], 9_999.5);
+                }
+                assert!(matches!(
+                    bollinger(&[], 0, 2.0_f32),
+                    Err(Error::InvalidPeriod { .. })
+                ));
+                assert!(matches!(bollinger(&[], 1, 2.0_f32), Err(Error::EmptyInput)));
+                assert!(matches!(
+                    bollinger(&data, usize::MAX, 2.0),
+                    Err(Error::InsufficientData { .. })
+                ));
+                assert!(matches!(
+                    bollinger_into(&data, usize::MAX, 2.0, &mut output),
+                    Err(Error::InsufficientData { .. })
+                ));
+            });
+        }
+    }
+
+    #[test]
+    fn rolling_stddev_initialized_and_nonfinite() {
+        for data in [
+            &[1.0_f64, f64::NAN, 3.0, 4.0][..],
+            &[1.0, f64::INFINITY, 3.0, 4.0][..],
+        ] {
+            let allocated = rolling_stddev(data, 2).unwrap();
+            let mut output = vec![0.0; data.len()];
+            rolling_stddev_into(data, 2, &mut output).unwrap();
+            for (&a, &b) in allocated.iter().zip(&output) {
+                assert!(a == b || (a.is_nan() && b.is_nan()));
+            }
+            assert!(allocated[1].is_nan() && allocated[2].is_nan());
+            assert_eq!(allocated[3], 0.5);
+            assert!(rolling_stddev(data, 1).unwrap()[1].is_nan());
+            assert!(matches!(
+                rolling_stddev(data, usize::MAX),
+                Err(Error::InsufficientData { .. })
+            ));
+            assert!(matches!(
+                rolling_stddev_into(data, usize::MAX, &mut output),
+                Err(Error::InsufficientData { .. })
+            ));
+        }
+    }
 
     // ==================== Basic Functionality Tests ====================
 

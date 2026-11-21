@@ -1,3 +1,4 @@
+# Historical configuration: current Criterion harnesses do not read this file.
 # Criterion benchmark configuration for liq-ta
 # See: https://bheisler.github.io/criterion.rs/book/user_guide/command_line_options.html
 

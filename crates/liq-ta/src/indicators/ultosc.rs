@@ -138,39 +138,9 @@ pub fn ultosc_into<T: SeriesElement>(
     let two = T::from_f64(2.0)?;
 
     // Calculate BP and TR for all bars using branchless min/max
-    // Optimization: Use uninitialized allocation for f64/f32 since we write all elements
-    use std::any::TypeId;
-    let mut bp = if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let mut v: Vec<T> = Vec::with_capacity(n);
-        unsafe {
-            v.set_len(n);
-        }
-        v
-    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let mut v: Vec<T> = Vec::with_capacity(n);
-        unsafe {
-            v.set_len(n);
-        }
-        v
-    } else {
-        vec![T::zero(); n]
-    };
+    let mut bp = vec![T::zero(); n];
 
-    let mut tr = if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let mut v: Vec<T> = Vec::with_capacity(n);
-        unsafe {
-            v.set_len(n);
-        }
-        v
-    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let mut v: Vec<T> = Vec::with_capacity(n);
-        unsafe {
-            v.set_len(n);
-        }
-        v
-    } else {
-        vec![T::zero(); n]
-    };
+    let mut tr = vec![T::zero(); n];
 
     // First bar has no prior close, so BP and TR are 0
     bp[0] = T::zero();
@@ -305,27 +275,9 @@ pub fn ultosc<T: SeriesElement>(
     period2: usize,
     period3: usize,
 ) -> Result<Vec<T>> {
-    use std::any::TypeId;
     let n = high.len();
 
-    // Optimization: For f64/f32, allocate uninitialized memory since ultosc_into
-    // fully overwrites every element (lookback + computed region).
-    // This avoids the initialization penalty for large datasets.
-    let mut output = if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let mut v: Vec<T> = Vec::with_capacity(n);
-        unsafe {
-            v.set_len(n);
-        } // Safe: ultosc_into writes all n elements
-        v
-    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let mut v: Vec<T> = Vec::with_capacity(n);
-        unsafe {
-            v.set_len(n);
-        } // Safe: ultosc_into writes all n elements
-        v
-    } else {
-        vec![T::nan(); n]
-    };
+    let mut output = vec![T::nan(); n];
 
     ultosc_into(high, low, close, period1, period2, period3, &mut output)?;
     Ok(output)

@@ -1,7 +1,12 @@
 # liq-ta Performance Baseline
 
-Benchmark results establishing performance baselines for all indicators.
-Run with `cargo bench -p liq-ta` to reproduce.
+> Historical record: the measurements and analysis below describe an older
+> nightly/portable-SIMD setup, not current performance. The full machine and
+> measurement provenance were not recorded, and concurrent execution can bias
+> comparisons. The TA-Lib target is not currently registered. The current
+> stable-toolchain indicator suite does not compare against TA-Lib; see the
+> [benchmarking guide](benchmarking-guide.md) for runnable commands.
+> Caller-provided output can still require internal scratch allocations.
 
 ## Test Environment
 
@@ -272,33 +277,16 @@ throughput across input sizes (100 to 100,000 elements).
 | OBV         | O(n)            | O(n)             | Cumulative |
 | AD          | O(n)            | O(n)             | Single-pass |
 
-## Reproducing Results
+## Current Benchmarking
+
+The historical figures above cannot be reproduced by the current suite. To
+collect and compare a new local baseline, use the same workload and conditions:
 
 ```bash
-# Full benchmark suite
-cargo bench -p liq-ta
-
-# TA-Lib comparison only
-cargo bench --bench talib_comparison
-
-# SIMD kernel benchmarks
-cargo bench --bench simd_comparison
-
-# Specific indicator
-cargo bench -p liq-ta -- sma
-
-# Quick verification (test mode)
-cargo bench -p liq-ta -- --test
+cargo bench --locked -p liq-ta --bench indicators -- sma --save-baseline before
+cargo bench --locked -p liq-ta --bench indicators -- sma --baseline before
 ```
 
-## Regression Detection
-
-Compare against this baseline using:
-
-```bash
-cargo bench -p liq-ta -- --save-baseline baseline
-# ... make changes ...
-cargo bench -p liq-ta -- --baseline baseline
-```
-
-Criterion will report any significant regressions (>5% slower).
+See the [benchmarking guide](benchmarking-guide.md) for measurement conditions
+and the other registered suites. Criterion results do not imply a fixed
+regression threshold.

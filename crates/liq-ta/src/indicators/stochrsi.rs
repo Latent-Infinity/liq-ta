@@ -154,23 +154,7 @@ pub fn stochrsi_into<T: SeriesElement + 'static>(
     }
 
     // Calculate raw StochRSI using O(n) rolling extrema
-    // Optimization: For f64/f32, allocate uninitialized memory (Section 5.4)
-    use std::any::TypeId;
-    let mut raw_stochrsi = if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let mut v: Vec<T> = Vec::with_capacity(n);
-        unsafe {
-            v.set_len(n);
-        }
-        v
-    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let mut v: Vec<T> = Vec::with_capacity(n);
-        unsafe {
-            v.set_len(n);
-        }
-        v
-    } else {
-        vec![T::nan(); n]
-    };
+    let mut raw_stochrsi = vec![T::nan(); n];
     let rsi_lb = rsi_lookback(rsi_period);
 
     // Use rolling_extrema kernel for O(n) min/max computation

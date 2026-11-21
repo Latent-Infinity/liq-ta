@@ -3244,7 +3244,7 @@ ohlc_indicator!(
     chop,
     liq_ta::indicators::chop,
     liq_ta::indicators::chop_into,
-    "Choppiness Index (CHOP)."
+    "Choppiness Index (CHOP). The period must be at least 2."
 );
 
 single_output_series_indicator!(

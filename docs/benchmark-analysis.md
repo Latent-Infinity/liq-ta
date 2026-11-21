@@ -1,5 +1,8 @@
 # liq-ta Performance Optimization Analysis
 
+> Historical analysis, not a current performance claim. Its TA-Lib target is
+> no longer registered; use the [current guide](benchmarking-guide.md).
+
 This document details the performance optimization work performed on liq-ta indicators
 to bring underperforming indicators up to or exceeding TA-Lib benchmark performance.
 
@@ -254,23 +257,14 @@ These well-optimized indicators served as patterns for the optimization work:
 | Bollinger | 1.44x faster | SIMD-optimized variance calculation |
 | MACD      | 1.42x faster | Fused triple-EMA computation |
 
-## Verification Commands
+## Current Benchmark Commands
+
+The historical TA-Lib comparisons are not runnable through the current Cargo
+targets. Use the registered indicator suite instead; it measures liq-ta only:
 
 ```bash
-# Run full test suite to verify correctness
-cargo test --package liq-ta --release
-
-# Run all benchmarks against TA-Lib
-cargo bench --bench talib_comparison
-
-# Run Tier 1 indicator benchmarks
-cargo bench --bench talib_comparison -- 'williams_r|mfi|sma|midprice|linearreg|tsf'
-
-# Run Tier 2 indicator benchmarks
-cargo bench --bench talib_comparison -- 't3|trix|kama|dx|trima|midpoint|ad'
-
-# Verify no regression in already-optimized indicators
-cargo bench --bench talib_comparison -- 'cmo|apo|macd|bollinger'
+cargo bench --locked -p liq-ta --bench indicators
+cargo bench --locked -p liq-ta --bench indicators -- 'williams_r|mfi|sma|midprice'
 ```
 
 ## Regression Baselines

@@ -5,12 +5,12 @@
 //!
 //! # Features
 //!
-//! - **Performance**: O(n) algorithms with optimized memory access patterns
+//! - **Performance**: Efficient numeric implementations with optimized memory access patterns
 //! - **Stable Rust**: Safe chunked numeric kernels with portable scalar lanes
 //! - **Accuracy**: Validated against spec fixtures with documented edge cases
 //! - **Generics**: Works with both `f32` and `f64` data types
 //! - **Safety**: Comprehensive error handling for edge cases
-//! - **Ergonomic**: Simple API with `_into` variants for zero-allocation use
+//! - **Ergonomic**: Simple API with `_into` variants for reusing output buffers
 //!
 //! # Numeric Kernels
 //!
@@ -70,7 +70,7 @@
 //!
 //! ## Buffer API (`_into` variants)
 //!
-//! For high-performance use with pre-allocated buffers:
+//! Reuse pre-allocated output buffers. Some indicators also allocate internal scratch space:
 //!
 //! ```
 //! use liq_ta::prelude::*;
@@ -133,9 +133,8 @@
 #![allow(clippy::missing_transmute_annotations)] // Type context is explicit in surrounding code and tests
 #![allow(clippy::items_after_statements)] // Local helper placement keeps kernels adjacent to call-sites
 #![allow(clippy::inline_always)] // Hot paths use explicit inlining hints for benchmark stability
-#![allow(clippy::if_same_then_else)] // Branch shape is kept explicit for readability across type paths
-#![allow(clippy::uninit_vec)]
-// Output buffers are intentionally preallocated then fully written before reads
+#![allow(clippy::if_same_then_else)]
+// Branch shape is kept explicit for readability across type paths
 // Allowed pedantic lints - intentional design choices for this codebase
 #![allow(clippy::module_name_repetitions)] // Types like error::Error are idiomatic in Rust libraries
 #![allow(clippy::similar_names)] // Financial indicator variables often have similar names (e.g., ema1, ema2)

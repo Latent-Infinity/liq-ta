@@ -383,15 +383,12 @@ pub fn wma<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
 
     let n = data.len();
 
-    // Optimized path for f64: uninitialized allocation + optimistic fast path
+    // Optimized path for f64: optimistic fast path
     if TypeId::of::<T>() == TypeId::of::<f64>() {
         let data_f64: &[f64] =
             unsafe { std::slice::from_raw_parts(data.as_ptr() as *const f64, n) };
 
-        let mut result_vec = Vec::<f64>::with_capacity(n);
-        unsafe {
-            result_vec.set_len(n);
-        }
+        let mut result_vec: Vec<f64> = vec![0.0; n];
         let result_f64 = result_vec.as_mut_slice();
 
         wma_f64_optimistic(data_f64, period, result_f64);
@@ -399,15 +396,12 @@ pub fn wma<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
         return Ok(unsafe { std::mem::transmute(result_vec) });
     }
 
-    // Optimized path for f32: uninitialized allocation + f64 accumulator
+    // Optimized path for f32: f64 accumulator
     if TypeId::of::<T>() == TypeId::of::<f32>() {
         let data_f32: &[f32] =
             unsafe { std::slice::from_raw_parts(data.as_ptr() as *const f32, n) };
 
-        let mut result_vec = Vec::<f32>::with_capacity(n);
-        unsafe {
-            result_vec.set_len(n);
-        }
+        let mut result_vec: Vec<f32> = vec![0.0; n];
         let result_f32 = result_vec.as_mut_slice();
 
         wma_f32_optimistic(data_f32, period, result_f32);

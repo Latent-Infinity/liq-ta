@@ -384,7 +384,7 @@ pub enum Command {
         /// Input CSV file
         input: String,
 
-        /// Period for CHOP calculation
+        /// Period for CHOP calculation (minimum 2)
         #[arg(default_value = "14")]
         period: usize,
 
@@ -598,10 +598,10 @@ pub fn parse_bollinger_params(params: &str) -> Result<(usize, f64)> {
         });
     }
 
-    if std_dev <= 0.0 {
+    if !std_dev.is_finite() || std_dev <= 0.0 {
         return Err(CliError::InvalidArgument {
             argument: "std_dev".to_string(),
-            reason: "std_dev must be positive".to_string(),
+            reason: "std_dev must be finite and positive".to_string(),
             suggestion: Some("Use a positive number like 2.0".to_string()),
         });
     }
@@ -1013,6 +1013,16 @@ mod tests {
                 assert_eq!(signal, 9);
             }
             _ => panic!("Expected Macd command"),
+        }
+    }
+
+    #[test]
+    fn test_bollinger_rejects_nonfinite_deviation() {
+        for value in ["NaN", "inf", "-inf"] {
+            assert!(matches!(
+                parse_bollinger_params(&format!("20,{value}")),
+                Err(CliError::InvalidArgument { argument, .. }) if argument == "std_dev"
+            ));
         }
     }
 

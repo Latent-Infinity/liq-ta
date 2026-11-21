@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
 """
-liq-ta Benchmark Runner
+Historical liq-ta vs TA-Lib benchmark runner.
 
-A modern CLI tool for running and comparing liq-ta vs ta-lib benchmarks.
-Uses Criterion for benchmarking and provides clear, colorful comparison tables.
+The TA-Lib target is not registered; the implementation is retained as history.
 """
+
+if __name__ == "__main__":
+    import sys
+
+    sys.exit(
+        "The TA-Lib comparison target is not registered. Use "
+        "./scripts/run_benchmarks.sh; see docs/benchmarking-guide.md."
+    )
 
 import json
 import subprocess

@@ -8,9 +8,9 @@ liq-ta is Latent Infinity Quant Technical Analysis: a high-performance technical
 
 ## Features
 
-- **Fast**: O(n) algorithms with optimized memory access patterns
+- **Fast**: Optimized algorithms and memory access patterns for technical analysis
 - **Accurate**: Validated against spec fixtures with documented edge-case behavior
-- **Ergonomic**: Simple API with sensible defaults, plus `_into` variants for zero-allocation use
+- **Ergonomic**: Simple API with sensible defaults, plus `_into` variants for caller-provided output
 - **Safe**: Comprehensive error handling with actionable messages
 - **Generic**: Works with both `f32` and `f64` data types
 
@@ -97,7 +97,8 @@ println!("Histogram: {:?}", macd_output.histogram);
 
 ### Buffer API (`_into` variants)
 
-For high-performance scenarios with pre-allocated buffers:
+Caller-provided output buffers can be reused, although an `_into` implementation
+may still allocate internal scratch space:
 
 ```rust
 use liq_ta::prelude::*;
@@ -237,17 +238,16 @@ stable-toolchain migration and its measured tradeoffs are documented in the
 
 ### Running Benchmarks
 
-For reliable, variance-controlled benchmarks:
+Run the registered indicator suite sequentially from the workspace root:
 
 ```bash
-# Hybrid approach with multi-round execution (recommended)
 ./scripts/run_benchmarks.sh
 
-# Traditional single-round benchmarks
-cargo bench --bench talib_comparison
+# Or select an indicator directly
+cargo bench --locked -p liq-ta --bench indicators -- sma
 ```
 
-See [docs/benchmarking-guide.md](docs/benchmarking-guide.md) for comprehensive benchmarking methodology and [docs/benchmark-baseline.md](docs/benchmark-baseline.md) for detailed baseline results.
+See the [benchmarking guide](docs/benchmarking-guide.md) for current methodology and the [historical baseline notes](docs/benchmark-baseline.md) for context on older results.
 
 ## Numeric Behavior
 

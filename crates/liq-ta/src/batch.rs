@@ -40,11 +40,17 @@ use rayon::prelude::*;
 ///
 /// Provides methods to compute indicators on multiple time series in parallel
 /// when the `parallel` feature is enabled.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct BatchProcessor {
-    /// Minimum number of elements per series to use parallel processing.
-    /// Series below this threshold will be processed sequentially.
+    /// Minimum number of series to use parallel processing.
+    /// Batches below this threshold are processed sequentially.
     min_parallel_threshold: usize,
+}
+
+impl Default for BatchProcessor {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl BatchProcessor {
@@ -304,6 +310,15 @@ where
 mod tests {
     use super::*;
     use crate::indicators::sma::sma;
+
+    #[test]
+    fn default_matches_new() {
+        assert_eq!(
+            BatchProcessor::default().min_parallel_threshold,
+            BatchProcessor::new().min_parallel_threshold
+        );
+        assert_eq!(BatchProcessor::default().min_parallel_threshold, 1000);
+    }
 
     #[test]
     fn test_batch_processor_sequential() {

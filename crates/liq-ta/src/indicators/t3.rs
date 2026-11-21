@@ -270,22 +270,14 @@ pub fn t3_full_into<T: SeriesElement>(
 pub fn t3<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
     use std::any::TypeId;
 
-    // Optimized allocation for f64/f32: avoid double-initialization
-    // t3_into() writes all elements, so this is pure double-write tax
     if TypeId::of::<T>() == TypeId::of::<f64>() {
         let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
-        let mut output: Vec<f64> = Vec::with_capacity(data.len());
-        unsafe {
-            output.set_len(data.len());
-        }
+        let mut output: Vec<f64> = vec![0.0; data.len()];
         t3_into(data_f64, period, &mut output)?;
         Ok(unsafe { std::mem::transmute(output) })
     } else if TypeId::of::<T>() == TypeId::of::<f32>() {
         let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
-        let mut output: Vec<f32> = Vec::with_capacity(data.len());
-        unsafe {
-            output.set_len(data.len());
-        }
+        let mut output: Vec<f32> = vec![0.0; data.len()];
         t3_into(data_f32, period, &mut output)?;
         Ok(unsafe { std::mem::transmute(output) })
     } else {
@@ -318,23 +310,16 @@ pub fn t3<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
 pub fn t3_full<T: SeriesElement>(data: &[T], period: usize, vfactor: T) -> Result<Vec<T>> {
     use std::any::TypeId;
 
-    // Optimized allocation for f64/f32: avoid double-initialization
     if TypeId::of::<T>() == TypeId::of::<f64>() {
         let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
         let vfactor_f64: f64 = unsafe { std::mem::transmute_copy(&vfactor) };
-        let mut output: Vec<f64> = Vec::with_capacity(data.len());
-        unsafe {
-            output.set_len(data.len());
-        }
+        let mut output: Vec<f64> = vec![0.0; data.len()];
         t3_full_into(data_f64, period, vfactor_f64, &mut output)?;
         Ok(unsafe { std::mem::transmute(output) })
     } else if TypeId::of::<T>() == TypeId::of::<f32>() {
         let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
         let vfactor_f32: f32 = unsafe { std::mem::transmute_copy(&vfactor) };
-        let mut output: Vec<f32> = Vec::with_capacity(data.len());
-        unsafe {
-            output.set_len(data.len());
-        }
+        let mut output: Vec<f32> = vec![0.0; data.len()];
         t3_full_into(data_f32, period, vfactor_f32, &mut output)?;
         Ok(unsafe { std::mem::transmute(output) })
     } else {

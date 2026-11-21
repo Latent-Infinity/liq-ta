@@ -1,17 +1,12 @@
 //! Performance benchmarks for liq-ta indicators.
 //!
-//! Run with: `cargo bench -p liq-ta`
+//! Run with: `cargo bench -p liq-ta --bench indicators`
 //!
-//! These benchmarks measure throughput for each indicator across various
-//! input sizes to validate O(n) complexity and establish performance baselines.
+//! These benchmarks measure indicator throughput across input sizes and
+//! selected periods to help assess scaling and establish performance baselines.
 //!
-//! ## Configuration
-//!
-//! Uses criterion.toml for default settings:
-//! - 5s warmup, 10s measurement, 500 samples
-//! - 2% noise threshold, 95% confidence level
-//!
-//! Slower benchmarks (stochastic) use extended 15s measurement time.
+//! Standard groups use Criterion defaults; stochastic groups use a 5s warmup,
+//! 15s measurement time and 500 samples.
 
 #![allow(clippy::cast_precision_loss)]
 #![allow(clippy::unreadable_literal)]
@@ -814,6 +809,16 @@ fn bench_chop(c: &mut Criterion) {
             },
         );
     }
+    let size = 100_000;
+    let (_, high, low, close, _) = generate_ohlcv(size);
+    group.throughput(Throughput::Elements(size as u64));
+    group.bench_with_input(
+        BenchmarkId::new("period_10000", size),
+        &(high, low, close),
+        |b, (h, l, c)| {
+            b.iter(|| chop(black_box(h), black_box(l), black_box(c), black_box(10_000)));
+        },
+    );
     group.finish();
 }
 

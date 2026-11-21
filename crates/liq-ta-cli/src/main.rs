@@ -94,6 +94,7 @@ fn init_tracing() {
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
+        .with_writer(std::io::stderr)
         .with_target(false)
         .without_time()
         .try_init();
@@ -230,7 +231,7 @@ fn close_prices(parsed: &csv_parser::ParsedCsv, column: Option<&str>) -> Result<
             .close()
             .cloned()
             .ok_or_else(|| CliError::CsvParseError {
-                message: "no close price column found (expected 'close', 'price', or 'adj close')"
+                message: "no close price column found (expected 'close', 'price', 'adj close', 'adjusted close', 'adj_close', or 'adjusted_close')"
                     .to_string(),
                 line: None,
             })
@@ -555,12 +556,20 @@ fn run_gaussian_channel(
 
 /// Run OBV indicator.
 fn run_obv(input: &str, dest: &OutputDest) -> Result<()> {
-    let ohlcv = parse_ohlcv(input)?;
-
-    let output = obv(&ohlcv.close, &ohlcv.volume)?;
-    let lookback = 0; // OBV has no lookback
-
-    write_single_output(&output, "obv", ohlcv.dates.as_deref(), lookback, dest)
+    let mut parsed = parse_csv(input)?;
+    let close = parsed.take_close().ok_or_else(|| CliError::CsvParseError {
+        message: "no close price column found (expected 'close', 'price', 'adj close', 'adjusted close', 'adj_close', or 'adjusted_close')".to_string(),
+        line: None,
+    })?;
+    let volume = parsed
+        .take_column("volume")
+        .or_else(|| parsed.take_column("vol"))
+        .ok_or_else(|| CliError::CsvParseError {
+            message: "no 'volume' column found".to_string(),
+            line: None,
+        })?;
+    let output = obv(&close, &volume)?;
+    write_single_output(&output, "obv", parsed.dates.as_deref(), 0, dest)
 }
 
 /// Run VWAP indicator.

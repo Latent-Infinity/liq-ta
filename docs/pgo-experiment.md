@@ -1,5 +1,9 @@
 # Profile-Guided Optimization (PGO) Experiment
 
+> Historical experiment, not current PGO guidance or evidence of current
+> performance. The former TA-Lib target and PGO profiles are not registered in
+> the current workspace; see the [benchmarking guide](benchmarking-guide.md).
+
 ## Overview
 
 We attempted to use Profile-Guided Optimization (PGO) to close the remaining performance gaps with TA-Lib. PGO uses runtime profiling data to inform compiler optimization decisions about branch prediction, code layout, and inlining.

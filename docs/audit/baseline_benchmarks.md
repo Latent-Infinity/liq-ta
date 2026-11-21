@@ -1,5 +1,9 @@
 # Baseline Benchmarks for Rust Standards Audit
 
+> Historical audit record, not a current benchmark guide or performance claim.
+> Configuration and suite availability have changed; see
+> [the current guide](../benchmarking-guide.md).
+
 This document captures baseline performance metrics for the liq-ta library before the standards compliance audit.
 These baselines are used to verify that audit refactoring does not introduce performance regressions.
 

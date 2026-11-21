@@ -148,18 +148,7 @@ fn cci_core_native<T: SeriesElement>(
     let zero = T::zero();
 
     // Calculate typical prices
-    // Optimization: Use uninitialized memory for f64/f32 (Section 5.4)
-    use std::any::TypeId;
-    let mut tp =
-        if TypeId::of::<T>() == TypeId::of::<f64>() || TypeId::of::<T>() == TypeId::of::<f32>() {
-            let mut v: Vec<T> = Vec::with_capacity(n);
-            unsafe {
-                v.set_len(n);
-            }
-            v
-        } else {
-            vec![zero; n]
-        };
+    let mut tp = vec![zero; n];
     let mut invalid_flags = vec![false; n];
     for i in 0..n {
         if is_invalid(high[i]) || is_invalid(low[i]) || is_invalid(close[i]) {
@@ -272,11 +261,7 @@ fn cci_core_f64<T: SeriesElement>(
     let inv_constant = 1.0 / 0.015;
 
     // Calculate typical prices in f64
-    // Optimization: Use uninitialized memory (Section 5.4)
-    let mut tp: Vec<f64> = Vec::with_capacity(n);
-    unsafe {
-        tp.set_len(n);
-    }
+    let mut tp: Vec<f64> = vec![0.0; n];
     let mut invalid_flags = vec![false; n];
     for i in 0..n {
         if is_invalid(high[i]) || is_invalid(low[i]) || is_invalid(close[i]) {
@@ -418,7 +403,6 @@ pub fn cci<T: SeriesElement + 'static>(
     close: &[T],
     period: usize,
 ) -> Result<Vec<T>> {
-    // Optimization: For f64/f32, allocate uninitialized memory (Section 5.4)
     use std::any::TypeId;
 
     if TypeId::of::<T>() == TypeId::of::<f64>() {
@@ -426,10 +410,7 @@ pub fn cci<T: SeriesElement + 'static>(
         let low_f64: &[f64] = unsafe { std::mem::transmute(low) };
         let close_f64: &[f64] = unsafe { std::mem::transmute(close) };
 
-        let mut output: Vec<f64> = Vec::with_capacity(high.len());
-        unsafe {
-            output.set_len(high.len());
-        }
+        let mut output: Vec<f64> = vec![0.0; high.len()];
 
         cci_into(high_f64, low_f64, close_f64, period, &mut output)?;
         Ok(unsafe { std::mem::transmute(output) })
@@ -438,10 +419,7 @@ pub fn cci<T: SeriesElement + 'static>(
         let low_f32: &[f32] = unsafe { std::mem::transmute(low) };
         let close_f32: &[f32] = unsafe { std::mem::transmute(close) };
 
-        let mut output: Vec<f32> = Vec::with_capacity(high.len());
-        unsafe {
-            output.set_len(high.len());
-        }
+        let mut output: Vec<f32> = vec![0.0; high.len()];
 
         cci_into(high_f32, low_f32, close_f32, period, &mut output)?;
         Ok(unsafe { std::mem::transmute(output) })
@@ -457,6 +435,24 @@ pub fn cci<T: SeriesElement + 'static>(
 mod tests {
     #![allow(clippy::all, clippy::pedantic, clippy::nursery)]
     use super::*;
+
+    #[test]
+    fn initialized_output_preserves_validation_and_period_one() {
+        let f32_data = [1.0_f32, 2.0, 3.0];
+        let f64_data = [1.0_f64, 2.0, 3.0];
+        assert_eq!(
+            cci(&f32_data, &f32_data, &f32_data, 1).unwrap(),
+            vec![0.0; 3]
+        );
+        assert_eq!(
+            cci(&f64_data, &f64_data, &f64_data, 1).unwrap(),
+            vec![0.0; 3]
+        );
+        assert!(matches!(
+            cci(&f32_data, &f32_data[..2], &f32_data, 1),
+            Err(Error::LengthMismatch { .. })
+        ));
+    }
 
     #[test]
     fn test_cci_lookback() {

@@ -220,24 +220,16 @@ pub fn trix_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) 
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 pub fn trix<T: SeriesElement + 'static>(data: &[T], period: usize) -> Result<Vec<T>> {
-    // Optimization: For f64/f32, allocate uninitialized memory since trix_into writes all elements
-    // (lookback NaNs + computed TRIX values). This avoids the double-write tax (Section 5.4).
     use std::any::TypeId;
 
     if TypeId::of::<T>() == TypeId::of::<f64>() {
         let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
-        let mut output: Vec<f64> = Vec::with_capacity(data.len());
-        unsafe {
-            output.set_len(data.len());
-        } // Safe: trix_into writes all elements
+        let mut output: Vec<f64> = vec![0.0; data.len()];
         trix_into(data_f64, period, &mut output)?;
         Ok(unsafe { std::mem::transmute(output) })
     } else if TypeId::of::<T>() == TypeId::of::<f32>() {
         let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
-        let mut output: Vec<f32> = Vec::with_capacity(data.len());
-        unsafe {
-            output.set_len(data.len());
-        } // Safe: trix_into writes all elements
+        let mut output: Vec<f32> = vec![0.0; data.len()];
         trix_into(data_f32, period, &mut output)?;
         Ok(unsafe { std::mem::transmute(output) })
     } else {

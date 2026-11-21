@@ -260,7 +260,8 @@ cat prices.csv | liq-ta rsi - 14
 
 ## Performance
 
-All indicators run in O(n) time with high throughput. Processing 100K rows typically takes under 1ms.
+Performance depends on the indicator, input size and period, hardware, and
+toolchain; see the [benchmarking guide](../../docs/benchmarking-guide.md).
 
 ## License
 

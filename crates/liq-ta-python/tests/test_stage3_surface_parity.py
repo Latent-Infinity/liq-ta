@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 import liq_ta
 
@@ -48,3 +49,14 @@ def test_stage3_surface_parity_shapes_and_nan_prefixes():
     finite_trend = g_trend[~np.isnan(g_trend)]
     assert finite_trend.size > 0
     assert set(np.unique(finite_trend)).issubset({-1.0, 0.0, 1.0})
+
+
+@pytest.mark.parametrize("period", [0, 1])
+def test_chop_rejects_undefined_period_without_writing_output(period):
+    _, high, low, close = _sample_data(4)
+    out = np.full(4, 42.0)
+    with pytest.raises(ValueError, match="period must be at least 2"):
+        liq_ta.chop(high, low, close, period)
+    with pytest.raises(ValueError, match="period must be at least 2"):
+        liq_ta.chop(high, low, close, period, out=out)
+    np.testing.assert_array_equal(out, np.full(4, 42.0))

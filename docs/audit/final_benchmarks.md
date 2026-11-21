@@ -1,5 +1,9 @@
 # Final Benchmark Results - Rust Standards Compliance Audit
 
+> Historical audit record. The commands and toolchain below are not the current
+> workflow; see [the current guide](../benchmarking-guide.md). The recorded
+> information does not establish a current absence of performance regressions.
+
 This document captures the final benchmark comparison after all audit changes have been applied.
 These results validate that no performance regressions were introduced during the audit.
 
