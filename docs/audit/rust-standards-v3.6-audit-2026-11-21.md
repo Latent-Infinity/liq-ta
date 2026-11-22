@@ -19,7 +19,7 @@
 | 9 | `RPS-290` | CI Clippy covered only the default members, so `liq-ta-python` was not linted | PARTIAL | `cargo clippy --workspace` | PASS |
 | 10 | `RPS-006`, `RPS-013`, `RPS-294` | No newer-compiler job and no release-mode tests | PARTIAL | Release-mode test step, plus non-blocking stable and beta release-mode jobs | PASS |
 | 11 | `RPS-004`, `RPS-293` | The MSRV job ran `test --workspace`. That links the PyO3 test binary against libpython, which fails without it (reproduced on this host). | UNVERIFIED in CI | MSRV job tests the default members and checks `liq-ta-python` | PASS: observed green on GitHub (run 45046639206) |
-| 12 | CI | `Build wheels (ubuntu-latest)` had failed on every push since `d6871e9`: writing `rustc-version.txt` into the container-owned `dist/` was denied | FAIL (observed) | The runner creates `dist/` and records the compiler version before maturin runs | Fix pushed; see Not verified |
+| 12 | CI | `Build wheels (ubuntu-latest)` had failed on every push since `d6871e9`: writing `rustc-version.txt` into the container-owned `dist/` was denied | FAIL (observed) | The runner creates `dist/` and records the compiler version before maturin runs | PASS: all 17 CI jobs green on GitHub at `3ab9127`, including wheels on Linux, macOS and Windows, and `cargo-deny` |
 | 13 | `_into` contract | `midpoint_into` on the `n >= 1000` fast path left the caller's buffer contents in windows containing invalid values | FAIL (reproduced) | The kernel writes NaN. A new test checks all 166 public `*_into` functions on pre-dirtied buffers against their allocating twins (f32/f64, n = 50 and 1500, with and without holes). | PASS |
 
 ## Coverage of the remaining rule areas
@@ -104,7 +104,7 @@ Builds: `maturin build --locked --release` (venv `/tmp/liqta-venv`, CPython 3.12
 
 ## Not verified
 
-- CI: before this round, every job except `Build wheels` passed on GitHub, including MSRV, stable/beta, and Python 3.12–3.14 on three OSes. The wheel-job fix and the new `cargo-deny` job are pushed but not yet observed on GitHub.
+- CI: all 17 jobs passed on GitHub at `3ab9127`: Rust tests, MSRV 1.95, stable and beta, Cargo Deny, wheels on 3 OSes, and Python 3.12–3.14 on 3 OSes.
 - Hardware counters: `perf stat` (including `-e task-clock`) is refused on this host (`perf_event_paranoid` = 4, no `CAP_PERFMON`, `sudo` needs a password), and neither valgrind nor qemu TCG plugins are installed. The `aroon`/`obv` instruction counts above are static path lengths from disassembly, not dynamic counts.
 - The `aroon` alternative (plain indexing, 1–3% within noise) was measured in a scratch copy only and not applied.
 - Artifact sizes were measured on aarch64 only. The x86_64 and macOS wheels are unmeasured.
