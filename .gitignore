@@ -159,6 +159,11 @@ target/criterion/
 
 # auto claude
 .auto-claude/
+.auto-claude-*
+.claude_settings.json
+
+# Agent and tool logs
+/logs/
 
 # Git worktrees
 .worktrees/

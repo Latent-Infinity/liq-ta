@@ -1,7 +1,7 @@
 # liq-ta Rust standards audit and remediation, 2026-11-21 (follow-up 2026-11-22)
 
 **Standard:** High-Performance Rust Coding Standards v3.6, reviewed 2026-11-21 (`Rust Code Standards.md` in the Software-Standards library; index `GUIDES.md`, last reviewed 2026-11-21).
-**Scope:** the `liq-ta`, `liq-ta-cli` and `liq-ta-python` crates (Rust sources, manifests, CI). Not in scope: Python sources, and `crates/liq-ta/benches/talib_comparison.rs`, which is excluded from every build (`autobenches = false`, no `[[bench]]` entry), so no compiler or lint sees it.
+**Scope:** the `liq-ta`, `liq-ta-cli` and `liq-ta-python` crates (Rust sources, manifests, CI); Python sources are out of scope. The unbuilt `talib_comparison.rs` benchmark, which held the repository's last `unsafe`, was deleted in the 2026-11-22 cleanup.
 **Baseline revision:** `42e4828`. **Toolchain:** pin 1.98.1, MSRV 1.95, aarch64-unknown-linux-gnu.
 
 ## Findings and dispositions (ordered by impact)

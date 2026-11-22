@@ -9,11 +9,11 @@ Requirements:
     pip install talib numpy
 
 Usage:
-    python tools/generate_golden.py
+    python tools/golden/generate.py
 
 Output:
-    benches/golden/*.json - Golden files for each indicator
-    benches/golden/metadata.json - Generation metadata
+    crates/liq-ta/tests/golden/*.json - Golden files for each indicator
+    crates/liq-ta/tests/golden/metadata.json - Generation metadata
 """
 
 import json

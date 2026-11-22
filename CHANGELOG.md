@@ -58,6 +58,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   non-blocking stable/beta jobs. The MSRV job checks the Python crate without
   linking libpython.
 - See `docs/audit/rust-standards-v3.6-audit-2026-11-21.md`.
+- Cleanup (2026-11-22): deleted the unbuilt TA-Lib comparison benchmark (the
+  repository's last `unsafe`), the retired `benchmark.py`, `aggregate_benchmarks.py`
+  and `compare_benchmarks.py` scripts with their requirements, the unread
+  `criterion.toml` and its root symlink, a stale `benches/golden/README.md`,
+  and committed agent logs and run-state files (now git-ignored). The
+  benchmarking guide keeps only current instructions.
 
 ### Fixed
 
