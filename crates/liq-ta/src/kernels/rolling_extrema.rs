@@ -1248,10 +1248,11 @@ pub(crate) fn rolling_midpoint_vhgw<T: SeriesElement>(
         // Combine validity
         let window_ok = right_valid[start] && left_valid[end];
 
-        if window_ok {
-            output[end] = (highest + lowest) * crate::cast::from_f64::<T>(0.5);
-        }
-        // else: already initialized to NaN
+        output[end] = if window_ok {
+            (highest + lowest) * crate::cast::from_f64::<T>(0.5)
+        } else {
+            T::nan()
+        };
     }
 
     Ok(n - lookback)

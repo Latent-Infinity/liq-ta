@@ -244,8 +244,8 @@ fn validate_inputs<T: SeriesElement>(close: &[T], volume: &[T]) -> Result<()> {
 fn compute_obv_core<T: SeriesElement + 'static>(close: &[T], volume: &[T], output: &mut Vec<T>) {
     // Use specialized f64 path for common case
     if cast::same_type::<T, f64>() {
-        // Pre-allocate vector with exact size needed
-        *output = vec![T::zero(); close.len()];
+        // Fill the caller's preallocated buffer instead of allocating a second one.
+        output.resize(close.len(), T::zero());
         obv_f64_optimized(close, volume, output);
         return;
     }

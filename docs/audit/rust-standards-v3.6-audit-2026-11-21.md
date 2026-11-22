@@ -12,7 +12,7 @@
 | 2 | `RPS-234` | No Miri coverage for unsafe code | FAIL | Moot: no unsafe code remains (the interim Miri job was removed) | N/A |
 | 3 | `RPS-128`, `RPS-129`, `RPS-247` | Workspace release profile set `panic = "abort"`, which also applied to the PyO3 extension, so a panic aborted the host Python process | FAIL | Removed. PyO3 converts panics into Python exceptions again. | PASS |
 | 4 | `RPS-255` | `strip = true` removed the symbol table from shipped CLI and wheel artifacts | FAIL | `strip = "debuginfo"` | PASS |
-| 5 | `RPS-263` | `overflow-checks` inherited, not decided | FAIL | `overflow-checks = false` set explicitly, with the reason | PARTIAL: decided, not benchmarked separately |
+| 5 | `RPS-263` | `overflow-checks` inherited, not decided | FAIL | `overflow-checks = false` set explicitly, with the reason | PASS: decided and benchmarked; checks on cost up to +7% (`ad`, `sma/100000`); see the overflow-checks record |
 | 6 | `RPS-318`, `RPS-233`, `RPS-298` | No workspace lint table. 245 bare `#[allow]`; 36 of them suppressed allow-by-default groups (`pedantic`, `nursery`, `restriction`) to no effect. | FAIL | Section 22 lint table added, plus `clippy::allow_attributes = "deny"`, with `[lints] workspace = true` in every member. No-op and unfulfilled suppressions deleted; the rest converted to `#[expect(lint, reason = "...")]`. Lints the removed allows had hidden (`or_fun_call` ×30, `needless_collect` ×2, `redundant_clone` ×15, `format_push_string` ×2) fixed in code. | PASS: 0 `#[allow]` in compiled code |
 | 7 | `RPS-313` | No coverage gate | FAIL | CI step `cargo llvm-cov --locked --features parallel,serde --fail-under-lines 90` | PASS: 94.99% lines locally |
 | 8 | `RPS-122`, `RPS-123` | 10 `unwrap()` in non-test library code (`wma` ×2, `ema`, `aroon` ×2, `ao` ×2, `traits` ×3) | PARTIAL: invariants, but no message | `wma` now propagates with `?`; the others use `expect` with the invariant | PASS |
@@ -64,15 +64,46 @@
 | Possibly slower | 8 | `aroon` 1,000–10,000 +4.7% to +6.2%, reproduced in four runs; `obv` 100–1,000 +5%, reproduced twice; `bollinger/100000` +4.3%, `stochastic/100000` +5.9% (A/A +3.4%), `trima/100` +2.3%, `wma/100` +2.1% |
 
 **Controls and diagnosis:**
-- **`aroon`:** the benchmark (period 25) takes the van Herk kernel, which differs from baseline only in how it reads the lookup table (baseline: `get_unchecked`). `.min(period)` and plain checked indexing measured the same. Precomputing a lookup in the lazy-rescan path also changed nothing, so both experiments were reverted. Bounds-check cost is therefore an unlikely cause; code layout under fat LTO is plausible [inference, not measured].
-- **`obv`:** its fast kernel is the same code made generic, and only sizes under 10,000 move. Same likely cause [inference].
+- **`aroon` (measured 2026-11-22):** hardware counters were unavailable (see Not verified), so instruction counts come from the disassembly of the fat-LTO bench binaries, where the kernel is inlined into `Bencher::iter`. In the van Herk kernel the prefix and suffix inner loops are the same length at both revisions (32 and 33 instructions per element). Pass 3 (combine and look up) grows from 38–40 to 46–48 instructions per output. Both `.min(period)` (cmp and csel, twice) and the lookup bounds check (cmp and branch, twice) remain: LLVM does not use the `min` to drop the check in this function. Per element that is about 103 → 111 instructions (+8%), so HEAD runs more instructions; the cause is not layout. A scratch build with plain `aroon_lookup[ps]` (no `.min`) runs 44–46 instructions per output. Pinned timings over three rounds were: `aroon/1000` 4.37–4.51 µs (base), 4.67–4.92 µs (HEAD), 4.55–4.68 µs (plain index); `aroon/10000` 43.2–44.5, 45.9–47.7 and 44.7–47.3 µs. The plain-index gain of 1–3% is within run-to-run spread. The remaining cost is the safe bounds check itself, which cannot be removed without `unsafe` or a different index proof.
+- **`obv` (measured 2026-11-22):** the hot loop is instruction-for-instruction the same. The difference is one extra `malloc` and `free` per call. `obv()` creates `Vec::with_capacity(n)`, and `compute_obv_core` then replaces it with `*output = vec![T::zero(); n]`. At `42e4828`, LLVM elided the equivalent dead allocation; at HEAD it does not. A scratch build using `output.resize(close.len(), T::zero())` removes the extra allocation. Pinned timings: `obv/100` 114.1–116.7 ns (base), 121.2–122.4 ns (HEAD, +5% to +7%), 92.4–93.3 ns (fix, −19% vs base); `obv/1000` 874.7–913.0 ns, 925.2–928.0 ns and 871.0–890.1 ns. **Proposed source fix:** that one-line change in `compute_obv_core` (`crates/liq-ta/src/indicators/obv.rs`, the f64 branch). It is not applied here.
+- **Method for both:** a clean `git archive` of HEAD (its aroon and obv codegen matches the working-tree build except for addresses) against `42e4828`, built with `CARGO_PROFILE_BENCH_STRIP=debuginfo` so symbols exist. Runs were base, HEAD, fix ×3, with `taskset -c 9`, `--warm-up-time 2 --measurement-time 5`, and load average 13–16. The round-1 base `obv` samples overlapped another pinned job and were discarded.
 - **Earlier unpinned run:** the regressions it showed for `sma`, `cci/100`, `ema/100` and `mom/100` did not reproduce once pinned, or were fixed by restoring the zeroed allocation.
 - **Unpinned A/A noise:** single 100,000-point runs moved by up to 25% between identical builds.
 
-**Decision:** no `unsafe` code is retained. The residual differences are at most about 6% on two indicators and have no identified source-level cause.
+**Decision:** no `unsafe` code is retained. The `obv` residual has an identified cause and a one-line safe fix (above). The `aroon` residual (about +5%) is the cost of the safe lookup bounds check.
+
+### Overflow checks (`RPS-263`), measured 2026-11-22
+
+- **Builds:** the HEAD working tree (`748a2dc` plus another agent's uncommitted `midpoint.rs`/`rolling_extrema.rs` edits, the same in both builds), as `cargo bench --locked -p liq-ta --bench indicators --no-run` with `CARGO_PROFILE_BENCH_OVERFLOW_CHECKS=false` and `=true`, in separate `CARGO_TARGET_DIR`s. The `true` binary contains 1,098 calls to `panic_const_{add,sub,mul}_overflow`; the `false` binary contains 0.
+- **Run:** the 21 changed groups (84 benchmarks), `taskset -c 9`, `--warm-up-time 2 --measurement-time 5 --noplot`, order off/on/off (A/B/A). Load average was 13–24 (other agents were compiling). Then a confirmation run of the 17 outlier benchmarks, order off/on/off/on, load 13–22.
+- **Full run:** on vs mean(off): mean −0.9%, median −0.15%. A/A: mean −3.5%, median −0.7%; single benchmarks moved by up to 57% under load.
+- **Confirmed effects (on vs off, best-of-two each):**
+  - `ad/100` +3.8%, `ad/1000` +6.8%, `ad/10000` +7.0%, `sma/100000` +6.7%.
+  - `bollinger` is the exception: checks on is faster, by −36.9% (100), −40.3% (1,000), −42.6% (10,000) and −10.6% (100,000).
+  - The rest are within ±3%. A `roc/100000` +140% in the first on-run did not reproduce (−2.1%).
+- **`bollinger` diagnosis (disassembly):** with checks off, LLVM if-converts the finite/non-finite branch of the rolling update into `fcsel`. That puts the selects on the loop-carried `sum`/`sum_sq` dependency chain. With checks on, the checked `nan_count += 1` keeps a predictable branch instead. This is a codegen sensitivity of the `bollinger` kernel, not an overflow-semantics benefit. It also applies at `42e4828` (same default). Not fixed here.
+- **Decision:** keep `overflow-checks = false`. Turning checks on costs up to 7% on `ad` and `sma/100000` and buys no safety the up-front index validation does not already give. The `bollinger` result is a kernel-level optimisation opportunity.
+- Raw output: `/tmp/rps-meas/ofc_{a1,b,a2}.txt`, `/tmp/rps-meas/ofc2_{c1,d1,c2,d2}.txt`, `/tmp/rps-meas/ao_*.txt` (not archived).
+
+### Artifact size and symbols (`RPS-255`, `RPS-128`), measured 2026-11-22
+
+Builds: `maturin build --locked --release` (venv `/tmp/liqta-venv`, CPython 3.12) and `cargo build --locked --release -p liq-ta-cli`. Each tree used its own release profile and a separate `CARGO_TARGET_DIR`. HEAD is the working tree at 09:34 (see above).
+
+| Artifact | `42e4828` (`panic = "abort"`, `strip = true`) | HEAD (unwind, `strip = "debuginfo"`) |
+|---|---:|---:|
+| Wheel file | 446,760 B | 612,213 B (+37%) |
+| `_liq_ta…so` | 1,189,848 B, stripped, `nm`: no symbols | 1,765,488 B, `.symtab` + `.strtab` = 313,352 B, `nm`: 2,277 symbols |
+| `.so` `nm -D` | 133 (1 defined: `PyInit__liq_ta`) | 135 (1 defined) |
+| `.so` `.text` / `.gcc_except_table` / `.eh_frame` | 872,680 / 4,060 / 67,112 B | 1,073,832 / 68,596 / 80,240 B |
+| CLI `liq-ta` | 1,316,904 B, `nm`: no symbols, `nm -D` 73 | 2,007,704 B (+52%), `nm`: 2,596 symbols, `.symtab` + `.strtab` = 428,504 B, `nm -D` 75 |
+
+- The HEAD wheel keeps its symbol table.
+- **Attribution control:** HEAD built with the old profile (`CARGO_PROFILE_RELEASE_PANIC=abort CARGO_PROFILE_RELEASE_STRIP=true`) produces a 1,316,904 B CLI (`.text` 1,029,688 B), the same file size as `42e4828`. All of the CLI growth therefore comes from the profile change: 428,504 B of symbols, and for unwinding `.text` +162,640 B, `.gcc_except_table` +41,876 B and `.eh_frame` +17,680 B. The source changes add 3,792 B of `.text`.
 
 ## Not verified
 
 - CI itself: the workflow changes were validated as YAML and their commands run locally, but no GitHub run was observed.
-- Binary-size effect of the release-profile change (unwinding kept, symbols kept) is unmeasured.
+- Hardware counters: `perf stat` (including `-e task-clock`) is refused on this host (`perf_event_paranoid` = 4, no `CAP_PERFMON`, `sudo` needs a password), and neither valgrind nor qemu TCG plugins are installed. The `aroon`/`obv` instruction counts above are static path lengths from disassembly, not dynamic counts.
+- The `obv` and `aroon` fixes above were measured in a scratch copy only. No source change was made, and the bit-equivalence harness was not re-run for them.
+- Artifact sizes were measured on aarch64 only. The x86_64 and macOS wheels are unmeasured.
 - The 2026-11-21 interim measurement (unpinned, shared host) is superseded by the pinned run above.

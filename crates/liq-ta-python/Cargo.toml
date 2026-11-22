@@ -7,6 +7,7 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 description = "Python bindings for liq-ta technical analysis library"
+publish = false # shipped as Python wheels, never to crates.io
 
 [lib]
 name = "liq_ta"

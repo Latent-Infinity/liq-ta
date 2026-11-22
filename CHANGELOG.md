@@ -67,6 +67,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `midpoint_into` writes NaN for windows containing invalid values on the
+  `n >= 1000` fast path instead of leaving the caller's buffer contents there. A
+  new test checks every public `*_into` against its allocating twin using
+  pre-dirtied buffers.
+- The CI wheel job no longer fails writing compiler metadata into the
+  container-owned `dist/` directory; it has failed since d6871e9.
+- Dependency advisories resolved: crossbeam-epoch 0.9.21 (RUSTSEC-2026-0204),
+  rand 0.8.6 and 0.9.5 (RUSTSEC-2026-0097). `cargo deny` now runs in CI.
 - TRIMA for element types other than f32/f64 (such as `half::f16`) now uses the
   same f64-accumulating kernel. The old generic kernel shifted even-period
   windows, left one output slot unwritten, and panicked when the input length

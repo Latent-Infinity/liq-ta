@@ -487,4 +487,29 @@ mod tests {
 
         assert!(approx_eq(f64::NAN, f64::NAN, EPSILON));
     }
+
+    #[test]
+    fn test_midpoint_into_overwrites_dirty_buffer() {
+        // Cover deque (n < 1000) and VHGW (n >= 1000) paths, short/long periods, mid-series NaN.
+        for n in [50_usize, 1500] {
+            let mut data: Vec<f64> = (0..n).map(|i| (i as f64 * 0.37).sin() * 10.0).collect();
+            data[n / 2] = f64::NAN;
+            for period in [1_usize, 2, 7, 40] {
+                let expected = midpoint(&data, period).unwrap();
+                for fill in [0.0_f64, -999.0] {
+                    let mut out = vec![fill; n];
+                    midpoint_into(&data, period, &mut out).unwrap();
+                    for i in 0..n {
+                        assert!(
+                            expected[i].to_bits() == out[i].to_bits()
+                                || (expected[i].is_nan() && out[i].is_nan()),
+                            "n={n} period={period} fill={fill} i={i}: {} vs {}",
+                            expected[i],
+                            out[i]
+                        );
+                    }
+                }
+            }
+        }
+    }
 }

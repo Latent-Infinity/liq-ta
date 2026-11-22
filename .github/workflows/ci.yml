@@ -112,8 +112,12 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@1.98.1
 
-      - name: Record compiler version
-        run: rustc --version --verbose
+      # Written before maturin: on Linux the manylinux container creates a
+      # root-owned dist/ that the runner user cannot write into afterwards.
+      - name: Record wheel compiler metadata
+        shell: bash
+        working-directory: crates/liq-ta-python
+        run: mkdir -p dist && rustc --version --verbose | tee dist/rustc-version.txt
 
       - name: Build wheels
         uses: PyO3/maturin-action@v1
@@ -125,14 +129,23 @@ jobs:
           sccache: 'true'
           manylinux: auto
 
-      - name: Record wheel compiler metadata
-        run: rustc --version --verbose > crates/liq-ta-python/dist/rustc-version.txt
-
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
           name: wheels-${{ matrix.os }}
           path: crates/liq-ta-python/dist
+
+  # Dependency advisories, licenses, bans and sources (RPS-296); policy in deny.toml.
+  cargo-deny:
+    name: Cargo Deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.1
+      - name: Install cargo-deny
+        run: cargo install --locked cargo-deny@0.19.1
+      - name: Check dependencies
+        run: cargo deny --locked check
 
   msrv:
     name: Rust 1.95 compatibility
