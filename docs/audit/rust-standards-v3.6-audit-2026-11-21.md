@@ -18,7 +18,9 @@
 | 8 | `RPS-122`, `RPS-123` | 10 `unwrap()` in non-test library code (`wma` ×2, `ema`, `aroon` ×2, `ao` ×2, `traits` ×3) | PARTIAL: invariants, but no message | `wma` now propagates with `?`; the others use `expect` with the invariant | PASS |
 | 9 | `RPS-290` | CI Clippy covered only the default members, so `liq-ta-python` was not linted | PARTIAL | `cargo clippy --workspace` | PASS |
 | 10 | `RPS-006`, `RPS-013`, `RPS-294` | No newer-compiler job and no release-mode tests | PARTIAL | Release-mode test step, plus non-blocking stable and beta release-mode jobs | PASS |
-| 11 | `RPS-004`, `RPS-293` | The MSRV job ran `test --workspace`. That links the PyO3 test binary against libpython, which fails without it (reproduced on this host). | UNVERIFIED in CI | MSRV job tests the default members and checks `liq-ta-python` | PASS locally |
+| 11 | `RPS-004`, `RPS-293` | The MSRV job ran `test --workspace`. That links the PyO3 test binary against libpython, which fails without it (reproduced on this host). | UNVERIFIED in CI | MSRV job tests the default members and checks `liq-ta-python` | PASS: observed green on GitHub (run 45046639206) |
+| 12 | CI | `Build wheels (ubuntu-latest)` had failed on every push since `d6871e9`: writing `rustc-version.txt` into the container-owned `dist/` was denied | FAIL (observed) | The runner creates `dist/` and records the compiler version before maturin runs | Fix pushed; see Not verified |
+| 13 | `_into` contract | `midpoint_into` on the `n >= 1000` fast path left the caller's buffer contents in windows containing invalid values | FAIL (reproduced) | The kernel writes NaN. A new test checks all 166 public `*_into` functions on pre-dirtied buffers against their allocating twins (f32/f64, n = 50 and 1500, with and without holes). | PASS |
 
 ## Coverage of the remaining rule areas
 
@@ -32,7 +34,7 @@
 | CPU target | `RPS-224`–`RPS-228` | PASS | No `target_feature`, `std::arch` or `target-cpu=native` |
 | Allocation on untrusted input | `RPS-028`, `RPS-049`, `RPS-203` | PASS (CLI) | The CLI bounds CSV fields (16 KiB) and row resources (commit `e99e02a`) |
 | Benchmarks | `RPS-281`, `RPS-282` | PASS | Criterion with `black_box` on generated random-walk data |
-| Dependency audit | `RPS-296` | PARTIAL | `cargo-deny` is installed locally but has no project config or CI job |
+| Dependency audit | `RPS-296` | PASS | `deny.toml` and a CI `cargo-deny` job. Three advisories were resolved by lockfile updates: crossbeam-epoch 0.9.21 (RUSTSEC-2026-0204), rand 0.8.6 and 0.9.5 (RUSTSEC-2026-0097). `liq-ta-python` is `publish = false`. |
 | Performance claims | `RPS-014`–`RPS-017`, `RPS-021` | See below | |
 
 ## Checks run (2026-11-22, final tree)
@@ -70,7 +72,7 @@
 - **Earlier unpinned run:** the regressions it showed for `sma`, `cci/100`, `ema/100` and `mom/100` did not reproduce once pinned, or were fixed by restoring the zeroed allocation.
 - **Unpinned A/A noise:** single 100,000-point runs moved by up to 25% between identical builds.
 
-**Decision:** no `unsafe` code is retained. The `obv` residual has an identified cause and a one-line safe fix (above). The `aroon` residual (about +5%) is the cost of the safe lookup bounds check.
+**Decision:** no `unsafe` code is retained. The `obv` residual is fixed: `obv()` now resizes its preallocated buffer instead of allocating a second one; bit-equivalence was re-run and is identical. The `aroon` residual (about +5%) is the cost of the safe lookup bounds check.
 
 ### Overflow checks (`RPS-263`), measured 2026-11-22
 
@@ -102,8 +104,8 @@ Builds: `maturin build --locked --release` (venv `/tmp/liqta-venv`, CPython 3.12
 
 ## Not verified
 
-- CI itself: the workflow changes were validated as YAML and their commands run locally, but no GitHub run was observed.
+- CI: before this round, every job except `Build wheels` passed on GitHub, including MSRV, stable/beta, and Python 3.12–3.14 on three OSes. The wheel-job fix and the new `cargo-deny` job are pushed but not yet observed on GitHub.
 - Hardware counters: `perf stat` (including `-e task-clock`) is refused on this host (`perf_event_paranoid` = 4, no `CAP_PERFMON`, `sudo` needs a password), and neither valgrind nor qemu TCG plugins are installed. The `aroon`/`obv` instruction counts above are static path lengths from disassembly, not dynamic counts.
-- The `obv` and `aroon` fixes above were measured in a scratch copy only. No source change was made, and the bit-equivalence harness was not re-run for them.
+- The `aroon` alternative (plain indexing, 1–3% within noise) was measured in a scratch copy only and not applied.
 - Artifact sizes were measured on aarch64 only. The x86_64 and macOS wheels are unmeasured.
 - The 2026-11-21 interim measurement (unpinned, shared host) is superseded by the pinned run above.
