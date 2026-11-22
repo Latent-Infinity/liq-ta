@@ -42,8 +42,8 @@ fn sma<'py>(
 
     match out {
         Some(output) => {
-            // SAFETY: We have exclusive access during this function call
-            let slice = unsafe { output.as_slice_mut()? };
+            let mut output_guard = output.try_readwrite()?;
+            let slice = output_guard.as_slice_mut()?;
             liq_ta::indicators::sma_into(input, period, slice).map_err(to_py_err)?;
             Ok(output)  // Return same array
         }
@@ -87,20 +87,18 @@ fn sma<'py>(
 
 The issue is that `PyReadwriteArray` is a borrow-checking wrapper that doesn't easily convert back to the underlying `Bound<PyArray>` needed for the return type.
 
-Instead, we use `Bound<'py, PyArray1<f64>>` directly with unsafe mutable access:
+Instead, we take `Bound<'py, PyArray1<f64>>` and borrow it mutably via `try_readwrite()`:
 
 ```rust
 Some(output) => {
-    let slice = unsafe { output.as_slice_mut()? };
+    let mut output_guard = output.try_readwrite()?;
+    let slice = output_guard.as_slice_mut()?;
     // ...
     Ok(output)
 }
 ```
 
-This is safe because:
-1. The caller passes ownership of the output array reference
-2. No other references exist during the function call
-3. We immediately return the same array
+`try_readwrite()` performs numpy's runtime borrow check (failing if the array is already borrowed or not writeable), so no `unsafe` is needed; the workspace sets `unsafe_code = "forbid"`.
 
 ### Multi-Output Functions
 
@@ -156,7 +154,8 @@ fn new_indicator<'py>(
 
     match out {
         Some(output) => {
-            let slice = unsafe { output.as_slice_mut()? };
+            let mut output_guard = output.try_readwrite()?;
+            let slice = output_guard.as_slice_mut()?;
             liq_ta::indicators::new_indicator_into(input, period, slice)
                 .map_err(to_py_err)?;
             Ok(output)

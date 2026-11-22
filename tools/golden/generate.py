@@ -361,7 +361,7 @@ def generate_metadata() -> dict:
         "data_sizes": DATA_SIZES,
         "seeds": SEEDS,
         "indicators": ["SMA", "EMA", "RSI", "MACD", "ATR", "BBANDS", "STOCH"],
-        "generation_script": "tools/generate_golden.py",
+        "generation_script": "tools/golden/generate.py",
     }
 
 

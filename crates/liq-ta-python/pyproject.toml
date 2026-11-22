@@ -51,4 +51,3 @@ python_functions = ["test_*"]
 features = ["extension-module"]
 python-source = "python"
 module-name = "liq_ta._liq_ta"
-strip = true

@@ -1,7 +1,7 @@
 //! Double Smoothed Stochastic (DSS) Bressert.
 #![expect(
     missing_docs,
-    reason = "indicator output structs and helpers are documented at module level"
+    reason = "public helpers and output structs are not yet documented"
 )]
 
 use crate::error::{Error, Result};

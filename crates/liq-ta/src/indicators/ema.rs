@@ -441,11 +441,12 @@ fn ema_core_fast<T: SeriesElement>(data: &[T], period: usize, alpha: T, output: 
     output[period - 1] = ema;
 
     // Hot loop: difference form for minimal critical path latency
-    let output = &mut output[..n];
+    let out = &mut output[..n];
     for i in period..n {
         let x = data[i];
 
-        // Cold path: invalid input makes EMA sticky NaN
+        // Cold path: invalid input makes EMA sticky NaN through the whole buffer,
+        // matching the invalid-seed branch above.
         // Note: !ema.is_finite() removed - ema is finite by construction after seed
         if !x.is_finite() {
             handle_invalid(output, i);
@@ -455,7 +456,7 @@ fn ema_core_fast<T: SeriesElement>(data: &[T], period: usize, alpha: T, output: 
         // Hot path: difference form (section 5.3)
         // Critical path: SUB(x - ema) → FMA((x-ema)*alpha + ema) = ~5-6 cycles
         ema = (x - ema).mul_add(alpha, ema);
-        output[i] = ema;
+        out[i] = ema;
     }
 }
 

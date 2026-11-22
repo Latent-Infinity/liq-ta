@@ -67,6 +67,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- TRIMA for element types other than f32/f64 (such as `half::f16`) now uses the
+  same f64-accumulating kernel. The old generic kernel shifted even-period
+  windows, left one output slot unwritten, and panicked when the input length
+  equalled an even period.
+- Python wheels keep their symbol table: maturin no longer strips them and
+  follows the release profile.
+- `kernels::simd::lagged_sub_sanitize_f64` panics on mismatched slice lengths in
+  release builds as well, instead of leaving stale output.
 - Reject CHOP periods below 2, where logarithmic normalization is undefined;
   Rust returns `InvalidPeriod`, Python raises `ValueError`, and the CLI exits 3.
 - Avoid intermediate overflow in CHOP, Ulcer Index, and high-precision `f32` ATR.

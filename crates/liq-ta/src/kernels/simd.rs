@@ -1103,8 +1103,8 @@ pub fn lagged_sub_sanitize_f64(current: &[f64], lagged: &[f64], output: &mut [f6
 /// Generic [`lagged_sub_sanitize_f64`]: `current - lagged`, infinities become NaN.
 #[inline]
 pub(crate) fn lagged_sub_sanitize<T: SeriesElement>(current: &[T], lagged: &[T], output: &mut [T]) {
-    debug_assert_eq!(current.len(), lagged.len());
-    debug_assert_eq!(current.len(), output.len());
+    assert_eq!(current.len(), lagged.len());
+    assert_eq!(current.len(), output.len());
 
     for ((out, &cur), &lag) in output.iter_mut().zip(current).zip(lagged) {
         let val = cur - lag;

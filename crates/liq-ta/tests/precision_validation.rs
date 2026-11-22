@@ -21,8 +21,6 @@ use rand_chacha::ChaCha8Rng;
 const SEED: u64 = 0xFA57_7A00;
 
 /// Test sizes
-#[expect(dead_code, reason = "shared test helper not used by every test binary")]
-const SMALL_SIZE: usize = 1_000;
 const LARGE_SIZE: usize = 10_000;
 
 // =============================================================================
@@ -89,24 +87,6 @@ fn generate_near_constant(size: usize, base: f64, noise: f64) -> Vec<f64> {
 
 fn generate_near_constant_f32(size: usize, base: f64, noise: f64) -> Vec<f32> {
     generate_near_constant(size, base, noise)
-        .iter()
-        .map(|&x| x as f32)
-        .collect()
-}
-
-/// Generate extreme values data
-#[expect(dead_code, reason = "shared test helper not used by every test binary")]
-fn generate_extreme_values(size: usize) -> Vec<f64> {
-    let mut rng = ChaCha8Rng::seed_from_u64(SEED + 2);
-    let extremes = [1e6, 1e-6, 1e4, 1e-4, 1e2, 1e-2, 100.0];
-    (0..size)
-        .map(|_| extremes[rng.gen_range(0..extremes.len())])
-        .collect()
-}
-
-#[expect(dead_code, reason = "shared test helper not used by every test binary")]
-fn generate_extreme_values_f32(size: usize) -> Vec<f32> {
-    generate_extreme_values(size)
         .iter()
         .map(|&x| x as f32)
         .collect()
