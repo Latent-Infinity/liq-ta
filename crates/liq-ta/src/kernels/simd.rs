@@ -6,6 +6,8 @@
 mod scalar_backend;
 use scalar_backend::{F32x8, F64x4};
 
+use crate::traits::SeriesElement;
+
 /// The number of f64 elements processed per lane group.
 pub const F64_LANES: usize = 4;
 
@@ -466,45 +468,42 @@ pub fn sum_and_sum_sq_f64(data: &[f64]) -> (f64, f64) {
 /// - Masks out NaN values before accumulation
 #[inline]
 pub fn sum_and_sum_sq_and_count_f64(data: &[f64]) -> (f64, f64, usize) {
-    if data.is_empty() {
-        return (0.0, 0.0, 0);
-    }
+    sum_and_sum_sq_and_count(data)
+}
 
-    let chunks = data.len() / F64_LANES;
-    let remainder = data.len() % F64_LANES;
-
-    let mut sum_acc = F64x4::splat(0.0);
-    let mut sum_sq_acc = F64x4::splat(0.0);
+/// Generic [`sum_and_sum_sq_and_count_f64`]: same `F64_LANES` lane accumulators,
+/// lane reduction `((l0 + l1) + l2) + l3`, then the scalar tail.
+#[inline]
+pub(crate) fn sum_and_sum_sq_and_count<T: SeriesElement>(data: &[T]) -> (T, T, usize) {
+    let zero = T::zero();
+    let chunks = data.chunks_exact(F64_LANES);
+    let tail = chunks.remainder();
+    let mut sum_acc = [zero; F64_LANES];
+    let mut sum_sq_acc = [zero; F64_LANES];
     let mut count = 0usize;
-    let zero = F64x4::splat(0.0);
 
-    for i in 0..chunks {
-        let offset = i * F64_LANES;
-        let chunk = F64x4::from_slice(&data[offset..offset + F64_LANES]);
-
-        // Count finite values in this chunk
-        let arr = chunk.to_array();
-        for &val in &arr {
-            if val.is_finite() {
+    for chunk in chunks {
+        for lane in 0..F64_LANES {
+            // Replace non-finite values with 0 for sums
+            let value = chunk[lane];
+            let clean = if value.is_finite() {
                 count += 1;
-            }
+                value
+            } else {
+                zero
+            };
+            sum_acc[lane] = sum_acc[lane] + clean;
+            sum_sq_acc[lane] = sum_sq_acc[lane] + clean * clean;
         }
-
-        // Replace non-finite values with 0 for sums
-        let mask = chunk.is_finite();
-        let clean_chunk = mask.select(chunk, zero);
-        sum_acc += clean_chunk;
-        sum_sq_acc += clean_chunk * clean_chunk;
     }
 
-    let mut sum = sum_acc.reduce_sum();
-    let mut sum_sq = sum_sq_acc.reduce_sum();
+    let mut sum = sum_acc[0] + sum_acc[1] + sum_acc[2] + sum_acc[3];
+    let mut sum_sq = sum_sq_acc[0] + sum_sq_acc[1] + sum_sq_acc[2] + sum_sq_acc[3];
 
-    let tail_start = chunks * F64_LANES;
-    for &value in &data[tail_start..tail_start + remainder] {
+    for &value in tail {
         if value.is_finite() {
-            sum += value;
-            sum_sq += value * value;
+            sum = sum + value;
+            sum_sq = sum_sq + value * value;
             count += 1;
         }
     }
@@ -1098,34 +1097,18 @@ pub fn lagged_sub_f64(current: &[f64], lagged: &[f64], output: &mut [f64]) {
 /// The conversion is fused into the main loop to avoid a second memory pass.
 #[inline]
 pub fn lagged_sub_sanitize_f64(current: &[f64], lagged: &[f64], output: &mut [f64]) {
+    lagged_sub_sanitize(current, lagged, output);
+}
+
+/// Generic [`lagged_sub_sanitize_f64`]: `current - lagged`, infinities become NaN.
+#[inline]
+pub(crate) fn lagged_sub_sanitize<T: SeriesElement>(current: &[T], lagged: &[T], output: &mut [T]) {
     debug_assert_eq!(current.len(), lagged.len());
     debug_assert_eq!(current.len(), output.len());
 
-    let n = current.len();
-    let chunks = n / F64_LANES;
-    let remainder = n % F64_LANES;
-
-    let nan_vec = F64x4::splat(f64::NAN);
-
-    // Process chunks of 4 elements
-    for i in 0..chunks {
-        let offset = i * F64_LANES;
-        let cur_chunk = F64x4::from_slice(&current[offset..offset + F64_LANES]);
-        let lag_chunk = F64x4::from_slice(&lagged[offset..offset + F64_LANES]);
-        let result = cur_chunk - lag_chunk;
-
-        // Convert infinity to NaN using the lane mask
-        let is_inf = !result.is_finite() & !result.is_nan();
-        let sanitized = is_inf.select(nan_vec, result);
-
-        sanitized.copy_to_slice(&mut output[offset..offset + F64_LANES]);
-    }
-
-    // Handle remaining elements
-    let tail_start = chunks * F64_LANES;
-    for i in 0..remainder {
-        let val = current[tail_start + i] - lagged[tail_start + i];
-        output[tail_start + i] = if val.is_infinite() { f64::NAN } else { val };
+    for ((out, &cur), &lag) in output.iter_mut().zip(current).zip(lagged) {
+        let val = cur - lag;
+        *out = if val.is_infinite() { T::nan() } else { val };
     }
 }
 

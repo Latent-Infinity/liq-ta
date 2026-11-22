@@ -1,52 +1,39 @@
-//! Type-checked views of generic series as concrete `f32`/`f64` data.
+//! Element-type specialization helpers.
 //!
-//! Indicators specialize their generic entry points on the concrete element
-//! type (for example, to accumulate `f32` input in `f64`). These helpers are
-//! the crate's single place where that specialization reinterprets memory:
-//! each view exists only when [`TypeId`] proves the two types are identical.
+//! Indicators pick a fast path by element type (for example, accumulating
+//! `f32` input in `f64`). The fast kernels are generic and convert through
+//! these helpers, so instantiating them for `f64` or `f32` computes exactly
+//! what concrete `f64`/`f32` kernels would, without reinterpreting memory.
 
-use std::any::{Any, TypeId};
+use std::any::TypeId;
 
-/// Views `data` as `&[U]` when `T` and `U` are the same type.
+use num_traits::NumCast;
+
+use crate::traits::SeriesElement;
+
+/// Returns whether `T` and `U` are the same type.
 #[inline]
 #[must_use]
-pub(crate) fn slice_as<T: 'static, U: 'static>(data: &[T]) -> Option<&[U]> {
-    if TypeId::of::<T>() != TypeId::of::<U>() {
-        return None;
-    }
-    // SAFETY: equal `TypeId`s mean `T` and `U` are the same type, so the pointer,
-    // length, alignment, initialization and borrow of `data` are valid for `[U]`.
-    Some(unsafe { std::slice::from_raw_parts(data.as_ptr().cast::<U>(), data.len()) })
+pub(crate) fn same_type<T: 'static, U: 'static>() -> bool {
+    TypeId::of::<T>() == TypeId::of::<U>()
 }
 
-/// Views `data` as `&mut [U]` when `T` and `U` are the same type.
+/// Converts an element to `f64` exactly as `as f64` would.
+///
+/// For `f64` this is the identity and for `f32` a widening cast.
 #[inline]
 #[must_use]
-pub(crate) fn slice_as_mut<T: 'static, U: 'static>(data: &mut [T]) -> Option<&mut [U]> {
-    if TypeId::of::<T>() != TypeId::of::<U>() {
-        return None;
-    }
-    // SAFETY: equal `TypeId`s mean `T` and `U` are the same type, so the pointer,
-    // length, alignment and initialization of `data` are valid for `[U]`; the
-    // exclusive borrow of `data` moves into the returned view.
-    Some(unsafe { std::slice::from_raw_parts_mut(data.as_mut_ptr().cast::<U>(), data.len()) })
+pub(crate) fn to_f64<T: SeriesElement>(value: T) -> f64 {
+    value
+        .to_f64()
+        .expect("float-to-float conversion in num-traits never fails")
 }
 
-/// Converts `Vec<T>` into `Vec<U>` when `T` and `U` are the same type.
-///
-/// # Errors
-///
-/// Returns the original vector unchanged when the types differ.
+/// Converts an `f64` to the element type exactly as `as T` would (saturating to infinity).
 #[inline]
-pub(crate) fn vec_into<T: 'static, U: 'static>(
-    data: Vec<T>,
-) -> std::result::Result<Vec<U>, Vec<T>> {
-    // Downcast through a stack slot so the conversion never allocates.
-    let mut slot = Some(data);
-    if let Some(converted) = (&mut slot as &mut dyn Any).downcast_mut::<Option<Vec<U>>>() {
-        return Ok(converted.take().expect("slot holds the vector"));
-    }
-    Err(slot.expect("slot holds the vector"))
+#[must_use]
+pub(crate) fn from_f64<T: SeriesElement>(value: f64) -> T {
+    <T as NumCast>::from(value).expect("float-to-float conversion in num-traits never fails")
 }
 
 #[cfg(test)]
@@ -54,33 +41,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn views_exist_only_for_identical_types() {
-        let mut data = vec![1.0_f64, 2.0, 3.0];
-        assert_eq!(slice_as::<f64, f64>(&data), Some(&[1.0, 2.0, 3.0][..]));
-        assert!(slice_as::<f64, f32>(&data).is_none());
-        assert!(slice_as_mut::<f64, f32>(&mut data).is_none());
-
-        let view = slice_as_mut::<f64, f64>(&mut data).expect("same type");
-        view[1] = 5.0;
-        assert_eq!(data, [1.0, 5.0, 3.0]);
+    fn same_type_distinguishes_float_types() {
+        assert!(same_type::<f64, f64>());
+        assert!(!same_type::<f64, f32>());
     }
 
     #[test]
-    fn empty_slices_keep_their_length() {
-        let mut empty: Vec<f32> = Vec::new();
-        assert_eq!(slice_as::<f32, f32>(&empty).map(<[f32]>::len), Some(0));
-        assert_eq!(
-            slice_as_mut::<f32, f32>(&mut empty).map(|s| s.len()),
-            Some(0)
-        );
-    }
-
-    #[test]
-    fn vec_into_converts_or_returns_the_original() {
-        let same = vec_into::<f32, f32>(vec![1.5_f32, 2.5]).expect("same type");
-        assert_eq!(same, [1.5, 2.5]);
-
-        let original = vec_into::<f32, f64>(vec![1.5_f32]).expect_err("different type");
-        assert_eq!(original, [1.5]);
+    fn conversions_match_as_casts() {
+        assert_eq!(to_f64(0.1_f32), 0.1_f32 as f64);
+        assert_eq!(from_f64::<f32>(0.1), 0.1_f64 as f32);
+        assert_eq!(from_f64::<f32>(1e300), f32::INFINITY);
+        assert!(from_f64::<f32>(f64::NAN).is_nan());
+        assert_eq!(from_f64::<f64>(-0.0).to_bits(), (-0.0_f64).to_bits());
     }
 }

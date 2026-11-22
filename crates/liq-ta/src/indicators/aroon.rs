@@ -128,7 +128,7 @@ mod coverage_push_private_paths_tests {
         }
         let mut up64 = vec![0.0_f64; n];
         let mut down64 = vec![0.0_f64; n];
-        aroon_into_lazy_rescan_f64(&high64, &low64, period, &mut up64, &mut down64)
+        aroon_into_lazy_rescan_fast(&high64, &low64, period, &mut up64, &mut down64)
             .expect("f64 lazy-rescan specialized path should succeed");
         assert!(up64[n - 1].is_finite());
         assert!(down64[n - 1].is_finite());
@@ -137,7 +137,7 @@ mod coverage_push_private_paths_tests {
         let low32: Vec<f32> = low64.iter().map(|&v| v as f32).collect();
         let mut up32 = vec![0.0_f32; n];
         let mut down32 = vec![0.0_f32; n];
-        aroon_into_lazy_rescan_f32(&high32, &low32, period, &mut up32, &mut down32)
+        aroon_into_lazy_rescan_fast(&high32, &low32, period, &mut up32, &mut down32)
             .expect("f32 lazy-rescan specialized path should succeed");
         assert!(up32[n - 1].is_finite());
         assert!(down32[n - 1].is_finite());
@@ -290,22 +290,8 @@ fn aroon_into_naive<T: SeriesElement>(
     aroon_down_output: &mut [T],
 ) -> Result<()> {
     // Type specialization for f64/f32 - eliminates trait overhead
-    if let (Some(high_f64), Some(low_f64)) = (
-        cast::slice_as::<T, f64>(high),
-        cast::slice_as::<T, f64>(low),
-    ) {
-        let aroon_up_f64 = cast::slice_as_mut::<T, f64>(aroon_up_output).expect("T is f64");
-        let aroon_down_f64 = cast::slice_as_mut::<T, f64>(aroon_down_output).expect("T is f64");
-        return aroon_into_naive_f64(high_f64, low_f64, period, aroon_up_f64, aroon_down_f64);
-    }
-
-    if let (Some(high_f32), Some(low_f32)) = (
-        cast::slice_as::<T, f32>(high),
-        cast::slice_as::<T, f32>(low),
-    ) {
-        let aroon_up_f32 = cast::slice_as_mut::<T, f32>(aroon_up_output).expect("T is f32");
-        let aroon_down_f32 = cast::slice_as_mut::<T, f32>(aroon_down_output).expect("T is f32");
-        return aroon_into_naive_f32(high_f32, low_f32, period, aroon_up_f32, aroon_down_f32);
+    if cast::same_type::<T, f64>() || cast::same_type::<T, f32>() {
+        return aroon_into_naive_fast(high, low, period, aroon_up_output, aroon_down_output);
     }
 
     // Generic fallback
@@ -385,28 +371,30 @@ fn aroon_into_naive<T: SeriesElement>(
     Ok(())
 }
 
-/// f64-specialized naive implementation - eliminates trait overhead.
+/// f64/f32-specialized naive implementation - computes natively in `T`.
 #[inline]
-fn aroon_into_naive_f64(
-    high: &[f64],
-    low: &[f64],
+fn aroon_into_naive_fast<T: SeriesElement>(
+    high: &[T],
+    low: &[T],
     period: usize,
-    aroon_up_output: &mut [f64],
-    aroon_down_output: &mut [f64],
+    aroon_up_output: &mut [T],
+    aroon_down_output: &mut [T],
 ) -> Result<()> {
     let n = high.len();
     let lookback = period;
 
-    // Pre-compute Aroon values (no trait conversions)
+    // Pre-compute Aroon values
     let mut aroon_lookup = Vec::with_capacity(period + 1);
-    let period_f = period as f64;
+    let period_f = T::from_usize(period)?;
     for ps in 0..=period {
-        aroon_lookup.push(((period_f - ps as f64) / period_f) * 100.0);
+        aroon_lookup.push(((period_f - T::from_usize(ps)?) / period_f) * T::hundred());
     }
+    // Length is exactly period + 1, so `.min(period)` below elides the bounds check.
+    let aroon_lookup = &aroon_lookup[..=period];
 
     // Fill lookback period with NaN
-    aroon_up_output[..lookback].fill(f64::NAN);
-    aroon_down_output[..lookback].fill(f64::NAN);
+    aroon_up_output[..lookback].fill(T::nan());
+    aroon_down_output[..lookback].fill(T::nan());
 
     // Optimized inner loop: assume data is valid (common case), handle NaN only if found
     for i in lookback..n {
@@ -442,87 +430,15 @@ fn aroon_into_naive_f64(
         }
 
         if has_invalid {
-            aroon_up_output[i] = f64::NAN;
-            aroon_down_output[i] = f64::NAN;
+            aroon_up_output[i] = T::nan();
+            aroon_down_output[i] = T::nan();
         } else {
             let periods_since_high = i - highest_idx;
             let periods_since_low = i - lowest_idx;
 
-            // periods_since is always in [0, period], within the lookup table
-            aroon_up_output[i] = aroon_lookup[periods_since_high];
-            aroon_down_output[i] = aroon_lookup[periods_since_low];
-        }
-    }
-
-    Ok(())
-}
-
-/// f32-specialized naive implementation - eliminates trait overhead.
-#[inline]
-fn aroon_into_naive_f32(
-    high: &[f32],
-    low: &[f32],
-    period: usize,
-    aroon_up_output: &mut [f32],
-    aroon_down_output: &mut [f32],
-) -> Result<()> {
-    let n = high.len();
-    let lookback = period;
-
-    // Pre-compute Aroon values (no trait conversions)
-    let mut aroon_lookup = Vec::with_capacity(period + 1);
-    let period_f = period as f32;
-    for ps in 0..=period {
-        aroon_lookup.push(((period_f - ps as f32) / period_f) * 100.0);
-    }
-
-    // Fill lookback period with NaN
-    aroon_up_output[..lookback].fill(f32::NAN);
-    aroon_down_output[..lookback].fill(f32::NAN);
-
-    // Optimized inner loop: assume data is valid (common case), handle NaN only if found
-    for i in lookback..n {
-        let window_start = i - period;
-
-        // Fast path: find extrema indices assuming all values are finite
-        let mut highest_idx = window_start;
-        let mut highest_val = high[window_start];
-        let mut lowest_idx = window_start;
-        let mut lowest_val = low[window_start];
-        let mut has_invalid = !highest_val.is_finite() || !lowest_val.is_finite();
-
-        for j in (window_start + 1)..=i {
-            let h = high[j];
-            let l = low[j];
-
-            // Check validity
-            if !h.is_finite() || !l.is_finite() {
-                has_invalid = true;
-            }
-
-            // Update highest (prefer most recent on tie with >=)
-            if h >= highest_val || !highest_val.is_finite() {
-                highest_val = h;
-                highest_idx = j;
-            }
-
-            // Update lowest (prefer most recent on tie with <=)
-            if l <= lowest_val || !lowest_val.is_finite() {
-                lowest_val = l;
-                lowest_idx = j;
-            }
-        }
-
-        if has_invalid {
-            aroon_up_output[i] = f32::NAN;
-            aroon_down_output[i] = f32::NAN;
-        } else {
-            let periods_since_high = i - highest_idx;
-            let periods_since_low = i - lowest_idx;
-
-            // periods_since is always in [0, period], within the lookup table
-            aroon_up_output[i] = aroon_lookup[periods_since_high];
-            aroon_down_output[i] = aroon_lookup[periods_since_low];
+            // periods_since is always in [0, period]; min() is a no-op proving it
+            aroon_up_output[i] = aroon_lookup[periods_since_high.min(period)];
+            aroon_down_output[i] = aroon_lookup[periods_since_low.min(period)];
         }
     }
 
@@ -547,22 +463,8 @@ fn aroon_into_lazy_rescan<T: SeriesElement>(
     aroon_down_output: &mut [T],
 ) -> Result<()> {
     // Type specialization for f64/f32 - eliminates trait overhead
-    if let (Some(high_f64), Some(low_f64)) = (
-        cast::slice_as::<T, f64>(high),
-        cast::slice_as::<T, f64>(low),
-    ) {
-        let aroon_up_f64 = cast::slice_as_mut::<T, f64>(aroon_up_output).expect("T is f64");
-        let aroon_down_f64 = cast::slice_as_mut::<T, f64>(aroon_down_output).expect("T is f64");
-        return aroon_into_lazy_rescan_f64(high_f64, low_f64, period, aroon_up_f64, aroon_down_f64);
-    }
-
-    if let (Some(high_f32), Some(low_f32)) = (
-        cast::slice_as::<T, f32>(high),
-        cast::slice_as::<T, f32>(low),
-    ) {
-        let aroon_up_f32 = cast::slice_as_mut::<T, f32>(aroon_up_output).expect("T is f32");
-        let aroon_down_f32 = cast::slice_as_mut::<T, f32>(aroon_down_output).expect("T is f32");
-        return aroon_into_lazy_rescan_f32(high_f32, low_f32, period, aroon_up_f32, aroon_down_f32);
+    if cast::same_type::<T, f64>() || cast::same_type::<T, f32>() {
+        return aroon_into_lazy_rescan_fast(high, low, period, aroon_up_output, aroon_down_output);
     }
 
     // Generic fallback (less common path)
@@ -680,27 +582,27 @@ fn aroon_into_lazy_rescan<T: SeriesElement>(
     Ok(())
 }
 
-/// f64-specialized lazy-rescan implementation - based on TA-Lib algorithm.
+/// f64/f32-specialized lazy-rescan implementation - based on TA-Lib algorithm.
 #[inline]
-fn aroon_into_lazy_rescan_f64(
-    high: &[f64],
-    low: &[f64],
+fn aroon_into_lazy_rescan_fast<T: SeriesElement>(
+    high: &[T],
+    low: &[T],
     period: usize,
-    aroon_up_output: &mut [f64],
-    aroon_down_output: &mut [f64],
+    aroon_up_output: &mut [T],
+    aroon_down_output: &mut [T],
 ) -> Result<()> {
     let n = high.len();
     let lookback = period;
-    let factor = 100.0 / period as f64;
+    let factor = T::hundred() / T::from_usize(period)?;
 
     // Fill lookback period with NaN
-    aroon_up_output[..lookback].fill(f64::NAN);
-    aroon_down_output[..lookback].fill(f64::NAN);
+    aroon_up_output[..lookback].fill(T::nan());
+    aroon_down_output[..lookback].fill(T::nan());
 
     let mut highest_idx = 0usize;
     let mut lowest_idx = 0usize;
-    let mut highest_val = f64::NEG_INFINITY;
-    let mut lowest_val = f64::INFINITY;
+    let mut highest_val = T::neg_infinity();
+    let mut lowest_val = T::infinity();
     let mut first_iteration = true;
 
     for today in lookback..n {
@@ -717,8 +619,8 @@ fn aroon_into_lazy_rescan_f64(
             }
         }
         if has_invalid {
-            aroon_up_output[today] = f64::NAN;
-            aroon_down_output[today] = f64::NAN;
+            aroon_up_output[today] = T::nan();
+            aroon_down_output[today] = T::nan();
             first_iteration = true;
             continue;
         }
@@ -762,97 +664,8 @@ fn aroon_into_lazy_rescan_f64(
         let periods_since_high = today - highest_idx;
         let periods_since_low = today - lowest_idx;
 
-        aroon_up_output[today] = factor * (period - periods_since_high) as f64;
-        aroon_down_output[today] = factor * (period - periods_since_low) as f64;
-    }
-
-    Ok(())
-}
-
-/// f32-specialized lazy-rescan implementation - based on TA-Lib algorithm.
-#[inline]
-fn aroon_into_lazy_rescan_f32(
-    high: &[f32],
-    low: &[f32],
-    period: usize,
-    aroon_up_output: &mut [f32],
-    aroon_down_output: &mut [f32],
-) -> Result<()> {
-    let n = high.len();
-    let lookback = period;
-    let factor = 100.0 / period as f32;
-
-    // Fill lookback period with NaN
-    aroon_up_output[..lookback].fill(f32::NAN);
-    aroon_down_output[..lookback].fill(f32::NAN);
-
-    let mut highest_idx = 0usize;
-    let mut lowest_idx = 0usize;
-    let mut highest_val = f32::NEG_INFINITY;
-    let mut lowest_val = f32::INFINITY;
-    let mut first_iteration = true;
-
-    for today in lookback..n {
-        let trailing_idx = today - period;
-        let high_today = high[today];
-        let low_today = low[today];
-
-        // Propagate NaN/Infinity if any non-finite value exists in the current window.
-        let mut has_invalid = false;
-        for i in trailing_idx..=today {
-            if !high[i].is_finite() || !low[i].is_finite() {
-                has_invalid = true;
-                break;
-            }
-        }
-        if has_invalid {
-            aroon_up_output[today] = f32::NAN;
-            aroon_down_output[today] = f32::NAN;
-            first_iteration = true;
-            continue;
-        }
-
-        // Update lowest (lazy rescan when index falls out of window)
-        if first_iteration || lowest_idx < trailing_idx {
-            // Rescan entire window
-            lowest_idx = trailing_idx;
-            lowest_val = low[trailing_idx];
-            for i in (trailing_idx + 1)..=today {
-                let val = low[i];
-                if val <= lowest_val {
-                    lowest_idx = i;
-                    lowest_val = val;
-                }
-            }
-        } else if low_today <= lowest_val {
-            lowest_idx = today;
-            lowest_val = low_today;
-        }
-
-        // Update highest (lazy rescan when index falls out of window)
-        if first_iteration || highest_idx < trailing_idx {
-            // Rescan entire window
-            highest_idx = trailing_idx;
-            highest_val = high[trailing_idx];
-            for i in (trailing_idx + 1)..=today {
-                let val = high[i];
-                if val >= highest_val {
-                    highest_idx = i;
-                    highest_val = val;
-                }
-            }
-        } else if high_today >= highest_val {
-            highest_idx = today;
-            highest_val = high_today;
-        }
-
-        first_iteration = false;
-
-        let periods_since_high = today - highest_idx;
-        let periods_since_low = today - lowest_idx;
-
-        aroon_up_output[today] = factor * (period - periods_since_high) as f32;
-        aroon_down_output[today] = factor * (period - periods_since_low) as f32;
+        aroon_up_output[today] = factor * T::from_usize(period - periods_since_high)?;
+        aroon_down_output[today] = factor * T::from_usize(period - periods_since_low)?;
     }
 
     Ok(())
@@ -894,6 +707,7 @@ fn aroon_into_ring<T: SeriesElement>(
         let ps_t = T::from_usize(ps)?;
         aroon_lookup.push(((period_t - ps_t) / period_t) * hundred);
     }
+    let aroon_lookup = &aroon_lookup[..=period];
 
     // Fill lookback period with NaN
     aroon_up_output[..lookback].fill(T::nan());
@@ -1011,9 +825,9 @@ fn aroon_into_ring<T: SeriesElement>(
                 let periods_since_high = i - highest_idx;
                 let periods_since_low = i - lowest_idx;
 
-                // periods_since is always in [0, period], within the lookup table
-                aroon_up_output[i] = aroon_lookup[periods_since_high];
-                aroon_down_output[i] = aroon_lookup[periods_since_low];
+                // periods_since is always in [0, period]; min() is a no-op proving it
+                aroon_up_output[i] = aroon_lookup[periods_since_high.min(period)];
+                aroon_down_output[i] = aroon_lookup[periods_since_low.min(period)];
             } else {
                 // Deque is empty (all values were NaN in window)
                 aroon_up_output[i] = T::nan();
@@ -1057,6 +871,7 @@ fn aroon_into_van_herk<T: SeriesElement>(
         let ps_t = T::from_usize(ps)?;
         aroon_lookup.push(((period_t - ps_t) / period_t) * hundred);
     }
+    let aroon_lookup = &aroon_lookup[..=period];
 
     // Allocate working buffers for prefix/suffix extrema (values)
     let mut left_max_high = vec![T::neg_infinity(); n];
@@ -1194,9 +1009,9 @@ fn aroon_into_van_herk<T: SeriesElement>(
             let periods_since_high = i - highest_idx;
             let periods_since_low = i - lowest_idx;
 
-            // periods_since is always in [0, period], within the lookup table
-            aroon_up_output[i] = aroon_lookup[periods_since_high];
-            aroon_down_output[i] = aroon_lookup[periods_since_low];
+            // periods_since is always in [0, period]; min() is a no-op proving it
+            aroon_up_output[i] = aroon_lookup[periods_since_high.min(period)];
+            aroon_down_output[i] = aroon_lookup[periods_since_low.min(period)];
         }
     }
 

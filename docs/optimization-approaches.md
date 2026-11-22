@@ -408,7 +408,7 @@ The tax is negligible when:
 
 **Optimization: Uninitialized Allocation for f64/f32**
 
-> **Superseded (2026-11-21):** liq-ta no longer uses this pattern. The crate's only unsafe code is `crate::cast`, whose `TypeId`-checked `slice_as`/`slice_as_mut`/`vec_into` replace the `transmute` and `set_len` shown below. Outputs are always initialized, and unchecked indexing has been removed (Rust standards v3.6, `RPS-236`/`RPS-251`). The example is kept as history.
+> **Superseded (2026-11-22):** liq-ta no longer uses this pattern and forbids `unsafe` code. Fast paths are generic kernels selected by a `TypeId` check; they convert through `crate::cast::{to_f64, from_f64}`, so the `transmute` and `set_len` shown below are gone. Outputs are always initialized, and the f32/f64 paths use zeroed `vec![T::zero(); n]` allocations (Rust standards v3.6, `RPS-236`/`RPS-251`). The example is kept as history.
 
 ```rust
 pub fn indicator<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {

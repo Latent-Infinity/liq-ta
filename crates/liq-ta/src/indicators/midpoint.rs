@@ -112,13 +112,8 @@ pub fn midpoint_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [
     // VHGW dispatch for f64: use VHGW for large n
     // Threshold: n >= 1000 (bench-derived, adjust based on benchmarks)
     const VHGW_THRESHOLD: usize = 1000;
-    if n >= VHGW_THRESHOLD
-        && let (Some(data_f64), Some(output_f64)) = (
-            cast::slice_as::<T, f64>(data),
-            cast::slice_as_mut::<T, f64>(output),
-        )
-    {
-        crate::kernels::rolling_midpoint_vhgw_f64(data_f64, period, output_f64)?;
+    if n >= VHGW_THRESHOLD && cast::same_type::<T, f64>() {
+        crate::kernels::rolling_extrema::rolling_midpoint_vhgw(data, period, output)?;
         return Ok(());
     }
 
@@ -144,16 +139,8 @@ pub fn midpoint_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [
 
     // For f64/f32: use specialized path with * 0.5 instead of / 2
     // This allows compiler to use multiply instead of divide (faster)
-    if let (Some(data_f64), Some(output_f64)) = (
-        cast::slice_as::<T, f64>(data),
-        cast::slice_as_mut::<T, f64>(output),
-    ) {
-        return midpoint_deque_f64(data_f64, period, lookback, output_f64);
-    } else if let (Some(data_f32), Some(output_f32)) = (
-        cast::slice_as::<T, f32>(data),
-        cast::slice_as_mut::<T, f32>(output),
-    ) {
-        return midpoint_deque_f32(data_f32, period, lookback, output_f32);
+    if cast::same_type::<T, f64>() || cast::same_type::<T, f32>() {
+        return midpoint_deque_mul(data, period, lookback, output);
     }
 
     // Generic fallback path with division
@@ -177,18 +164,18 @@ pub fn midpoint_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [
     Ok(())
 }
 
-/// Specialized f64 deque path with multiplication optimization
+/// Specialized f64/f32 deque path with multiplication optimization
 #[inline]
-fn midpoint_deque_f64(
-    data: &[f64],
+fn midpoint_deque_mul<T: SeriesElement>(
+    data: &[T],
     period: usize,
     lookback: usize,
-    output: &mut [f64],
+    output: &mut [T],
 ) -> Result<()> {
     let n = data.len();
-    let mut max_deque: crate::kernels::rolling_extrema::MonotonicDeque<f64> =
+    let mut max_deque: crate::kernels::rolling_extrema::MonotonicDeque<T> =
         crate::kernels::rolling_extrema::MonotonicDeque::new(period);
-    let mut min_deque: crate::kernels::rolling_extrema::MonotonicDeque<f64> =
+    let mut min_deque: crate::kernels::rolling_extrema::MonotonicDeque<T> =
         crate::kernels::rolling_extrema::MonotonicDeque::new(period);
 
     // Warmup loop: only update deques, no output
@@ -204,40 +191,7 @@ fn midpoint_deque_f64(
 
         let highest = max_deque.get_extremum(data);
         let lowest = min_deque.get_extremum(data);
-        output[i] = (highest + lowest) * 0.5;
-    }
-
-    Ok(())
-}
-
-/// Specialized f32 deque path with multiplication optimization
-#[inline]
-fn midpoint_deque_f32(
-    data: &[f32],
-    period: usize,
-    lookback: usize,
-    output: &mut [f32],
-) -> Result<()> {
-    let n = data.len();
-    let mut max_deque: crate::kernels::rolling_extrema::MonotonicDeque<f32> =
-        crate::kernels::rolling_extrema::MonotonicDeque::new(period);
-    let mut min_deque: crate::kernels::rolling_extrema::MonotonicDeque<f32> =
-        crate::kernels::rolling_extrema::MonotonicDeque::new(period);
-
-    // Warmup loop: only update deques, no output
-    for i in 0..lookback {
-        max_deque.push_max(i, data);
-        min_deque.push_min(i, data);
-    }
-
-    // Steady-state loop: update deques and write output (no branch)
-    for i in lookback..n {
-        max_deque.push_max(i, data);
-        min_deque.push_min(i, data);
-
-        let highest = max_deque.get_extremum(data);
-        let lowest = min_deque.get_extremum(data);
-        output[i] = (highest + lowest) * 0.5;
+        output[i] = (highest + lowest) * crate::cast::from_f64::<T>(0.5);
     }
 
     Ok(())

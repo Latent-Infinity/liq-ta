@@ -1125,6 +1125,16 @@ pub fn rolling_extrema_fused_vhgw(
 /// - The input data is shorter than the period (`Error::InsufficientData`)
 /// - The output buffer is too small (`Error::BufferTooSmall`)
 pub fn rolling_midpoint_vhgw_f64(data: &[f64], period: usize, output: &mut [f64]) -> Result<usize> {
+    rolling_midpoint_vhgw(data, period, output)
+}
+
+/// Generic [`rolling_midpoint_vhgw_f64`].
+#[inline]
+pub(crate) fn rolling_midpoint_vhgw<T: SeriesElement>(
+    data: &[T],
+    period: usize,
+    output: &mut [T],
+) -> Result<usize> {
     // Validate inputs
     if data.is_empty() {
         return Err(Error::EmptyInput);
@@ -1158,7 +1168,7 @@ pub fn rolling_midpoint_vhgw_f64(data: &[f64], period: usize, output: &mut [f64]
 
     // Initialize lookback period with NaN
     for i in 0..lookback {
-        output[i] = f64::NAN;
+        output[i] = T::nan();
     }
 
     // Handle period == 1 case
@@ -1167,17 +1177,17 @@ pub fn rolling_midpoint_vhgw_f64(data: &[f64], period: usize, output: &mut [f64]
             output[i] = if data[i].is_finite() {
                 data[i]
             } else {
-                f64::NAN
+                T::nan()
             };
         }
         return Ok(n);
     }
 
     // Allocate working buffers for prefix/suffix extrema
-    let mut left_max = vec![f64::NEG_INFINITY; n];
-    let mut right_max = vec![f64::NEG_INFINITY; n];
-    let mut left_min = vec![f64::INFINITY; n];
-    let mut right_min = vec![f64::INFINITY; n];
+    let mut left_max = vec![T::neg_infinity(); n];
+    let mut right_max = vec![T::neg_infinity(); n];
+    let mut left_min = vec![T::infinity(); n];
+    let mut right_min = vec![T::infinity(); n];
 
     // Track validity with prefix/suffix AND
     let mut left_valid = vec![true; n];
@@ -1239,7 +1249,7 @@ pub fn rolling_midpoint_vhgw_f64(data: &[f64], period: usize, output: &mut [f64]
         let window_ok = right_valid[start] && left_valid[end];
 
         if window_ok {
-            output[end] = (highest + lowest) * 0.5;
+            output[end] = (highest + lowest) * crate::cast::from_f64::<T>(0.5);
         }
         // else: already initialized to NaN
     }
@@ -1287,6 +1297,23 @@ pub fn compute_stochastic_fast_vhgw_f64(
     k_out: &mut [f64],
     d_out: &mut [f64],
 ) -> Result<()> {
+    compute_stochastic_fast_vhgw(high, low, close, k_period, d_period, k_out, d_out)
+}
+
+/// Generic Fast Stochastic VHGW kernel computing natively in `T` (f32/f64).
+///
+/// # Errors
+///
+/// Returns `Error::InsufficientData` when `close` is shorter than `k_period`.
+pub(crate) fn compute_stochastic_fast_vhgw<T: SeriesElement>(
+    high: &[T],
+    low: &[T],
+    close: &[T],
+    k_period: usize,
+    d_period: usize,
+    k_out: &mut [T],
+    d_out: &mut [T],
+) -> Result<()> {
     let n = close.len();
     if n < k_period {
         return Err(Error::InsufficientData {
@@ -1300,12 +1327,12 @@ pub fn compute_stochastic_fast_vhgw_f64(
     let d_start = k_lookback + d_period - 1;
 
     // Fill lookback NaNs
-    k_out[..k_lookback].fill(f64::NAN);
-    d_out[..d_start.min(n)].fill(f64::NAN);
+    k_out[..k_lookback].fill(T::nan());
+    d_out[..d_start.min(n)].fill(T::nan());
 
     // Pass 1 & 2: VHGW on high (forward + backward for rolling max)
-    let mut left_max_high = vec![f64::NEG_INFINITY; n];
-    let mut right_max_high = vec![f64::NEG_INFINITY; n];
+    let mut left_max_high = vec![T::neg_infinity(); n];
+    let mut right_max_high = vec![T::neg_infinity(); n];
 
     // Forward scan for max_high
     left_max_high[0] = high[0];
@@ -1328,8 +1355,8 @@ pub fn compute_stochastic_fast_vhgw_f64(
     }
 
     // Pass 3 & 4: VHGW on low (forward + backward for rolling min)
-    let mut left_min_low = vec![f64::INFINITY; n];
-    let mut right_min_low = vec![f64::INFINITY; n];
+    let mut left_min_low = vec![T::infinity(); n];
+    let mut right_min_low = vec![T::infinity(); n];
 
     // Forward scan for min_low
     left_min_low[0] = low[0];
@@ -1360,27 +1387,28 @@ pub fn compute_stochastic_fast_vhgw_f64(
         let lowest_low = right_min_low[start].min(left_min_low[end]);
 
         let range = highest_high - lowest_low;
-        k_out[end] = if range > 0.0 {
-            100.0 * (close[end] - lowest_low) / range
+        k_out[end] = if range > T::zero() {
+            T::hundred() * (close[end] - lowest_low) / range
         } else {
-            50.0 // Flat range
+            T::fifty() // Flat range
         };
     }
 
     // Pass 6: Compute %D as SMA of %K
     if n >= d_start + 1 {
         // Initialize first %D window
-        let mut sum = 0.0;
+        let mut sum = T::zero();
         for i in k_lookback..(k_lookback + d_period) {
-            sum += k_out[i];
+            sum = sum + k_out[i];
         }
-        d_out[d_start] = sum / d_period as f64;
+        let d_period_t = T::from_usize(d_period)?;
+        d_out[d_start] = sum / d_period_t;
 
         // Rolling SMA for remaining %D values
         for i in (d_start + 1)..n {
             let old_idx = i - d_period;
             sum = sum - k_out[old_idx] + k_out[i];
-            d_out[i] = sum / d_period as f64;
+            d_out[i] = sum / d_period_t;
         }
     }
 
@@ -1422,104 +1450,7 @@ pub fn compute_stochastic_fast_vhgw_f32(
     k_out: &mut [f32],
     d_out: &mut [f32],
 ) -> Result<()> {
-    let n = close.len();
-    if n < k_period {
-        return Err(Error::InsufficientData {
-            indicator: "stochastic_fast_vhgw",
-            required: k_period,
-            actual: n,
-        });
-    }
-
-    let k_lookback = k_period - 1;
-    let d_start = k_lookback + d_period - 1;
-
-    // Fill lookback NaNs
-    k_out[..k_lookback].fill(f32::NAN);
-    d_out[..d_start.min(n)].fill(f32::NAN);
-
-    // Pass 1 & 2: VHGW on high (forward + backward for rolling max)
-    let mut left_max_high = vec![f32::NEG_INFINITY; n];
-    let mut right_max_high = vec![f32::NEG_INFINITY; n];
-
-    // Forward scan for max_high
-    left_max_high[0] = high[0];
-    for i in 1..n {
-        if i % k_period == 0 {
-            left_max_high[i] = high[i];
-        } else {
-            left_max_high[i] = left_max_high[i - 1].max(high[i]);
-        }
-    }
-
-    // Backward scan for max_high
-    right_max_high[n - 1] = high[n - 1];
-    for i in (0..n - 1).rev() {
-        if (i + 1) % k_period == 0 {
-            right_max_high[i] = high[i];
-        } else {
-            right_max_high[i] = right_max_high[i + 1].max(high[i]);
-        }
-    }
-
-    // Pass 3 & 4: VHGW on low (forward + backward for rolling min)
-    let mut left_min_low = vec![f32::INFINITY; n];
-    let mut right_min_low = vec![f32::INFINITY; n];
-
-    // Forward scan for min_low
-    left_min_low[0] = low[0];
-    for i in 1..n {
-        if i % k_period == 0 {
-            left_min_low[i] = low[i];
-        } else {
-            left_min_low[i] = left_min_low[i - 1].min(low[i]);
-        }
-    }
-
-    // Backward scan for min_low
-    right_min_low[n - 1] = low[n - 1];
-    for i in (0..n - 1).rev() {
-        if (i + 1) % k_period == 0 {
-            right_min_low[i] = low[i];
-        } else {
-            right_min_low[i] = right_min_low[i + 1].min(low[i]);
-        }
-    }
-
-    // Pass 5: Combine to compute %K
-    for j in 0..(n - k_lookback) {
-        let start = j;
-        let end = j + k_lookback;
-
-        let highest_high = right_max_high[start].max(left_max_high[end]);
-        let lowest_low = right_min_low[start].min(left_min_low[end]);
-
-        let range = highest_high - lowest_low;
-        k_out[end] = if range > 0.0 {
-            100.0 * (close[end] - lowest_low) / range
-        } else {
-            50.0 // Flat range
-        };
-    }
-
-    // Pass 6: Compute %D as SMA of %K
-    if n >= d_start + 1 {
-        // Initialize first %D window
-        let mut sum = 0.0_f32;
-        for i in k_lookback..(k_lookback + d_period) {
-            sum += k_out[i];
-        }
-        d_out[d_start] = sum / d_period as f32;
-
-        // Rolling SMA for remaining %D values
-        for i in (d_start + 1)..n {
-            let old_idx = i - d_period;
-            sum = sum - k_out[old_idx] + k_out[i];
-            d_out[i] = sum / d_period as f32;
-        }
-    }
-
-    Ok(())
+    compute_stochastic_fast_vhgw(high, low, close, k_period, d_period, k_out, d_out)
 }
 
 /// Computes Full/Slow Stochastic %K and %D using Van Herk/Gil-Werman (VHGW) algorithm.
@@ -1558,6 +1489,33 @@ pub fn compute_stochastic_full_vhgw_f64(
     k_out: &mut [f64],
     d_out: &mut [f64],
 ) -> Result<()> {
+    compute_stochastic_full_vhgw(
+        high,
+        low,
+        close,
+        k_period,
+        slow_k_period,
+        d_period,
+        k_out,
+        d_out,
+    )
+}
+
+/// Generic Full Stochastic VHGW kernel computing natively in `T` (f32/f64).
+///
+/// # Errors
+///
+/// Returns `Error::InsufficientData` when `close` is shorter than `k_period`.
+pub(crate) fn compute_stochastic_full_vhgw<T: SeriesElement>(
+    high: &[T],
+    low: &[T],
+    close: &[T],
+    k_period: usize,
+    slow_k_period: usize,
+    d_period: usize,
+    k_out: &mut [T],
+    d_out: &mut [T],
+) -> Result<()> {
     let n = close.len();
     if n < k_period {
         return Err(Error::InsufficientData {
@@ -1572,12 +1530,12 @@ pub fn compute_stochastic_full_vhgw_f64(
     let d_start = slow_k_start + d_period - 1;
 
     // Fill lookback NaNs
-    k_out[..slow_k_start.min(n)].fill(f64::NAN);
-    d_out[..d_start.min(n)].fill(f64::NAN);
+    k_out[..slow_k_start.min(n)].fill(T::nan());
+    d_out[..d_start.min(n)].fill(T::nan());
 
     // Pass 1 & 2: VHGW on high (forward + backward for rolling max)
-    let mut left_max_high = vec![f64::NEG_INFINITY; n];
-    let mut right_max_high = vec![f64::NEG_INFINITY; n];
+    let mut left_max_high = vec![T::neg_infinity(); n];
+    let mut right_max_high = vec![T::neg_infinity(); n];
 
     // Forward scan for max_high
     left_max_high[0] = high[0];
@@ -1600,8 +1558,8 @@ pub fn compute_stochastic_full_vhgw_f64(
     }
 
     // Pass 3 & 4: VHGW on low (forward + backward for rolling min)
-    let mut left_min_low = vec![f64::INFINITY; n];
-    let mut right_min_low = vec![f64::INFINITY; n];
+    let mut left_min_low = vec![T::infinity(); n];
+    let mut right_min_low = vec![T::infinity(); n];
 
     // Forward scan for min_low
     left_min_low[0] = low[0];
@@ -1624,7 +1582,7 @@ pub fn compute_stochastic_full_vhgw_f64(
     }
 
     // Pass 5: Combine to compute raw %K (not output yet, need to smooth)
-    let mut raw_k = vec![0.0_f64; n];
+    let mut raw_k = vec![T::zero(); n];
     for j in 0..(n - k_lookback) {
         let start = j;
         let end = j + k_lookback;
@@ -1633,44 +1591,46 @@ pub fn compute_stochastic_full_vhgw_f64(
         let lowest_low = right_min_low[start].min(left_min_low[end]);
 
         let range = highest_high - lowest_low;
-        raw_k[end] = if range > 0.0 {
-            100.0 * (close[end] - lowest_low) / range
+        raw_k[end] = if range > T::zero() {
+            T::hundred() * (close[end] - lowest_low) / range
         } else {
-            50.0 // Flat range
+            T::fifty() // Flat range
         };
     }
 
     // Pass 6: Compute slow %K as SMA of raw %K
     if n >= slow_k_start + 1 {
         // Initialize first slow %K window
-        let mut sum = 0.0;
+        let mut sum = T::zero();
         for i in k_lookback..(k_lookback + slow_k_period) {
-            sum += raw_k[i];
+            sum = sum + raw_k[i];
         }
-        k_out[slow_k_start] = sum / slow_k_period as f64;
+        let slow_k_period_t = T::from_usize(slow_k_period)?;
+        k_out[slow_k_start] = sum / slow_k_period_t;
 
         // Rolling SMA for remaining slow %K values
         for i in (slow_k_start + 1)..n {
             let old_idx = i - slow_k_period;
             sum = sum - raw_k[old_idx] + raw_k[i];
-            k_out[i] = sum / slow_k_period as f64;
+            k_out[i] = sum / slow_k_period_t;
         }
     }
 
     // Pass 7: Compute %D as SMA of slow %K
     if n >= d_start + 1 {
         // Initialize first %D window
-        let mut sum = 0.0;
+        let mut sum = T::zero();
         for i in slow_k_start..(slow_k_start + d_period) {
-            sum += k_out[i];
+            sum = sum + k_out[i];
         }
-        d_out[d_start] = sum / d_period as f64;
+        let d_period_t = T::from_usize(d_period)?;
+        d_out[d_start] = sum / d_period_t;
 
         // Rolling SMA for remaining %D values
         for i in (d_start + 1)..n {
             let old_idx = i - d_period;
             sum = sum - k_out[old_idx] + k_out[i];
-            d_out[i] = sum / d_period as f64;
+            d_out[i] = sum / d_period_t;
         }
     }
 
@@ -1690,115 +1650,16 @@ pub fn compute_stochastic_full_vhgw_f32(
     k_out: &mut [f32],
     d_out: &mut [f32],
 ) -> Result<()> {
-    let n = close.len();
-    if n < k_period {
-        return Err(Error::InsufficientData {
-            indicator: "stochastic_full_vhgw",
-            required: k_period,
-            actual: n,
-        });
-    }
-
-    let k_lookback = k_period - 1;
-    let slow_k_start = k_lookback + slow_k_period - 1;
-    let d_start = slow_k_start + d_period - 1;
-
-    // Fill lookback NaNs
-    k_out[..slow_k_start.min(n)].fill(f32::NAN);
-    d_out[..d_start.min(n)].fill(f32::NAN);
-
-    // Pass 1 & 2: VHGW on high (forward + backward for rolling max)
-    let mut left_max_high = vec![f32::NEG_INFINITY; n];
-    let mut right_max_high = vec![f32::NEG_INFINITY; n];
-
-    left_max_high[0] = high[0];
-    for i in 1..n {
-        if i % k_period == 0 {
-            left_max_high[i] = high[i];
-        } else {
-            left_max_high[i] = left_max_high[i - 1].max(high[i]);
-        }
-    }
-
-    right_max_high[n - 1] = high[n - 1];
-    for i in (0..n - 1).rev() {
-        if (i + 1) % k_period == 0 {
-            right_max_high[i] = high[i];
-        } else {
-            right_max_high[i] = right_max_high[i + 1].max(high[i]);
-        }
-    }
-
-    // Pass 3 & 4: VHGW on low (forward + backward for rolling min)
-    let mut left_min_low = vec![f32::INFINITY; n];
-    let mut right_min_low = vec![f32::INFINITY; n];
-
-    left_min_low[0] = low[0];
-    for i in 1..n {
-        if i % k_period == 0 {
-            left_min_low[i] = low[i];
-        } else {
-            left_min_low[i] = left_min_low[i - 1].min(low[i]);
-        }
-    }
-
-    right_min_low[n - 1] = low[n - 1];
-    for i in (0..n - 1).rev() {
-        if (i + 1) % k_period == 0 {
-            right_min_low[i] = low[i];
-        } else {
-            right_min_low[i] = right_min_low[i + 1].min(low[i]);
-        }
-    }
-
-    // Pass 5: Combine to compute raw %K
-    let mut raw_k = vec![0.0_f32; n];
-    for j in 0..(n - k_lookback) {
-        let start = j;
-        let end = j + k_lookback;
-
-        let highest_high = right_max_high[start].max(left_max_high[end]);
-        let lowest_low = right_min_low[start].min(left_min_low[end]);
-
-        let range = highest_high - lowest_low;
-        raw_k[end] = if range > 0.0 {
-            100.0 * (close[end] - lowest_low) / range
-        } else {
-            50.0
-        };
-    }
-
-    // Pass 6: Compute slow %K as SMA of raw %K
-    if n >= slow_k_start + 1 {
-        let mut sum = 0.0_f32;
-        for i in k_lookback..(k_lookback + slow_k_period) {
-            sum += raw_k[i];
-        }
-        k_out[slow_k_start] = sum / slow_k_period as f32;
-
-        for i in (slow_k_start + 1)..n {
-            let old_idx = i - slow_k_period;
-            sum = sum - raw_k[old_idx] + raw_k[i];
-            k_out[i] = sum / slow_k_period as f32;
-        }
-    }
-
-    // Pass 7: Compute %D as SMA of slow %K
-    if n >= d_start + 1 {
-        let mut sum = 0.0_f32;
-        for i in slow_k_start..(slow_k_start + d_period) {
-            sum += k_out[i];
-        }
-        d_out[d_start] = sum / d_period as f32;
-
-        for i in (d_start + 1)..n {
-            let old_idx = i - d_period;
-            sum = sum - k_out[old_idx] + k_out[i];
-            d_out[i] = sum / d_period as f32;
-        }
-    }
-
-    Ok(())
+    compute_stochastic_full_vhgw(
+        high,
+        low,
+        close,
+        k_period,
+        slow_k_period,
+        d_period,
+        k_out,
+        d_out,
+    )
 }
 
 #[cfg(test)]

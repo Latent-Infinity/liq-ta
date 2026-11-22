@@ -44,18 +44,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed (2026-11-21: Rust standards v3.6 compliance)
 
-- Removed all `unsafe` outside `crate::cast`: `TypeId` specializations use
-  type-checked `slice_as`/`slice_as_mut`/`vec_into`, and unchecked indexing became
-  safe indexing on narrowed slices. Miri runs the cast tests in CI.
+- Removed all `unsafe` (`unsafe_code = "forbid"` workspace-wide). The f32/f64 fast
+  kernels are generic over the element type and convert with `as`-equivalent
+  casts, so their results are bit-identical; unchecked indexing became safe
+  indexing. Identical f32/f64 kernel pairs were merged.
 - Added the workspace lint baseline (`undocumented_unsafe_blocks`,
   `allow_attributes`, `allow_attributes_without_reason` denied). Every remaining
   suppression is `#[expect(lint, reason = "...")]`; no-op suppressions were removed.
 - Release profile keeps unwinding, so the Python extension raises instead of
   aborting on a Rust panic. It also keeps symbols (`strip = "debuginfo"`) and
   states `overflow-checks` explicitly.
-- CI adds a 90% line-coverage gate, release-mode tests, workspace-wide Clippy, a
-  Miri job, and non-blocking stable/beta jobs. The MSRV job checks the Python crate
-  without linking libpython.
+- CI adds a 90% line-coverage gate, release-mode tests, workspace-wide Clippy, and
+  non-blocking stable/beta jobs. The MSRV job checks the Python crate without
+  linking libpython.
 - See `docs/audit/rust-standards-v3.6-audit-2026-11-21.md`.
 
 ### Fixed

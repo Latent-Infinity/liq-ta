@@ -447,27 +447,16 @@ pub fn stochastic_fast_into<T: SeriesElement>(
         compute_sma_of_series(&output.k, d_period, k_period - 1, &mut output.d)?;
     } else {
         // Fast path: VHGW algorithm (always, no threshold)
-        // f64 specialization: zero-overhead VHGW
-        if let (Some(high_f64), Some(low_f64), Some(close_f64)) = (
-            cast::slice_as::<T, f64>(high),
-            cast::slice_as::<T, f64>(low),
-            cast::slice_as::<T, f64>(close),
-        ) {
-            let k_f64 = cast::slice_as_mut::<T, f64>(&mut output.k).expect("T is f64");
-            let d_f64 = cast::slice_as_mut::<T, f64>(&mut output.d).expect("T is f64");
-            crate::kernels::compute_stochastic_fast_vhgw_f64(
-                high_f64, low_f64, close_f64, k_period, d_period, k_f64, d_f64,
-            )?;
-        } else if let (Some(high_f32), Some(low_f32), Some(close_f32)) = (
-            cast::slice_as::<T, f32>(high),
-            cast::slice_as::<T, f32>(low),
-            cast::slice_as::<T, f32>(close),
-        ) {
-            // f32 specialization: zero-overhead VHGW
-            let k_f32 = cast::slice_as_mut::<T, f32>(&mut output.k).expect("T is f32");
-            let d_f32 = cast::slice_as_mut::<T, f32>(&mut output.d).expect("T is f32");
-            crate::kernels::compute_stochastic_fast_vhgw_f32(
-                high_f32, low_f32, close_f32, k_period, d_period, k_f32, d_f32,
+        // f64/f32 specialization: zero-overhead VHGW
+        if cast::same_type::<T, f64>() || cast::same_type::<T, f32>() {
+            crate::kernels::rolling_extrema::compute_stochastic_fast_vhgw(
+                high,
+                low,
+                close,
+                k_period,
+                d_period,
+                &mut output.k,
+                &mut output.d,
             )?;
         } else {
             // Generic fallback: streaming deque for non-f32/f64 types
@@ -711,41 +700,17 @@ pub fn stochastic_full_into<T: SeriesElement>(
         compute_sma_of_series(&output.k, d_period, k_start_idx, &mut output.d)?;
     } else {
         // Fast path: VHGW algorithm (always, no threshold)
-        // f64 specialization: zero-overhead VHGW
-        if let (Some(high_f64), Some(low_f64), Some(close_f64)) = (
-            cast::slice_as::<T, f64>(high),
-            cast::slice_as::<T, f64>(low),
-            cast::slice_as::<T, f64>(close),
-        ) {
-            let k_f64 = cast::slice_as_mut::<T, f64>(&mut output.k[..n]).expect("T is f64");
-            let d_f64 = cast::slice_as_mut::<T, f64>(&mut output.d[..n]).expect("T is f64");
-            crate::kernels::compute_stochastic_full_vhgw_f64(
-                high_f64,
-                low_f64,
-                close_f64,
+        // f64/f32 specialization: zero-overhead VHGW
+        if cast::same_type::<T, f64>() || cast::same_type::<T, f32>() {
+            crate::kernels::rolling_extrema::compute_stochastic_full_vhgw(
+                high,
+                low,
+                close,
                 k_period,
                 slow_k_period,
                 d_period,
-                k_f64,
-                d_f64,
-            )?;
-        } else if let (Some(high_f32), Some(low_f32), Some(close_f32)) = (
-            cast::slice_as::<T, f32>(high),
-            cast::slice_as::<T, f32>(low),
-            cast::slice_as::<T, f32>(close),
-        ) {
-            // f32 specialization: zero-overhead VHGW
-            let k_f32 = cast::slice_as_mut::<T, f32>(&mut output.k[..n]).expect("T is f32");
-            let d_f32 = cast::slice_as_mut::<T, f32>(&mut output.d[..n]).expect("T is f32");
-            crate::kernels::compute_stochastic_full_vhgw_f32(
-                high_f32,
-                low_f32,
-                close_f32,
-                k_period,
-                slow_k_period,
-                d_period,
-                k_f32,
-                d_f32,
+                &mut output.k[..n],
+                &mut output.d[..n],
             )?;
         } else {
             // Generic fallback: streaming deque for non-f32/f64 types

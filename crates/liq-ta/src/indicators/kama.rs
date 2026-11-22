@@ -136,18 +136,9 @@ pub fn kama_full_into<T: SeriesElement>(
         });
     }
 
-    // Type specialization for f64/f32
-    if let (Some(d), Some(out)) = (
-        cast::slice_as::<T, f64>(data),
-        cast::slice_as_mut::<T, f64>(output),
-    ) {
-        return kama_full_into_f64(d, period, fast_period, slow_period, out);
-    }
-    if let (Some(d), Some(out)) = (
-        cast::slice_as::<T, f32>(data),
-        cast::slice_as_mut::<T, f32>(output),
-    ) {
-        return kama_full_into_f32(d, period, fast_period, slow_period, out);
+    // f64 and f32 share the f64 kernel (exact widening for f32)
+    if cast::same_type::<T, f64>() || cast::same_type::<T, f32>() {
+        return kama_full_into_wide(data, period, fast_period, slow_period, output);
     }
 
     // Generic fallback
@@ -219,160 +210,20 @@ pub fn kama_full_into<T: SeriesElement>(
     Ok(())
 }
 
-/// f64-specialized KAMA implementation - eliminates trait overhead
+/// f64/f32 KAMA kernel: reads widen to f64, all arithmetic is f64
 #[inline]
-fn kama_full_into_f64(
-    data: &[f64],
+fn kama_full_into_wide<T: SeriesElement>(
+    data: &[T],
     period: usize,
     fast_period: usize,
     slow_period: usize,
-    output: &mut [f64],
+    output: &mut [T],
 ) -> Result<()> {
     let n = data.len();
     let lookback = period - 1;
 
     // Fill lookback period with NaN
-    output[..lookback].fill(f64::NAN);
-
-    // Calculate smoothing constants (no trait overhead)
-    let fast_sc = 2.0 / (fast_period + 1) as f64;
-    let slow_sc = 2.0 / (slow_period + 1) as f64;
-    let sc_diff = fast_sc - slow_sc;
-
-    // Initialize KAMA
-    let mut kama = data[lookback];
-    output[lookback] = kama;
-
-    if lookback + 1 >= n {
-        return Ok(());
-    }
-
-    // Initialize rolling volatility for first window (compute on-the-fly)
-    let mut volatility = 0.0_f64;
-    let start = lookback + 2 - period;
-    for j in start..=(lookback + 1) {
-        volatility += (data[j] - data[j - 1]).abs();
-    }
-
-    // First iteration (no volatility update needed)
-    let i = lookback + 1;
-    let change = (data[i] - data[i - period]).abs();
-    let er = if volatility > 0.0 {
-        change / volatility
-    } else {
-        0.0
-    };
-    let sc_raw = sc_diff.mul_add(er, slow_sc);
-    let sc = sc_raw * sc_raw;
-    kama = (data[i] - kama).mul_add(sc, kama);
-    output[i] = kama;
-
-    // Steady-state loop with 4x unrolling
-    let main_loop_end = lookback + 2 + ((n - (lookback + 2)) / 4) * 4;
-
-    let mut i = lookback + 2;
-    while i < main_loop_end {
-        // Unroll 4 iterations - process 4 samples per loop iteration
-        // This improves ILP, reduces branch overhead, and helps prefetching
-
-        // Iteration 1
-        let old_change_0 = (data[i - period] - data[i - period - 1]).abs();
-        let new_change_0 = (data[i] - data[i - 1]).abs();
-        volatility = volatility - old_change_0 + new_change_0;
-        let change_0 = (data[i] - data[i - period]).abs();
-        let er_0 = if volatility > 0.0 {
-            change_0 / volatility
-        } else {
-            0.0
-        };
-        let sc_raw_0 = sc_diff.mul_add(er_0, slow_sc);
-        let sc_0 = sc_raw_0 * sc_raw_0;
-        kama = (data[i] - kama).mul_add(sc_0, kama);
-        output[i] = kama;
-
-        // Iteration 2
-        let old_change_1 = (data[i + 1 - period] - data[i + 1 - period - 1]).abs();
-        let new_change_1 = (data[i + 1] - data[i]).abs();
-        volatility = volatility - old_change_1 + new_change_1;
-        let change_1 = (data[i + 1] - data[i + 1 - period]).abs();
-        let er_1 = if volatility > 0.0 {
-            change_1 / volatility
-        } else {
-            0.0
-        };
-        let sc_raw_1 = sc_diff.mul_add(er_1, slow_sc);
-        let sc_1 = sc_raw_1 * sc_raw_1;
-        kama = (data[i + 1] - kama).mul_add(sc_1, kama);
-        output[i + 1] = kama;
-
-        // Iteration 3
-        let old_change_2 = (data[i + 2 - period] - data[i + 2 - period - 1]).abs();
-        let new_change_2 = (data[i + 2] - data[i + 1]).abs();
-        volatility = volatility - old_change_2 + new_change_2;
-        let change_2 = (data[i + 2] - data[i + 2 - period]).abs();
-        let er_2 = if volatility > 0.0 {
-            change_2 / volatility
-        } else {
-            0.0
-        };
-        let sc_raw_2 = sc_diff.mul_add(er_2, slow_sc);
-        let sc_2 = sc_raw_2 * sc_raw_2;
-        kama = (data[i + 2] - kama).mul_add(sc_2, kama);
-        output[i + 2] = kama;
-
-        // Iteration 4
-        let old_change_3 = (data[i + 3 - period] - data[i + 3 - period - 1]).abs();
-        let new_change_3 = (data[i + 3] - data[i + 2]).abs();
-        volatility = volatility - old_change_3 + new_change_3;
-        let change_3 = (data[i + 3] - data[i + 3 - period]).abs();
-        let er_3 = if volatility > 0.0 {
-            change_3 / volatility
-        } else {
-            0.0
-        };
-        let sc_raw_3 = sc_diff.mul_add(er_3, slow_sc);
-        let sc_3 = sc_raw_3 * sc_raw_3;
-        kama = (data[i + 3] - kama).mul_add(sc_3, kama);
-        output[i + 3] = kama;
-
-        i += 4;
-    }
-
-    // Handle remaining iterations (0-3 samples)
-    while i < n {
-        let old_change = (data[i - period] - data[i - period - 1]).abs();
-        let new_change = (data[i] - data[i - 1]).abs();
-        volatility = volatility - old_change + new_change;
-        let change = (data[i] - data[i - period]).abs();
-        let er = if volatility > 0.0 {
-            change / volatility
-        } else {
-            0.0
-        };
-        let sc_raw = sc_diff.mul_add(er, slow_sc);
-        let sc = sc_raw * sc_raw;
-        kama = (data[i] - kama).mul_add(sc, kama);
-        output[i] = kama;
-        i += 1;
-    }
-
-    Ok(())
-}
-
-/// f32-specialized KAMA implementation - uses f64 accumulators for precision
-#[inline]
-fn kama_full_into_f32(
-    data: &[f32],
-    period: usize,
-    fast_period: usize,
-    slow_period: usize,
-    output: &mut [f32],
-) -> Result<()> {
-    let n = data.len();
-    let lookback = period - 1;
-
-    // Fill lookback period with NaN
-    output[..lookback].fill(f32::NAN);
+    output[..lookback].fill(T::nan());
 
     // Calculate smoothing constants using f64 for precision
     let fast_sc = 2.0 / (fast_period + 1) as f64;
@@ -380,8 +231,8 @@ fn kama_full_into_f32(
     let sc_diff = fast_sc - slow_sc;
 
     // Initialize KAMA
-    let mut kama = data[lookback] as f64;
-    output[lookback] = kama as f32;
+    let mut kama = cast::to_f64(data[lookback]);
+    output[lookback] = cast::from_f64(kama);
 
     if lookback + 1 >= n {
         return Ok(());
@@ -391,12 +242,12 @@ fn kama_full_into_f32(
     let mut volatility = 0.0_f64;
     let start = lookback + 2 - period;
     for j in start..=(lookback + 1) {
-        volatility += (data[j] as f64 - data[j - 1] as f64).abs();
+        volatility += (cast::to_f64(data[j]) - cast::to_f64(data[j - 1])).abs();
     }
 
     // First iteration (no volatility update needed)
     let i = lookback + 1;
-    let change = (data[i] as f64 - data[i - period] as f64).abs();
+    let change = (cast::to_f64(data[i]) - cast::to_f64(data[i - period])).abs();
     let er = if volatility > 0.0 {
         change / volatility
     } else {
@@ -404,8 +255,8 @@ fn kama_full_into_f32(
     };
     let sc_raw = sc_diff.mul_add(er, slow_sc);
     let sc = sc_raw * sc_raw;
-    kama = (data[i] as f64 - kama).mul_add(sc, kama);
-    output[i] = kama as f32;
+    kama = (cast::to_f64(data[i]) - kama).mul_add(sc, kama);
+    output[i] = cast::from_f64(kama);
 
     // Steady-state loop with 4x unrolling
     let main_loop_end = lookback + 2 + ((n - (lookback + 2)) / 4) * 4;
@@ -416,10 +267,11 @@ fn kama_full_into_f32(
         // This improves ILP, reduces branch overhead, and helps prefetching
 
         // Iteration 1
-        let old_change_0 = (data[i - period] as f64 - data[i - period - 1] as f64).abs();
-        let new_change_0 = (data[i] as f64 - data[i - 1] as f64).abs();
+        let old_change_0 =
+            (cast::to_f64(data[i - period]) - cast::to_f64(data[i - period - 1])).abs();
+        let new_change_0 = (cast::to_f64(data[i]) - cast::to_f64(data[i - 1])).abs();
         volatility = volatility - old_change_0 + new_change_0;
-        let change_0 = (data[i] as f64 - data[i - period] as f64).abs();
+        let change_0 = (cast::to_f64(data[i]) - cast::to_f64(data[i - period])).abs();
         let er_0 = if volatility > 0.0 {
             change_0 / volatility
         } else {
@@ -427,14 +279,15 @@ fn kama_full_into_f32(
         };
         let sc_raw_0 = sc_diff.mul_add(er_0, slow_sc);
         let sc_0 = sc_raw_0 * sc_raw_0;
-        kama = (data[i] as f64 - kama).mul_add(sc_0, kama);
-        output[i] = kama as f32;
+        kama = (cast::to_f64(data[i]) - kama).mul_add(sc_0, kama);
+        output[i] = cast::from_f64(kama);
 
         // Iteration 2
-        let old_change_1 = (data[i + 1 - period] as f64 - data[i + 1 - period - 1] as f64).abs();
-        let new_change_1 = (data[i + 1] as f64 - data[i] as f64).abs();
+        let old_change_1 =
+            (cast::to_f64(data[i + 1 - period]) - cast::to_f64(data[i + 1 - period - 1])).abs();
+        let new_change_1 = (cast::to_f64(data[i + 1]) - cast::to_f64(data[i])).abs();
         volatility = volatility - old_change_1 + new_change_1;
-        let change_1 = (data[i + 1] as f64 - data[i + 1 - period] as f64).abs();
+        let change_1 = (cast::to_f64(data[i + 1]) - cast::to_f64(data[i + 1 - period])).abs();
         let er_1 = if volatility > 0.0 {
             change_1 / volatility
         } else {
@@ -442,14 +295,15 @@ fn kama_full_into_f32(
         };
         let sc_raw_1 = sc_diff.mul_add(er_1, slow_sc);
         let sc_1 = sc_raw_1 * sc_raw_1;
-        kama = (data[i + 1] as f64 - kama).mul_add(sc_1, kama);
-        output[i + 1] = kama as f32;
+        kama = (cast::to_f64(data[i + 1]) - kama).mul_add(sc_1, kama);
+        output[i + 1] = cast::from_f64(kama);
 
         // Iteration 3
-        let old_change_2 = (data[i + 2 - period] as f64 - data[i + 2 - period - 1] as f64).abs();
-        let new_change_2 = (data[i + 2] as f64 - data[i + 1] as f64).abs();
+        let old_change_2 =
+            (cast::to_f64(data[i + 2 - period]) - cast::to_f64(data[i + 2 - period - 1])).abs();
+        let new_change_2 = (cast::to_f64(data[i + 2]) - cast::to_f64(data[i + 1])).abs();
         volatility = volatility - old_change_2 + new_change_2;
-        let change_2 = (data[i + 2] as f64 - data[i + 2 - period] as f64).abs();
+        let change_2 = (cast::to_f64(data[i + 2]) - cast::to_f64(data[i + 2 - period])).abs();
         let er_2 = if volatility > 0.0 {
             change_2 / volatility
         } else {
@@ -457,14 +311,15 @@ fn kama_full_into_f32(
         };
         let sc_raw_2 = sc_diff.mul_add(er_2, slow_sc);
         let sc_2 = sc_raw_2 * sc_raw_2;
-        kama = (data[i + 2] as f64 - kama).mul_add(sc_2, kama);
-        output[i + 2] = kama as f32;
+        kama = (cast::to_f64(data[i + 2]) - kama).mul_add(sc_2, kama);
+        output[i + 2] = cast::from_f64(kama);
 
         // Iteration 4
-        let old_change_3 = (data[i + 3 - period] as f64 - data[i + 3 - period - 1] as f64).abs();
-        let new_change_3 = (data[i + 3] as f64 - data[i + 2] as f64).abs();
+        let old_change_3 =
+            (cast::to_f64(data[i + 3 - period]) - cast::to_f64(data[i + 3 - period - 1])).abs();
+        let new_change_3 = (cast::to_f64(data[i + 3]) - cast::to_f64(data[i + 2])).abs();
         volatility = volatility - old_change_3 + new_change_3;
-        let change_3 = (data[i + 3] as f64 - data[i + 3 - period] as f64).abs();
+        let change_3 = (cast::to_f64(data[i + 3]) - cast::to_f64(data[i + 3 - period])).abs();
         let er_3 = if volatility > 0.0 {
             change_3 / volatility
         } else {
@@ -472,18 +327,19 @@ fn kama_full_into_f32(
         };
         let sc_raw_3 = sc_diff.mul_add(er_3, slow_sc);
         let sc_3 = sc_raw_3 * sc_raw_3;
-        kama = (data[i + 3] as f64 - kama).mul_add(sc_3, kama);
-        output[i + 3] = kama as f32;
+        kama = (cast::to_f64(data[i + 3]) - kama).mul_add(sc_3, kama);
+        output[i + 3] = cast::from_f64(kama);
 
         i += 4;
     }
 
     // Handle remaining iterations (0-3 samples)
     while i < n {
-        let old_change = (data[i - period] as f64 - data[i - period - 1] as f64).abs();
-        let new_change = (data[i] as f64 - data[i - 1] as f64).abs();
+        let old_change =
+            (cast::to_f64(data[i - period]) - cast::to_f64(data[i - period - 1])).abs();
+        let new_change = (cast::to_f64(data[i]) - cast::to_f64(data[i - 1])).abs();
         volatility = volatility - old_change + new_change;
-        let change = (data[i] as f64 - data[i - period] as f64).abs();
+        let change = (cast::to_f64(data[i]) - cast::to_f64(data[i - period])).abs();
         let er = if volatility > 0.0 {
             change / volatility
         } else {
@@ -491,8 +347,8 @@ fn kama_full_into_f32(
         };
         let sc_raw = sc_diff.mul_add(er, slow_sc);
         let sc = sc_raw * sc_raw;
-        kama = (data[i] as f64 - kama).mul_add(sc, kama);
-        output[i] = kama as f32;
+        kama = (cast::to_f64(data[i]) - kama).mul_add(sc, kama);
+        output[i] = cast::from_f64(kama);
         i += 1;
     }
 

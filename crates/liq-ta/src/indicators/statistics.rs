@@ -38,13 +38,14 @@ fn use_f64_precision<T: 'static>() -> bool {
 }
 
 #[inline]
-fn clamp_negative_variance_f64(output: &mut [f64], lookback: usize) {
+fn clamp_negative_variance_wide<T: SeriesElement>(output: &mut [T], lookback: usize) {
     for value in &mut output[lookback..] {
-        if value.is_finite() {
-            if value.abs() <= 1e-9 {
-                *value = 0.0;
-            } else if *value < 0.0 {
-                *value = 0.0;
+        let v = cast::to_f64(*value);
+        if v.is_finite() {
+            if v.abs() <= 1e-9 {
+                *value = cast::from_f64(0.0);
+            } else if v < 0.0 {
+                *value = cast::from_f64(0.0);
             }
         }
     }
@@ -80,15 +81,15 @@ pub const fn var_min_len(period: usize) -> usize {
 
 /// f64-specialized TA-Lib algorithm (zero trait overhead).
 #[inline]
-fn var_talib_f64(data: &[f64], period: usize, output: &mut [f64]) -> Result<()> {
+fn var_talib_wide<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -> Result<()> {
     let n = data.len();
     let lookback = period - 1;
 
     // Fill lookback with NaN
-    output[..lookback].fill(f64::NAN);
+    output[..lookback].fill(T::nan());
 
     if period == 1 {
-        output[..n].fill(0.0);
+        output[..n].fill(cast::from_f64(0.0));
         return Ok(());
     }
 
@@ -104,7 +105,7 @@ fn var_talib_f64(data: &[f64], period: usize, output: &mut [f64]) -> Result<()> 
     // Accumulate initial window (scalar - matches TA-Lib structure)
     let mut i = 0;
     while i < lookback {
-        let temp = data[i];
+        let temp = cast::to_f64(data[i]);
         sum_x += temp;
         sum_x2 += temp * temp;
         i += 1;
@@ -117,24 +118,24 @@ fn var_talib_f64(data: &[f64], period: usize, output: &mut [f64]) -> Result<()> 
     // Unrolled loop: process 2 iterations at once
     while i < unroll_limit {
         // Iteration 1
-        let temp = data[i];
+        let temp = cast::to_f64(data[i]);
         sum_x += temp;
         sum_x2 += temp * temp;
         let sum_x_sq = sum_x * sum_x;
-        output[i] = (sum_x2 * period_f64 - sum_x_sq) * inv_period_sq;
-        let old = data[trailing_idx];
+        output[i] = cast::from_f64((sum_x2 * period_f64 - sum_x_sq) * inv_period_sq);
+        let old = cast::to_f64(data[trailing_idx]);
         sum_x -= old;
         sum_x2 -= old * old;
         i += 1;
         trailing_idx += 1;
 
         // Iteration 2
-        let temp = data[i];
+        let temp = cast::to_f64(data[i]);
         sum_x += temp;
         sum_x2 += temp * temp;
         let sum_x_sq = sum_x * sum_x;
-        output[i] = (sum_x2 * period_f64 - sum_x_sq) * inv_period_sq;
-        let old = data[trailing_idx];
+        output[i] = cast::from_f64((sum_x2 * period_f64 - sum_x_sq) * inv_period_sq);
+        let old = cast::to_f64(data[trailing_idx]);
         sum_x -= old;
         sum_x2 -= old * old;
         i += 1;
@@ -143,12 +144,12 @@ fn var_talib_f64(data: &[f64], period: usize, output: &mut [f64]) -> Result<()> 
 
     // Handle remainder
     while i < n {
-        let temp = data[i];
+        let temp = cast::to_f64(data[i]);
         sum_x += temp;
         sum_x2 += temp * temp;
         let sum_x_sq = sum_x * sum_x;
-        output[i] = (sum_x2 * period_f64 - sum_x_sq) * inv_period_sq;
-        let old = data[trailing_idx];
+        output[i] = cast::from_f64((sum_x2 * period_f64 - sum_x_sq) * inv_period_sq);
+        let old = cast::to_f64(data[trailing_idx]);
         sum_x -= old;
         sum_x2 -= old * old;
         i += 1;
@@ -431,14 +432,9 @@ pub fn var_into<T: SeriesElement + 'static>(
 
     // f64 specialization: zero-overhead TA-Lib algorithm
     // Skip NaN pre-scan to match TA-Lib performance (NaN naturally propagates through variance formula)
-    use std::any::TypeId;
-    if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let data_f64: &[f64] =
-            cast::slice_as(data).expect("TypeId check proved T matches the element type");
-        let output_f64: &mut [f64] =
-            cast::slice_as_mut(output).expect("TypeId check proved T matches the element type");
-        var_talib_f64(data_f64, period, output_f64)?;
-        clamp_negative_variance_f64(output_f64, lookback);
+    if cast::same_type::<T, f64>() {
+        var_talib_wide(data, period, output)?;
+        clamp_negative_variance_wide(output, lookback);
         return Ok(());
     }
 
@@ -661,20 +657,11 @@ fn var_f64_precision_slow<T: SeriesElement>(
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 pub fn var<T: SeriesElement + 'static>(data: &[T], period: usize) -> Result<Vec<T>> {
-    use std::any::TypeId;
-
-    if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let data_f64: &[f64] =
-            cast::slice_as(data).expect("TypeId check proved T matches the element type");
-        let mut output: Vec<f64> = vec![0.0; data.len()];
-        var_into(data_f64, period, &mut output)?;
-        Ok(cast::vec_into(output).expect("TypeId check proved T matches the output element type"))
-    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let data_f32: &[f32] =
-            cast::slice_as(data).expect("TypeId check proved T matches the element type");
-        let mut output: Vec<f32> = vec![0.0; data.len()];
-        var_into(data_f32, period, &mut output)?;
-        Ok(cast::vec_into(output).expect("TypeId check proved T matches the output element type"))
+    if cast::same_type::<T, f64>() || cast::same_type::<T, f32>() {
+        // Zeroed allocation is calloc-backed for f32/f64; var_into writes every index.
+        let mut output = vec![T::zero(); data.len()];
+        var_into(data, period, &mut output)?;
+        Ok(output)
     } else {
         // Generic fallback: safe initialization
         let mut output = vec![T::nan(); data.len()];
@@ -747,20 +734,11 @@ pub fn stddev_into<T: SeriesElement + 'static>(
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 pub fn stddev<T: SeriesElement + 'static>(data: &[T], period: usize) -> Result<Vec<T>> {
-    use std::any::TypeId;
-
-    if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let data_f64: &[f64] =
-            cast::slice_as(data).expect("TypeId check proved T matches the element type");
-        let mut output: Vec<f64> = vec![0.0; data.len()];
-        stddev_into(data_f64, period, &mut output)?;
-        Ok(cast::vec_into(output).expect("TypeId check proved T matches the output element type"))
-    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let data_f32: &[f32] =
-            cast::slice_as(data).expect("TypeId check proved T matches the element type");
-        let mut output: Vec<f32> = vec![0.0; data.len()];
-        stddev_into(data_f32, period, &mut output)?;
-        Ok(cast::vec_into(output).expect("TypeId check proved T matches the output element type"))
+    if cast::same_type::<T, f64>() || cast::same_type::<T, f32>() {
+        // Zeroed allocation is calloc-backed for f32/f64; stddev_into writes every index.
+        let mut output = vec![T::zero(); data.len()];
+        stddev_into(data, period, &mut output)?;
+        Ok(output)
     } else {
         // Generic fallback: safe initialization
         let mut output = vec![T::nan(); data.len()];
@@ -911,20 +889,11 @@ pub fn skew_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) 
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 pub fn skew<T: SeriesElement + 'static>(data: &[T], period: usize) -> Result<Vec<T>> {
-    use std::any::TypeId;
-
-    if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let data_f64: &[f64] =
-            cast::slice_as(data).expect("TypeId check proved T matches the element type");
-        let mut output: Vec<f64> = vec![0.0; data.len()];
-        skew_into(data_f64, period, &mut output)?;
-        Ok(cast::vec_into(output).expect("TypeId check proved T matches the output element type"))
-    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let data_f32: &[f32] =
-            cast::slice_as(data).expect("TypeId check proved T matches the element type");
-        let mut output: Vec<f32> = vec![0.0; data.len()];
-        skew_into(data_f32, period, &mut output)?;
-        Ok(cast::vec_into(output).expect("TypeId check proved T matches the output element type"))
+    if cast::same_type::<T, f64>() || cast::same_type::<T, f32>() {
+        // Zeroed allocation is calloc-backed for f32/f64; skew_into writes every index.
+        let mut output = vec![T::zero(); data.len()];
+        skew_into(data, period, &mut output)?;
+        Ok(output)
     } else {
         let mut output = vec![T::nan(); data.len()];
         skew_into(data, period, &mut output)?;
@@ -1076,20 +1045,11 @@ pub fn kurt_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) 
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 pub fn kurt<T: SeriesElement + 'static>(data: &[T], period: usize) -> Result<Vec<T>> {
-    use std::any::TypeId;
-
-    if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let data_f64: &[f64] =
-            cast::slice_as(data).expect("TypeId check proved T matches the element type");
-        let mut output: Vec<f64> = vec![0.0; data.len()];
-        kurt_into(data_f64, period, &mut output)?;
-        Ok(cast::vec_into(output).expect("TypeId check proved T matches the output element type"))
-    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let data_f32: &[f32] =
-            cast::slice_as(data).expect("TypeId check proved T matches the element type");
-        let mut output: Vec<f32> = vec![0.0; data.len()];
-        kurt_into(data_f32, period, &mut output)?;
-        Ok(cast::vec_into(output).expect("TypeId check proved T matches the output element type"))
+    if cast::same_type::<T, f64>() || cast::same_type::<T, f32>() {
+        // Zeroed allocation is calloc-backed for f32/f64; kurt_into writes every index.
+        let mut output = vec![T::zero(); data.len()];
+        kurt_into(data, period, &mut output)?;
+        Ok(output)
     } else {
         let mut output = vec![T::nan(); data.len()];
         kurt_into(data, period, &mut output)?;
@@ -1234,24 +1194,11 @@ pub fn cov_into<T: SeriesElement>(
 /// - The arrays have different lengths (`Error::LengthMismatch`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 pub fn cov<T: SeriesElement + 'static>(data0: &[T], data1: &[T], period: usize) -> Result<Vec<T>> {
-    use std::any::TypeId;
-
-    if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let data0_f64: &[f64] =
-            cast::slice_as(data0).expect("TypeId check proved T matches the element type");
-        let data1_f64: &[f64] =
-            cast::slice_as(data1).expect("TypeId check proved T matches the element type");
-        let mut output: Vec<f64> = vec![0.0; data0.len()];
-        cov_into(data0_f64, data1_f64, period, &mut output)?;
-        Ok(cast::vec_into(output).expect("TypeId check proved T matches the output element type"))
-    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let data0_f32: &[f32] =
-            cast::slice_as(data0).expect("TypeId check proved T matches the element type");
-        let data1_f32: &[f32] =
-            cast::slice_as(data1).expect("TypeId check proved T matches the element type");
-        let mut output: Vec<f32> = vec![0.0; data0.len()];
-        cov_into(data0_f32, data1_f32, period, &mut output)?;
-        Ok(cast::vec_into(output).expect("TypeId check proved T matches the output element type"))
+    if cast::same_type::<T, f64>() || cast::same_type::<T, f32>() {
+        // Zeroed allocation is calloc-backed for f32/f64; cov_into writes every index.
+        let mut output = vec![T::zero(); data0.len()];
+        cov_into(data0, data1, period, &mut output)?;
+        Ok(output)
     } else {
         let mut output = vec![T::nan(); data0.len()];
         cov_into(data0, data1, period, &mut output)?;
@@ -1388,20 +1335,11 @@ pub fn zscore_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 pub fn zscore<T: SeriesElement + 'static>(data: &[T], period: usize) -> Result<Vec<T>> {
-    use std::any::TypeId;
-
-    if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let data_f64: &[f64] =
-            cast::slice_as(data).expect("TypeId check proved T matches the element type");
-        let mut output: Vec<f64> = vec![0.0; data.len()];
-        zscore_into(data_f64, period, &mut output)?;
-        Ok(cast::vec_into(output).expect("TypeId check proved T matches the output element type"))
-    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let data_f32: &[f32] =
-            cast::slice_as(data).expect("TypeId check proved T matches the element type");
-        let mut output: Vec<f32> = vec![0.0; data.len()];
-        zscore_into(data_f32, period, &mut output)?;
-        Ok(cast::vec_into(output).expect("TypeId check proved T matches the output element type"))
+    if cast::same_type::<T, f64>() || cast::same_type::<T, f32>() {
+        // Zeroed allocation is calloc-backed for f32/f64; zscore_into writes every index.
+        let mut output = vec![T::zero(); data.len()];
+        zscore_into(data, period, &mut output)?;
+        Ok(output)
     } else {
         let mut output = vec![T::nan(); data.len()];
         zscore_into(data, period, &mut output)?;
@@ -1529,20 +1467,11 @@ pub fn mad_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 pub fn mad<T: SeriesElement + 'static>(data: &[T], period: usize) -> Result<Vec<T>> {
-    use std::any::TypeId;
-
-    if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let data_f64: &[f64] =
-            cast::slice_as(data).expect("TypeId check proved T matches the element type");
-        let mut output: Vec<f64> = vec![0.0; data.len()];
-        mad_into(data_f64, period, &mut output)?;
-        Ok(cast::vec_into(output).expect("TypeId check proved T matches the output element type"))
-    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let data_f32: &[f32] =
-            cast::slice_as(data).expect("TypeId check proved T matches the element type");
-        let mut output: Vec<f32> = vec![0.0; data.len()];
-        mad_into(data_f32, period, &mut output)?;
-        Ok(cast::vec_into(output).expect("TypeId check proved T matches the output element type"))
+    if cast::same_type::<T, f64>() || cast::same_type::<T, f32>() {
+        // Zeroed allocation is calloc-backed for f32/f64; mad_into writes every index.
+        let mut output = vec![T::zero(); data.len()];
+        mad_into(data, period, &mut output)?;
+        Ok(output)
     } else {
         let mut output = vec![T::nan(); data.len()];
         mad_into(data, period, &mut output)?;
@@ -1679,20 +1608,11 @@ pub fn sem_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 pub fn sem<T: SeriesElement + 'static>(data: &[T], period: usize) -> Result<Vec<T>> {
-    use std::any::TypeId;
-
-    if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let data_f64: &[f64] =
-            cast::slice_as(data).expect("TypeId check proved T matches the element type");
-        let mut output: Vec<f64> = vec![0.0; data.len()];
-        sem_into(data_f64, period, &mut output)?;
-        Ok(cast::vec_into(output).expect("TypeId check proved T matches the output element type"))
-    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let data_f32: &[f32] =
-            cast::slice_as(data).expect("TypeId check proved T matches the element type");
-        let mut output: Vec<f32> = vec![0.0; data.len()];
-        sem_into(data_f32, period, &mut output)?;
-        Ok(cast::vec_into(output).expect("TypeId check proved T matches the output element type"))
+    if cast::same_type::<T, f64>() || cast::same_type::<T, f32>() {
+        // Zeroed allocation is calloc-backed for f32/f64; sem_into writes every index.
+        let mut output = vec![T::zero(); data.len()];
+        sem_into(data, period, &mut output)?;
+        Ok(output)
     } else {
         let mut output = vec![T::nan(); data.len()];
         sem_into(data, period, &mut output)?;
@@ -1864,24 +1784,11 @@ pub fn correl<T: SeriesElement + 'static>(
     data1: &[T],
     period: usize,
 ) -> Result<Vec<T>> {
-    use std::any::TypeId;
-
-    if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let data0_f64: &[f64] =
-            cast::slice_as(data0).expect("TypeId check proved T matches the element type");
-        let data1_f64: &[f64] =
-            cast::slice_as(data1).expect("TypeId check proved T matches the element type");
-        let mut output: Vec<f64> = vec![0.0; data0.len()];
-        correl_into(data0_f64, data1_f64, period, &mut output)?;
-        Ok(cast::vec_into(output).expect("TypeId check proved T matches the output element type"))
-    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let data0_f32: &[f32] =
-            cast::slice_as(data0).expect("TypeId check proved T matches the element type");
-        let data1_f32: &[f32] =
-            cast::slice_as(data1).expect("TypeId check proved T matches the element type");
-        let mut output: Vec<f32> = vec![0.0; data0.len()];
-        correl_into(data0_f32, data1_f32, period, &mut output)?;
-        Ok(cast::vec_into(output).expect("TypeId check proved T matches the output element type"))
+    if cast::same_type::<T, f64>() || cast::same_type::<T, f32>() {
+        // Zeroed allocation is calloc-backed for f32/f64; correl_into writes every index.
+        let mut output = vec![T::zero(); data0.len()];
+        correl_into(data0, data1, period, &mut output)?;
+        Ok(output)
     } else {
         let mut output = vec![T::nan(); data0.len()];
         correl_into(data0, data1, period, &mut output)?;
@@ -2041,24 +1948,11 @@ pub fn beta_into<T: SeriesElement>(
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 pub fn beta<T: SeriesElement + 'static>(data0: &[T], data1: &[T], period: usize) -> Result<Vec<T>> {
-    use std::any::TypeId;
-
-    if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let data0_f64: &[f64] =
-            cast::slice_as(data0).expect("TypeId check proved T matches the element type");
-        let data1_f64: &[f64] =
-            cast::slice_as(data1).expect("TypeId check proved T matches the element type");
-        let mut output: Vec<f64> = vec![0.0; data0.len()];
-        beta_into(data0_f64, data1_f64, period, &mut output)?;
-        Ok(cast::vec_into(output).expect("TypeId check proved T matches the output element type"))
-    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let data0_f32: &[f32] =
-            cast::slice_as(data0).expect("TypeId check proved T matches the element type");
-        let data1_f32: &[f32] =
-            cast::slice_as(data1).expect("TypeId check proved T matches the element type");
-        let mut output: Vec<f32> = vec![0.0; data0.len()];
-        beta_into(data0_f32, data1_f32, period, &mut output)?;
-        Ok(cast::vec_into(output).expect("TypeId check proved T matches the output element type"))
+    if cast::same_type::<T, f64>() || cast::same_type::<T, f32>() {
+        // Zeroed allocation is calloc-backed for f32/f64; beta_into writes every index.
+        let mut output = vec![T::zero(); data0.len()];
+        beta_into(data0, data1, period, &mut output)?;
+        Ok(output)
     } else {
         let mut output = vec![T::nan(); data0.len()];
         beta_into(data0, data1, period, &mut output)?;
@@ -2200,20 +2094,11 @@ pub fn linearreg_into<T: SeriesElement>(data: &[T], period: usize, output: &mut 
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 pub fn linearreg<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
-    use std::any::TypeId;
-
-    if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let data_f64: &[f64] =
-            cast::slice_as(data).expect("TypeId check proved T matches the element type");
-        let mut output: Vec<f64> = vec![0.0; data.len()];
-        linearreg_into(data_f64, period, &mut output)?;
-        Ok(cast::vec_into(output).expect("TypeId check proved T matches the output element type"))
-    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let data_f32: &[f32] =
-            cast::slice_as(data).expect("TypeId check proved T matches the element type");
-        let mut output: Vec<f32> = vec![0.0; data.len()];
-        linearreg_into(data_f32, period, &mut output)?;
-        Ok(cast::vec_into(output).expect("TypeId check proved T matches the output element type"))
+    if cast::same_type::<T, f64>() || cast::same_type::<T, f32>() {
+        // Zeroed allocation is calloc-backed for f32/f64; linearreg_into writes every index.
+        let mut output = vec![T::zero(); data.len()];
+        linearreg_into(data, period, &mut output)?;
+        Ok(output)
     } else {
         // Generic fallback: initialize to NaN
         let mut output = vec![T::nan(); data.len()];
@@ -2357,20 +2242,11 @@ pub fn linearreg_slope_into<T: SeriesElement>(
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 pub fn linearreg_slope<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
-    use std::any::TypeId;
-
-    if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let data_f64: &[f64] =
-            cast::slice_as(data).expect("TypeId check proved T matches the element type");
-        let mut output: Vec<f64> = vec![0.0; data.len()];
-        linearreg_slope_into(data_f64, period, &mut output)?;
-        Ok(cast::vec_into(output).expect("TypeId check proved T matches the output element type"))
-    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let data_f32: &[f32] =
-            cast::slice_as(data).expect("TypeId check proved T matches the element type");
-        let mut output: Vec<f32> = vec![0.0; data.len()];
-        linearreg_slope_into(data_f32, period, &mut output)?;
-        Ok(cast::vec_into(output).expect("TypeId check proved T matches the output element type"))
+    if cast::same_type::<T, f64>() || cast::same_type::<T, f32>() {
+        // Zeroed allocation is calloc-backed for f32/f64; linearreg_slope_into writes every index.
+        let mut output = vec![T::zero(); data.len()];
+        linearreg_slope_into(data, period, &mut output)?;
+        Ok(output)
     } else {
         // Generic fallback: safe initialization
         let mut output = vec![T::nan(); data.len()];
@@ -2516,20 +2392,11 @@ pub fn linearreg_intercept_into<T: SeriesElement>(
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 pub fn linearreg_intercept<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
-    use std::any::TypeId;
-
-    if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let data_f64: &[f64] =
-            cast::slice_as(data).expect("TypeId check proved T matches the element type");
-        let mut output: Vec<f64> = vec![0.0; data.len()];
-        linearreg_intercept_into(data_f64, period, &mut output)?;
-        Ok(cast::vec_into(output).expect("TypeId check proved T matches the output element type"))
-    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let data_f32: &[f32] =
-            cast::slice_as(data).expect("TypeId check proved T matches the element type");
-        let mut output: Vec<f32> = vec![0.0; data.len()];
-        linearreg_intercept_into(data_f32, period, &mut output)?;
-        Ok(cast::vec_into(output).expect("TypeId check proved T matches the output element type"))
+    if cast::same_type::<T, f64>() || cast::same_type::<T, f32>() {
+        // Zeroed allocation is calloc-backed for f32/f64; linearreg_intercept_into writes every index.
+        let mut output = vec![T::zero(); data.len()];
+        linearreg_intercept_into(data, period, &mut output)?;
+        Ok(output)
     } else {
         // Generic fallback: safe initialization
         let mut output = vec![T::nan(); data.len()];
@@ -2676,20 +2543,11 @@ pub fn linearreg_angle_into<T: SeriesElement>(
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 pub fn linearreg_angle<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
-    use std::any::TypeId;
-
-    if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let data_f64: &[f64] =
-            cast::slice_as(data).expect("TypeId check proved T matches the element type");
-        let mut output: Vec<f64> = vec![0.0; data.len()];
-        linearreg_angle_into(data_f64, period, &mut output)?;
-        Ok(cast::vec_into(output).expect("TypeId check proved T matches the output element type"))
-    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let data_f32: &[f32] =
-            cast::slice_as(data).expect("TypeId check proved T matches the element type");
-        let mut output: Vec<f32> = vec![0.0; data.len()];
-        linearreg_angle_into(data_f32, period, &mut output)?;
-        Ok(cast::vec_into(output).expect("TypeId check proved T matches the output element type"))
+    if cast::same_type::<T, f64>() || cast::same_type::<T, f32>() {
+        // Zeroed allocation is calloc-backed for f32/f64; linearreg_angle_into writes every index.
+        let mut output = vec![T::zero(); data.len()];
+        linearreg_angle_into(data, period, &mut output)?;
+        Ok(output)
     } else {
         // Generic fallback: safe initialization
         let mut output = vec![T::nan(); data.len()];
@@ -2834,20 +2692,11 @@ pub fn tsf_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 pub fn tsf<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
-    use std::any::TypeId;
-
-    if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let data_f64: &[f64] =
-            cast::slice_as(data).expect("TypeId check proved T matches the element type");
-        let mut output: Vec<f64> = vec![0.0; data.len()];
-        tsf_into(data_f64, period, &mut output)?;
-        Ok(cast::vec_into(output).expect("TypeId check proved T matches the output element type"))
-    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let data_f32: &[f32] =
-            cast::slice_as(data).expect("TypeId check proved T matches the element type");
-        let mut output: Vec<f32> = vec![0.0; data.len()];
-        tsf_into(data_f32, period, &mut output)?;
-        Ok(cast::vec_into(output).expect("TypeId check proved T matches the output element type"))
+    if cast::same_type::<T, f64>() || cast::same_type::<T, f32>() {
+        // Zeroed allocation is calloc-backed for f32/f64; tsf_into writes every index.
+        let mut output = vec![T::zero(); data.len()];
+        tsf_into(data, period, &mut output)?;
+        Ok(output)
     } else {
         // Generic fallback: safe initialization
         let mut output = vec![T::nan(); data.len()];
@@ -2871,7 +2720,7 @@ mod coverage_push_private_paths_tests {
         });
 
         let mut out_f64 = vec![f64::NAN, -1e-12, -2.0, 3.0];
-        clamp_negative_variance_f64(&mut out_f64, 1);
+        clamp_negative_variance_wide(&mut out_f64, 1);
         assert_eq!(out_f64[1], 0.0);
         assert_eq!(out_f64[2], 0.0);
         assert_eq!(out_f64[3], 3.0);

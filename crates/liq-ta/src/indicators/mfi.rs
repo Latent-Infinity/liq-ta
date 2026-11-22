@@ -134,19 +134,19 @@ fn clamp_mfi<T: SeriesElement>(value: T, hundred: T) -> T {
 /// Optimized single-pass streaming algorithm with branchless direction assignment.
 /// Uses struct with separate positive/negative fields for branch-free eviction.
 #[inline]
-fn mfi_streaming_f64_optimized(
-    high: &[f64],
-    low: &[f64],
-    close: &[f64],
-    volume: &[f64],
+fn mfi_streaming_f64_optimized<T: SeriesElement>(
+    high: &[T],
+    low: &[T],
+    close: &[T],
+    volume: &[T],
     period: usize,
-    output: &mut [f64],
+    output: &mut [T],
 ) -> Result<()> {
     let n = high.len();
     let lookback = mfi_lookback(period);
 
     // Fill lookback period with NaN
-    output[..lookback].fill(f64::NAN);
+    output[..lookback].fill(T::nan());
 
     // Circular buffer with separate positive/negative fields
     let mut mf_buf = vec![
@@ -164,7 +164,7 @@ fn mfi_streaming_f64_optimized(
     // Initial unscaled typical price (H + L + C, no /3)
     // The /3 division is a constant scale that cancels in the ratio pos/(pos+neg)
     // Fix: prev_tp3_valid should NOT depend on volume[0] (volume[0] not used in comparisons)
-    let mut prev_tp3 = high[0] + low[0] + close[0];
+    let mut prev_tp3 = cast::to_f64(high[0]) + cast::to_f64(low[0]) + cast::to_f64(close[0]);
     let mut prev_tp3_valid = prev_tp3.is_finite();
 
     let mut pos_sum = 0.0;
@@ -173,9 +173,9 @@ fn mfi_streaming_f64_optimized(
 
     // Build initial window [1..=period]
     for j in 1..=period {
-        let tp3 = high[j] + low[j] + close[j];
+        let tp3 = cast::to_f64(high[j]) + cast::to_f64(low[j]) + cast::to_f64(close[j]);
         let tp3_valid = tp3.is_finite();
-        let vol = volume[j];
+        let vol = cast::to_f64(volume[j]);
         let vol_valid = vol.is_finite();
 
         let ok = tp3_valid && vol_valid && prev_tp3_valid;
@@ -206,7 +206,7 @@ fn mfi_streaming_f64_optimized(
     }
 
     // First output at index = period
-    output[lookback] = if invalid_count == 0 {
+    output[lookback] = cast::from_f64(if invalid_count == 0 {
         let total = pos_sum + neg_sum;
         if total <= 0.0 {
             0.0
@@ -215,7 +215,7 @@ fn mfi_streaming_f64_optimized(
         }
     } else {
         f64::NAN
-    };
+    });
 
     // Rolling window for remaining elements
     for i in (period + 1)..n {
@@ -231,9 +231,9 @@ fn mfi_streaming_f64_optimized(
             neg_sum -= old_entry.negative;
         }
 
-        let tp3 = high[i] + low[i] + close[i];
+        let tp3 = cast::to_f64(high[i]) + cast::to_f64(low[i]) + cast::to_f64(close[i]);
         let tp3_valid = tp3.is_finite();
-        let vol = volume[i];
+        let vol = cast::to_f64(volume[i]);
         let vol_valid = vol.is_finite();
 
         let ok = tp3_valid && vol_valid && prev_tp3_valid;
@@ -254,7 +254,7 @@ fn mfi_streaming_f64_optimized(
             invalid_count += 1;
         }
 
-        output[i] = if invalid_count == 0 {
+        output[i] = cast::from_f64(if invalid_count == 0 {
             let total = pos_sum + neg_sum;
             if total <= 0.0 {
                 0.0
@@ -263,7 +263,7 @@ fn mfi_streaming_f64_optimized(
             }
         } else {
             f64::NAN
-        };
+        });
 
         idx += 1;
         if idx == period {
@@ -287,13 +287,13 @@ fn mfi_streaming_f64_optimized(
 /// Unlike single-array indicators (EMA, RSI), multi-array indicators can't benefit
 /// from pre-scan optimization due to the multiplicative validation cost.
 #[inline]
-fn mfi_rolling_fast_f64_simd(
-    high: &[f64],
-    low: &[f64],
-    close: &[f64],
-    volume: &[f64],
+fn mfi_rolling_fast_f64_simd<T: SeriesElement>(
+    high: &[T],
+    low: &[T],
+    close: &[T],
+    volume: &[T],
     period: usize,
-    output: &mut [f64],
+    output: &mut [T],
 ) -> Result<()> {
     // Use original kernel with prev_tp3_valid fix
     // NOTE: Branchless eviction showed 5% regression due to extra Vec<u8> overhead
@@ -312,14 +312,8 @@ fn mfi_rolling_fast<T: SeriesElement>(
     output: &mut [T],
 ) -> Result<()> {
     // Use optimized streaming path for f64 (handles invalids inline)
-    if let (Some(h), Some(l), Some(c), Some(v), Some(out)) = (
-        cast::slice_as::<T, f64>(high),
-        cast::slice_as::<T, f64>(low),
-        cast::slice_as::<T, f64>(close),
-        cast::slice_as::<T, f64>(volume),
-        cast::slice_as_mut::<T, f64>(output),
-    ) {
-        return mfi_rolling_fast_f64_simd(h, l, c, v, period, out);
+    if cast::same_type::<T, f64>() {
+        return mfi_rolling_fast_f64_simd(high, low, close, volume, period, output);
     }
 
     // Optimized streaming path for generic types

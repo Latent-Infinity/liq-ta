@@ -36,6 +36,7 @@ serde_json = "1.0"
 
 # Rust standards v3.6 Section 22 baseline; `allow_attributes` enforces RPS-318's `#[expect]` form.
 [workspace.lints.rust]
+unsafe_code = "forbid"
 unsafe_op_in_unsafe_fn = "deny"
 unused_must_use = "deny"
 

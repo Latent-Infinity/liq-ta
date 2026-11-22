@@ -147,20 +147,6 @@ jobs:
       - name: Check Python bindings on minimum supported Rust
         run: cargo +1.95.0 check --locked -p liq-ta-python --all-targets
 
-  # The crate's only unsafe code is `cast.rs`; Miri checks it (RPS-234).
-  miri:
-    name: Miri (unsafe casts)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@nightly
-        with:
-          components: miri
-      - name: Record compiler version
-        run: rustc +nightly --version --verbose
-      - name: Miri
-        run: 'cargo +nightly miri test --locked -p liq-ta --lib cast::tests'
-
   # Non-blocking early warning for newer compilers (RPS-006, RPS-013).
   newer-toolchains:
     name: Rust ${{ matrix.toolchain }} (non-blocking)

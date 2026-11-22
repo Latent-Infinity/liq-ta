@@ -230,11 +230,16 @@ pub fn true_range<T: SeriesElement + 'static>(
 /// Optimized f64 true range computation (TA-Lib style).
 /// Uses local variables and incremental max for better compiler optimization.
 #[inline]
-fn true_range_f64_optimized(high: &[f64], low: &[f64], close: &[f64], output: &mut [f64]) {
+fn true_range_f64_optimized<T: SeriesElement>(
+    high: &[T],
+    low: &[T],
+    close: &[T],
+    output: &mut [T],
+) {
     let n = high.len();
 
     // First value is NaN (no previous close)
-    output[0] = f64::NAN;
+    output[0] = T::nan();
 
     // Tight loop with local variables (TA-Lib approach)
     for i in 1..n {
@@ -242,7 +247,7 @@ fn true_range_f64_optimized(high: &[f64], low: &[f64], close: &[f64], output: &m
         let temp_low = low[i];
         let prev_close = close[i - 1];
         if !temp_high.is_finite() || !temp_low.is_finite() || !prev_close.is_finite() {
-            output[i] = f64::NAN;
+            output[i] = T::nan();
             continue;
         }
 
@@ -317,13 +322,8 @@ pub fn true_range_into<T: SeriesElement + 'static>(
     }
 
     // Use specialized f64 fast path when possible
-    if let (Some(h), Some(l), Some(c), Some(out)) = (
-        cast::slice_as::<T, f64>(high),
-        cast::slice_as::<T, f64>(low),
-        cast::slice_as::<T, f64>(close),
-        cast::slice_as_mut::<T, f64>(output),
-    ) {
-        true_range_f64_optimized(h, l, c, &mut out[..n]);
+    if cast::same_type::<T, f64>() {
+        true_range_f64_optimized(high, low, close, &mut output[..n]);
         return Ok(n - 1);
     }
 

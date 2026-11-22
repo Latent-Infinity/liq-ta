@@ -208,20 +208,15 @@ pub fn ad_into<T: SeriesElement + 'static>(
         });
     }
 
-    // Specialized f32 path for High precision mode
-    if current_precision_mode() == PrecisionMode::High
-        && let (Some(h), Some(l), Some(c), Some(v), Some(out)) = (
-            cast::slice_as::<T, f32>(high),
-            cast::slice_as::<T, f32>(low),
-            cast::slice_as::<T, f32>(close),
-            cast::slice_as::<T, f32>(volume),
-            cast::slice_as_mut::<T, f32>(output),
-        )
-    {
-        return ad_core_f32_high(&h[..n], &l[..n], &c[..n], &v[..n], &mut out[..n]);
-    }
+    // f32 in High precision mode accumulates in f64
     if use_f64_precision::<T>() {
-        ad_core_f64(high, low, close, volume, output)
+        ad_core_f64(
+            &high[..n],
+            &low[..n],
+            &close[..n],
+            &volume[..n],
+            &mut output[..n],
+        )
     } else {
         ad_core_native(high, low, close, volume, output)
     }
@@ -335,10 +330,10 @@ fn ad_core_f64<T: SeriesElement>(
     // Helper to compute MFV
     #[inline(always)]
     fn compute_mfv<T: SeriesElement>(h: T, l: T, c: T, v: T) -> f64 {
-        let h_f64 = h.to_f64().unwrap_or(0.0);
-        let l_f64 = l.to_f64().unwrap_or(0.0);
-        let c_f64 = c.to_f64().unwrap_or(0.0);
-        let v_f64 = v.to_f64().unwrap_or(0.0);
+        let h_f64 = cast::to_f64(h);
+        let l_f64 = cast::to_f64(l);
+        let c_f64 = cast::to_f64(c);
+        let v_f64 = cast::to_f64(v);
 
         let range = h_f64 - l_f64;
         let numerator = c_f64 + c_f64 - h_f64 - l_f64;
@@ -372,7 +367,7 @@ fn ad_core_f64<T: SeriesElement>(
             output[i + 1..n].fill(T::nan());
             return Ok(());
         }
-        output[i] = T::from_f64(ad_accum)?;
+        output[i] = cast::from_f64(ad_accum);
 
         ad_accum += mfv1;
         if !ad_accum.is_finite() {
@@ -380,7 +375,7 @@ fn ad_core_f64<T: SeriesElement>(
             output[i + 2..n].fill(T::nan());
             return Ok(());
         }
-        output[i + 1] = T::from_f64(ad_accum)?;
+        output[i + 1] = cast::from_f64(ad_accum);
 
         ad_accum += mfv2;
         if !ad_accum.is_finite() {
@@ -388,7 +383,7 @@ fn ad_core_f64<T: SeriesElement>(
             output[i + 3..n].fill(T::nan());
             return Ok(());
         }
-        output[i + 2] = T::from_f64(ad_accum)?;
+        output[i + 2] = cast::from_f64(ad_accum);
 
         ad_accum += mfv3;
         if !ad_accum.is_finite() {
@@ -396,7 +391,7 @@ fn ad_core_f64<T: SeriesElement>(
             output[i + 4..n].fill(T::nan());
             return Ok(());
         }
-        output[i + 3] = T::from_f64(ad_accum)?;
+        output[i + 3] = cast::from_f64(ad_accum);
 
         i += 4;
     }
@@ -412,106 +407,7 @@ fn ad_core_f64<T: SeriesElement>(
             return Ok(());
         }
 
-        output[i] = T::from_f64(ad_accum)?;
-        i += 1;
-    }
-
-    Ok(())
-}
-
-/// Specialized f32 High precision computation.
-/// Avoids generic trait overhead by working directly with f32/f64 types.
-fn ad_core_f32_high(
-    high: &[f32],
-    low: &[f32],
-    close: &[f32],
-    volume: &[f32],
-    output: &mut [f32],
-) -> Result<()> {
-    let n = high.len();
-    let mut ad_accum: f64 = 0.0;
-
-    // Helper to compute MFV - direct f32->f64 casts
-    #[inline(always)]
-    fn compute_mfv(h: f32, l: f32, c: f32, v: f32) -> f64 {
-        let h_f64 = h as f64;
-        let l_f64 = l as f64;
-        let c_f64 = c as f64;
-        let v_f64 = v as f64;
-
-        let range = h_f64 - l_f64;
-        let numerator = c_f64 + c_f64 - h_f64 - l_f64;
-
-        if range == 0.0 {
-            if numerator.is_finite() {
-                0.0 * v_f64
-            } else {
-                f64::NAN
-            }
-        } else {
-            (numerator / range) * v_f64
-        }
-    }
-
-    // Process in chunks of 4 to pipeline divisions
-    let chunk_count = (n / 4) * 4;
-    let mut i = 0;
-
-    while i < chunk_count {
-        // Compute 4 MFVs in parallel (pipelines divisions)
-        let mfv0 = compute_mfv(high[i], low[i], close[i], volume[i]);
-        let mfv1 = compute_mfv(high[i + 1], low[i + 1], close[i + 1], volume[i + 1]);
-        let mfv2 = compute_mfv(high[i + 2], low[i + 2], close[i + 2], volume[i + 2]);
-        let mfv3 = compute_mfv(high[i + 3], low[i + 3], close[i + 3], volume[i + 3]);
-
-        // Accumulate sequentially with early exit
-        ad_accum += mfv0;
-        if !ad_accum.is_finite() {
-            output[i] = f32::NAN;
-            output[i + 1..n].fill(f32::NAN);
-            return Ok(());
-        }
-        output[i] = ad_accum as f32;
-
-        ad_accum += mfv1;
-        if !ad_accum.is_finite() {
-            output[i + 1] = f32::NAN;
-            output[i + 2..n].fill(f32::NAN);
-            return Ok(());
-        }
-        output[i + 1] = ad_accum as f32;
-
-        ad_accum += mfv2;
-        if !ad_accum.is_finite() {
-            output[i + 2] = f32::NAN;
-            output[i + 3..n].fill(f32::NAN);
-            return Ok(());
-        }
-        output[i + 2] = ad_accum as f32;
-
-        ad_accum += mfv3;
-        if !ad_accum.is_finite() {
-            output[i + 3] = f32::NAN;
-            output[i + 4..n].fill(f32::NAN);
-            return Ok(());
-        }
-        output[i + 3] = ad_accum as f32;
-
-        i += 4;
-    }
-
-    // Handle remainder
-    while i < n {
-        let mfv = compute_mfv(high[i], low[i], close[i], volume[i]);
-        ad_accum += mfv;
-
-        if !ad_accum.is_finite() {
-            output[i] = f32::NAN;
-            output[i + 1..n].fill(f32::NAN);
-            return Ok(());
-        }
-
-        output[i] = ad_accum as f32;
+        output[i] = cast::from_f64(ad_accum);
         i += 1;
     }
 

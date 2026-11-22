@@ -293,27 +293,15 @@ pub fn ema_with_alpha<T: SeriesElement + 'static>(
     crate::traits::validate_indicator_input(data, period, "ema")?;
 
     // Dispatch to specialized kernels for f64/f32
-    let alpha = std::slice::from_ref(&alpha);
-    if let (Some(data_f64), Some(&[alpha_f64])) = (
-        cast::slice_as::<T, f64>(data),
-        cast::slice_as::<T, f64>(alpha),
-    ) {
-        let mut result: Vec<f64> = vec![0.0; data.len()];
-
-        ema_core_f64(data_f64, period, alpha_f64, &mut result);
-        Ok(cast::vec_into(result).expect("T is f64"))
-    } else if let (Some(data_f32), Some(&[alpha_f32])) = (
-        cast::slice_as::<T, f32>(data),
-        cast::slice_as::<T, f32>(alpha),
-    ) {
-        let mut result: Vec<f32> = vec![0.0; data.len()];
-
-        ema_core_f32(data_f32, period, alpha_f32, &mut result);
-        Ok(cast::vec_into(result).expect("T is f32"))
+    if cast::same_type::<T, f64>() || cast::same_type::<T, f32>() {
+        // Zeroed allocation is cheap; the kernel writes every index.
+        let mut result = vec![T::zero(); data.len()];
+        ema_core_fast(data, period, alpha, &mut result);
+        Ok(result)
     } else {
         // Generic fallback: safe initialization
         let mut result = vec![T::nan(); data.len()];
-        compute_ema_core(data, period, alpha[0], &mut result);
+        compute_ema_core(data, period, alpha, &mut result);
         Ok(result)
     }
 }
@@ -358,22 +346,11 @@ pub fn ema_with_alpha_into<T: SeriesElement + 'static>(
     }
 
     // Dispatch to specialized kernels for f64/f32 (kernels initialize prefix)
-    let alpha = std::slice::from_ref(&alpha);
-    if let (Some(data_f64), Some(&[alpha_f64])) = (
-        cast::slice_as::<T, f64>(data),
-        cast::slice_as::<T, f64>(alpha),
-    ) {
-        let output_f64 = cast::slice_as_mut::<T, f64>(output).expect("T is f64");
-        ema_core_f64(data_f64, period, alpha_f64, output_f64);
-    } else if let (Some(data_f32), Some(&[alpha_f32])) = (
-        cast::slice_as::<T, f32>(data),
-        cast::slice_as::<T, f32>(alpha),
-    ) {
-        let output_f32 = cast::slice_as_mut::<T, f32>(output).expect("T is f32");
-        ema_core_f32(data_f32, period, alpha_f32, output_f32);
+    if cast::same_type::<T, f64>() || cast::same_type::<T, f32>() {
+        ema_core_fast(data, period, alpha, output);
     } else {
         // Generic fallback: compute_ema_core handles NaN prefix fill
-        compute_ema_core(data, period, alpha[0], output);
+        compute_ema_core(data, period, alpha, output);
     }
 
     // Return count of valid (non-NaN) values
@@ -426,26 +403,18 @@ fn ema_step<T: SeriesElement>(value: T, ema: T, alpha: T) -> T {
 /// Handle invalid value in EMA computation (cold path).
 #[cold]
 #[inline(never)]
-fn handle_invalid_f64(output: &mut [f64], i: usize) {
-    output[i] = f64::NAN;
-    output[i + 1..].fill(f64::NAN);
+fn handle_invalid<T: SeriesElement>(output: &mut [T], i: usize) {
+    output[i] = T::nan();
+    output[i + 1..].fill(T::nan());
 }
 
-/// Handle invalid value in f32 EMA computation (cold path).
-#[cold]
-#[inline(never)]
-fn handle_invalid_f32(output: &mut [f32], i: usize) {
-    output[i] = f32::NAN;
-    output[i + 1..].fill(f32::NAN);
-}
-
-/// f64-specialized EMA kernel using difference form for minimal critical path latency.
+/// f64/f32-specialized EMA kernel using difference form for minimal critical path latency.
 ///
 /// Uses `ema = (x - ema).mul_add(alpha, ema)` which reduces critical path
 /// from ~7-9 cycles (standard form) to ~5-6 cycles (difference form).
 /// See optimization-approaches.md section 5.3 for analysis.
 #[inline]
-fn ema_core_f64(data: &[f64], period: usize, alpha: f64, output: &mut [f64]) {
+fn ema_core_fast<T: SeriesElement>(data: &[T], period: usize, alpha: T, output: &mut [T]) {
     let n = data.len();
 
     // Edge case: period==1 means EMA equals input
@@ -455,20 +424,20 @@ fn ema_core_f64(data: &[f64], period: usize, alpha: f64, output: &mut [f64]) {
     }
 
     // Initialize the NaN prefix.
-    output[..period - 1].fill(f64::NAN);
+    output[..period - 1].fill(T::nan());
 
     // Compute SMA seed
-    let mut sum = 0.0_f64;
+    let mut sum = T::zero();
     for &x in &data[..period] {
         if !x.is_finite() {
-            output[period - 1] = f64::NAN;
-            output[period..].fill(f64::NAN);
+            output[period - 1] = T::nan();
+            output[period..].fill(T::nan());
             return;
         }
-        sum += x;
+        sum = sum + x;
     }
 
-    let mut ema = sum / (period as f64);
+    let mut ema = sum / T::from_usize(period).expect("usize converts to f32/f64");
     output[period - 1] = ema;
 
     // Hot loop: difference form for minimal critical path latency
@@ -479,52 +448,12 @@ fn ema_core_f64(data: &[f64], period: usize, alpha: f64, output: &mut [f64]) {
         // Cold path: invalid input makes EMA sticky NaN
         // Note: !ema.is_finite() removed - ema is finite by construction after seed
         if !x.is_finite() {
-            handle_invalid_f64(output, i);
+            handle_invalid(output, i);
             return;
         }
 
         // Hot path: difference form (section 5.3)
         // Critical path: SUB(x - ema) → FMA((x-ema)*alpha + ema) = ~5-6 cycles
-        ema = (x - ema).mul_add(alpha, ema);
-        output[i] = ema;
-    }
-}
-
-/// f32-specialized EMA kernel using difference form for minimal critical path latency.
-#[inline]
-fn ema_core_f32(data: &[f32], period: usize, alpha: f32, output: &mut [f32]) {
-    let n = data.len();
-
-    if period == 1 {
-        output[..n].copy_from_slice(data);
-        return;
-    }
-
-    output[..period - 1].fill(f32::NAN);
-
-    let mut sum = 0.0_f32;
-    for &x in &data[..period] {
-        if !x.is_finite() {
-            output[period - 1] = f32::NAN;
-            output[period..].fill(f32::NAN);
-            return;
-        }
-        sum += x;
-    }
-
-    let mut ema = sum / (period as f32);
-    output[period - 1] = ema;
-
-    let output = &mut output[..n];
-    for i in period..n {
-        let x = data[i];
-
-        if !x.is_finite() {
-            handle_invalid_f32(output, i);
-            return;
-        }
-
-        // Hot path: difference form (section 5.3)
         ema = (x - ema).mul_add(alpha, ema);
         output[i] = ema;
     }
@@ -1247,16 +1176,16 @@ mod coverage_push_private_paths_tests {
     fn ema_private_kernels_and_handlers() {
         let data = [1.0_f64, 2.0, 3.0, 4.0, 5.0];
         let mut out = vec![0.0_f64; data.len()];
-        ema_core_f64(&data, 1, 0.5, &mut out);
+        ema_core_fast(&data, 1, 0.5, &mut out);
         assert_eq!(out, data);
 
         let mut out2 = vec![0.0_f64; data.len()];
-        ema_core_f64(&data, 3, 0.5, &mut out2);
+        ema_core_fast(&data, 3, 0.5, &mut out2);
         assert!(out2[0].is_nan());
         assert!(out2[1].is_nan());
         assert!(out2[2].is_finite());
 
-        handle_invalid_f64(&mut out2, 3);
+        handle_invalid(&mut out2, 3);
         assert!(out2[3].is_nan());
         assert!(out2[4].is_nan());
     }
@@ -1265,13 +1194,13 @@ mod coverage_push_private_paths_tests {
     fn ema_private_f32_invalid_paths() {
         let data_seed_invalid = [1.0_f32, f32::NAN, 3.0, 4.0];
         let mut out_seed_invalid = vec![0.0_f32; data_seed_invalid.len()];
-        ema_core_f32(&data_seed_invalid, 3, 0.5, &mut out_seed_invalid);
+        ema_core_fast(&data_seed_invalid, 3, 0.5, &mut out_seed_invalid);
         assert!(out_seed_invalid[2].is_nan());
         assert!(out_seed_invalid[3].is_nan());
 
         let data_stream_invalid = [1.0_f32, 2.0, 3.0, 4.0, f32::INFINITY, 6.0];
         let mut out_stream_invalid = vec![0.0_f32; data_stream_invalid.len()];
-        ema_core_f32(&data_stream_invalid, 3, 0.5, &mut out_stream_invalid);
+        ema_core_fast(&data_stream_invalid, 3, 0.5, &mut out_stream_invalid);
         assert!(out_stream_invalid[2].is_finite());
         assert!(out_stream_invalid[4].is_nan());
         assert!(out_stream_invalid[5].is_nan());
@@ -1310,7 +1239,7 @@ mod coverage_push_private_paths_tests_round2 {
     fn ema_private_f32_period_one_and_generic_finite_updates() {
         let data_f32 = [1.0_f32, 2.0, 3.0, 4.0];
         let mut out_f32 = vec![0.0_f32; data_f32.len()];
-        ema_core_f32(&data_f32, 1, 0.5, &mut out_f32);
+        ema_core_fast(&data_f32, 1, 0.5, &mut out_f32);
         assert_eq!(out_f32, data_f32);
 
         let data_f64 = [1.0_f64, 2.0, 3.0, 4.0, 5.0];

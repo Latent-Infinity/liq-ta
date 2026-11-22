@@ -145,12 +145,8 @@ pub fn midprice_into<T: SeriesElement>(
     }
 
     // Use specialized f64 path for common case
-    if let (Some(h), Some(l), Some(out)) = (
-        cast::slice_as::<T, f64>(high),
-        cast::slice_as::<T, f64>(low),
-        cast::slice_as_mut::<T, f64>(output),
-    ) {
-        return midprice_f64_optimized(h, l, period, lookback, out);
+    if cast::same_type::<T, f64>() {
+        return midprice_f64_optimized(high, low, period, lookback, output);
     }
 
     // Generic path uses monotonic deque
@@ -163,21 +159,21 @@ pub fn midprice_into<T: SeriesElement>(
 /// This is a three-pass algorithm but each pass is SIMD-friendly.
 /// Computes MIDPRICE directly to avoid extra allocations.
 #[inline]
-fn midprice_f64_van_herk(
-    high: &[f64],
-    low: &[f64],
+fn midprice_f64_van_herk<T: SeriesElement>(
+    high: &[T],
+    low: &[T],
     period: usize,
     lookback: usize,
-    output: &mut [f64],
+    output: &mut [T],
 ) -> Result<()> {
     let n = high.len();
-    let half = 0.5;
+    let half: T = cast::from_f64(0.5);
 
     // Allocate working buffers for prefix/suffix extrema
-    let mut left_max_high = vec![f64::NEG_INFINITY; n];
-    let mut right_max_high = vec![f64::NEG_INFINITY; n];
-    let mut left_min_low = vec![f64::INFINITY; n];
-    let mut right_min_low = vec![f64::INFINITY; n];
+    let mut left_max_high = vec![T::neg_infinity(); n];
+    let mut right_max_high = vec![T::neg_infinity(); n];
+    let mut left_min_low = vec![T::infinity(); n];
+    let mut right_min_low = vec![T::infinity(); n];
 
     // Track validity with prefix/suffix AND
     let mut left_valid = vec![true; n];
@@ -242,7 +238,7 @@ fn midprice_f64_van_herk(
         if window_ok {
             output[end] = (hh + ll) * half;
         } else {
-            output[end] = f64::NAN;
+            output[end] = T::nan();
         }
     }
 
@@ -252,12 +248,12 @@ fn midprice_f64_van_herk(
 /// Optimized f64 path with algorithm dispatch.
 /// Uses Van Herk for large datasets (n >= 1000) or MonotonicDeque for smaller data.
 #[inline]
-fn midprice_f64_optimized(
-    high: &[f64],
-    low: &[f64],
+fn midprice_f64_optimized<T: SeriesElement>(
+    high: &[T],
+    low: &[T],
     period: usize,
     lookback: usize,
-    output: &mut [f64],
+    output: &mut [T],
 ) -> Result<()> {
     // Choose algorithm based on dataset size
     // Van Herk is better for large datasets with its SIMD-friendly structure
@@ -267,10 +263,10 @@ fn midprice_f64_optimized(
 
     // MonotonicDeque for small datasets (lower overhead)
     let n = high.len();
-    let half = 0.5;
+    let half: T = cast::from_f64(0.5);
 
-    let mut max_deque: MonotonicDeque<f64> = MonotonicDeque::new(period);
-    let mut min_deque: MonotonicDeque<f64> = MonotonicDeque::new(period);
+    let mut max_deque: MonotonicDeque<T> = MonotonicDeque::new(period);
+    let mut min_deque: MonotonicDeque<T> = MonotonicDeque::new(period);
 
     for i in 0..n {
         max_deque.push_max(i, high);

@@ -48,25 +48,26 @@ use crate::cast;
 use crate::error::{Error, Result};
 use crate::traits::SeriesElement;
 
-/// f64 SMA with ring buffer for invalid tracking (1 finiteness check per step).
+/// SMA with ring buffer for invalid tracking (1 finiteness check per step,
+/// f64 accumulator for f32/f64 data).
 #[inline]
-fn sma_f64_with_tracking(data: &[f64], period: usize, output: &mut [f64]) {
+fn sma_wide_with_tracking<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) {
     let n = data.len();
     let inv_period = 1.0 / period as f64;
 
     // Fill lookback
-    output[..period - 1].fill(f64::NAN);
+    output[..period - 1].fill(T::nan());
 
     // Ring buffers for sanitized values and invalid flags
     let mut buf = vec![0.0f64; period];
     let mut inv = vec![0u8; period];
 
     // Initialize first window
-    let mut sum = 0.0;
+    let mut sum = 0.0f64;
     let mut invalid_count = 0usize;
 
     for i in 0..period {
-        let val = data[i];
+        let val = cast::to_f64(data[i]);
         let is_invalid = !val.is_finite();
 
         buf[i] = if is_invalid { 0.0 } else { val };
@@ -78,9 +79,9 @@ fn sma_f64_with_tracking(data: &[f64], period: usize, output: &mut [f64]) {
 
     // First output
     if invalid_count == 0 {
-        output[period - 1] = sum * inv_period;
+        output[period - 1] = cast::from_f64(sum * inv_period);
     } else {
-        output[period - 1] = f64::NAN;
+        output[period - 1] = T::nan();
     }
 
     // Rolling window with ring buffer
@@ -92,7 +93,7 @@ fn sma_f64_with_tracking(data: &[f64], period: usize, output: &mut [f64]) {
         invalid_count -= inv[idx] as usize;
 
         // Insert new value (single finiteness check)
-        let val = data[i];
+        let val = cast::to_f64(data[i]);
         let is_invalid = !val.is_finite();
 
         buf[idx] = if is_invalid { 0.0 } else { val };
@@ -103,82 +104,28 @@ fn sma_f64_with_tracking(data: &[f64], period: usize, output: &mut [f64]) {
 
         // Output
         if invalid_count == 0 {
-            output[i] = sum * inv_period;
+            output[i] = cast::from_f64(sum * inv_period);
         } else {
-            output[i] = f64::NAN;
+            output[i] = T::nan();
         }
     }
 }
 
-/// f32 SMA with ring buffer for invalid tracking.
+/// f64 SMA with optimistic fast path that resumes with tracking at the first invalid.
 #[inline]
-fn sma_f32_with_tracking(data: &[f32], period: usize, output: &mut [f32]) {
-    let n = data.len();
-    let inv_period = 1.0 / period as f64;
-
-    output[..period - 1].fill(f32::NAN);
-
-    let mut buf = vec![0.0f64; period];
-    let mut inv = vec![0u8; period];
-
-    let mut sum = 0.0f64;
-    let mut invalid_count = 0usize;
-
-    for i in 0..period {
-        let val = data[i];
-        let is_invalid = !val.is_finite();
-
-        buf[i] = if is_invalid { 0.0 } else { val as f64 };
-        inv[i] = is_invalid as u8;
-
-        sum += buf[i];
-        invalid_count += inv[i] as usize;
-    }
-
-    if invalid_count == 0 {
-        output[period - 1] = (sum * inv_period) as f32;
-    } else {
-        output[period - 1] = f32::NAN;
-    }
-
-    for i in period..n {
-        let idx = i % period;
-
-        sum -= buf[idx];
-        invalid_count -= inv[idx] as usize;
-
-        let val = data[i];
-        let is_invalid = !val.is_finite();
-
-        buf[idx] = if is_invalid { 0.0 } else { val as f64 };
-        inv[idx] = is_invalid as u8;
-
-        sum += buf[idx];
-        invalid_count += inv[idx] as usize;
-
-        if invalid_count == 0 {
-            output[i] = (sum * inv_period) as f32;
-        } else {
-            output[i] = f32::NAN;
-        }
-    }
-}
-
-/// f64 SMA with optimistic fast path that bails to tracking on first invalid.
-#[inline]
-fn sma_f64_optimistic(data: &[f64], period: usize, output: &mut [f64]) {
+fn sma_wide_optimistic_resume<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) {
     let n = data.len();
     let output = &mut output[..n];
     let inv_period = 1.0 / period as f64;
 
-    output[..period - 1].fill(f64::NAN);
+    output[..period - 1].fill(T::nan());
 
     // Compute initial sum - check for invalids
-    let mut sum = 0.0;
+    let mut sum = 0.0f64;
     let mut has_invalid = false;
 
     for i in 0..period {
-        let val = data[i];
+        let val = cast::to_f64(data[i]);
         if !val.is_finite() {
             has_invalid = true;
             break;
@@ -188,24 +135,24 @@ fn sma_f64_optimistic(data: &[f64], period: usize, output: &mut [f64]) {
 
     if has_invalid {
         // Start with tracking from beginning
-        sma_f64_with_tracking(data, period, output);
+        sma_wide_with_tracking(data, period, output);
         return;
     }
 
     // First output
-    output[period - 1] = sum * inv_period;
+    output[period - 1] = cast::from_f64(sum * inv_period);
 
     // Optimistic fast path - no old value check needed
     // (old values guaranteed finite until we hit invalid new value)
     for i in period..n {
-        let new_val = data[i];
+        let new_val = cast::to_f64(data[i]);
 
         if new_val.is_finite() {
-            sum += new_val - data[i - period];
-            output[i] = sum * inv_period;
+            sum += new_val - cast::to_f64(data[i - period]);
+            output[i] = cast::from_f64(sum * inv_period);
         } else {
             // Hit invalid - switch to tracking for remainder
-            sma_f64_with_tracking_from(data, period, output, i);
+            sma_wide_with_tracking_from(data, period, output, i);
             return;
         }
     }
@@ -213,7 +160,12 @@ fn sma_f64_optimistic(data: &[f64], period: usize, output: &mut [f64]) {
 
 /// Continue SMA with tracking from a specific index.
 #[inline]
-fn sma_f64_with_tracking_from(data: &[f64], period: usize, output: &mut [f64], start_i: usize) {
+fn sma_wide_with_tracking_from<T: SeriesElement>(
+    data: &[T],
+    period: usize,
+    output: &mut [T],
+    start_i: usize,
+) {
     let n = data.len();
     let inv_period = 1.0 / period as f64;
 
@@ -225,7 +177,7 @@ fn sma_f64_with_tracking_from(data: &[f64], period: usize, output: &mut [f64], s
     let mut invalid_count = 0usize;
     for j in 0..period {
         let idx_in_data = start_i - period + j;
-        let val = data[idx_in_data];
+        let val = cast::to_f64(data[idx_in_data]);
         let is_invalid = !val.is_finite();
 
         buf[j] = if is_invalid { 0.0 } else { val };
@@ -243,7 +195,7 @@ fn sma_f64_with_tracking_from(data: &[f64], period: usize, output: &mut [f64], s
         sum -= buf[idx];
         invalid_count -= inv[idx] as usize;
 
-        let val = data[i];
+        let val = cast::to_f64(data[i]);
         let is_invalid = !val.is_finite();
 
         buf[idx] = if is_invalid { 0.0 } else { val };
@@ -253,49 +205,50 @@ fn sma_f64_with_tracking_from(data: &[f64], period: usize, output: &mut [f64], s
         invalid_count += inv[idx] as usize;
 
         if invalid_count == 0 {
-            output[i] = sum * inv_period;
+            output[i] = cast::from_f64(sum * inv_period);
         } else {
-            output[i] = f64::NAN;
+            output[i] = T::nan();
         }
     }
 }
 
-/// f32 SMA with optimistic fast path.
+/// f32 SMA with optimistic fast path (f64 accumulator) that restarts with
+/// full tracking at the first invalid.
 #[inline]
-fn sma_f32_optimistic(data: &[f32], period: usize, output: &mut [f32]) {
+fn sma_wide_optimistic_restart<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) {
     let n = data.len();
     let output = &mut output[..n];
     let inv_period = 1.0 / period as f64;
 
-    output[..period - 1].fill(f32::NAN);
+    output[..period - 1].fill(T::nan());
 
     let mut sum = 0.0f64;
     let mut has_invalid = false;
 
     for i in 0..period {
-        let val = data[i];
+        let val = cast::to_f64(data[i]);
         if !val.is_finite() {
             has_invalid = true;
             break;
         }
-        sum += val as f64;
+        sum += val;
     }
 
     if has_invalid {
-        sma_f32_with_tracking(data, period, output);
+        sma_wide_with_tracking(data, period, output);
         return;
     }
 
-    output[period - 1] = (sum * inv_period) as f32;
+    output[period - 1] = cast::from_f64(sum * inv_period);
 
     for i in period..n {
-        let new_val = data[i];
+        let new_val = cast::to_f64(data[i]);
 
         if new_val.is_finite() {
-            sum += new_val as f64 - data[i - period] as f64;
-            output[i] = (sum * inv_period) as f32;
+            sum += new_val - cast::to_f64(data[i - period]);
+            output[i] = cast::from_f64(sum * inv_period);
         } else {
-            sma_f32_with_tracking(data, period, output);
+            sma_wide_with_tracking(data, period, output);
             return;
         }
     }
@@ -392,29 +345,24 @@ pub fn sma<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
 
     let n = data.len();
 
-    let mut result = vec![T::nan(); n];
-
-    // Optimized path for f64: optimistic rolling sum
-    if let (Some(data_f64), Some(result_f64)) = (
-        cast::slice_as::<T, f64>(data),
-        cast::slice_as_mut::<T, f64>(&mut result),
-    ) {
-        // Use optimistic fast path (no per-step tracking until first invalid)
-        // Fastest for clean data, safe for data with NaN/Inf
-        sma_f64_optimistic(data_f64, period, result_f64);
+    // Optimized path for f64: optimistic rolling sum (no per-step tracking
+    // until first invalid). The kernels write every index, so a zeroed
+    // (calloc) allocation suffices.
+    if cast::same_type::<T, f64>() {
+        let mut result = vec![T::zero(); n];
+        sma_wide_optimistic_resume(data, period, &mut result);
         return Ok(result);
     }
 
     // Optimized path for f32: f64 accumulator
-    if let (Some(data_f32), Some(result_f32)) = (
-        cast::slice_as::<T, f32>(data),
-        cast::slice_as_mut::<T, f32>(&mut result),
-    ) {
-        sma_f32_optimistic(data_f32, period, result_f32);
+    if cast::same_type::<T, f32>() {
+        let mut result = vec![T::zero(); n];
+        sma_wide_optimistic_restart(data, period, &mut result);
         return Ok(result);
     }
 
-    // Generic fallback for other types (reuses the initialized vec)
+    // Generic fallback for other types
+    let mut result = vec![T::nan(); n];
     sma_generic(data, period, &mut result)?;
     Ok(result)
 }
@@ -523,20 +471,14 @@ pub fn sma_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -
     let n = data.len();
 
     // Optimized path for f64: optimistic rolling sum
-    if let (Some(data_f64), Some(output_f64)) = (
-        cast::slice_as::<T, f64>(data),
-        cast::slice_as_mut::<T, f64>(&mut output[..n]),
-    ) {
-        sma_f64_optimistic(data_f64, period, output_f64);
+    if cast::same_type::<T, f64>() {
+        sma_wide_optimistic_resume(data, period, &mut output[..n]);
         return Ok(n - period + 1);
     }
 
     // Optimized path for f32
-    if let (Some(data_f32), Some(output_f32)) = (
-        cast::slice_as::<T, f32>(data),
-        cast::slice_as_mut::<T, f32>(&mut output[..n]),
-    ) {
-        sma_f32_optimistic(data_f32, period, output_f32);
+    if cast::same_type::<T, f32>() {
+        sma_wide_optimistic_restart(data, period, &mut output[..n]);
         return Ok(n - period + 1);
     }
 
@@ -1175,7 +1117,7 @@ mod coverage_push_private_paths_tests_round2 {
     fn sma_private_tracking_and_invalid_entering_branches() {
         let data_tracking = [1.0_f64, 2.0, 3.0, 4.0, 5.0];
         let mut out_tracking = vec![f64::NAN; data_tracking.len()];
-        sma_f64_with_tracking(&data_tracking, 3, &mut out_tracking);
+        sma_wide_with_tracking(&data_tracking, 3, &mut out_tracking);
         assert!((out_tracking[2] - 2.0).abs() < 1e-12);
 
         let data_generic = [1.0_f64, 2.0, 3.0, f64::NAN, 5.0, 6.0];

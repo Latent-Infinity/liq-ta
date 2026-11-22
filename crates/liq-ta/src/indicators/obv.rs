@@ -243,17 +243,11 @@ fn validate_inputs<T: SeriesElement>(close: &[T], volume: &[T]) -> Result<()> {
 /// Core OBV computation that allocates a new vector.
 fn compute_obv_core<T: SeriesElement + 'static>(close: &[T], volume: &[T], output: &mut Vec<T>) {
     // Use specialized f64 path for common case
-    if let (Some(c), Some(v)) = (
-        cast::slice_as::<T, f64>(close),
-        cast::slice_as::<T, f64>(volume),
-    ) {
+    if cast::same_type::<T, f64>() {
         // Pre-allocate vector with exact size needed
-        let mut temp = vec![0.0_f64; close.len()];
-        obv_f64_optimized(c, v, &mut temp);
-        if let Ok(result) = cast::vec_into::<f64, T>(temp) {
-            *output = result;
-            return;
-        }
+        *output = vec![T::zero(); close.len()];
+        obv_f64_optimized(close, volume, output);
+        return;
     }
 
     let n = close.len();
@@ -301,12 +295,8 @@ fn compute_obv_core<T: SeriesElement + 'static>(close: &[T], volume: &[T], outpu
 /// Core OBV computation into pre-allocated buffer.
 fn compute_obv_core_into<T: SeriesElement + 'static>(close: &[T], volume: &[T], output: &mut [T]) {
     // Use specialized f64 path for common case
-    if let (Some(c), Some(v), Some(out)) = (
-        cast::slice_as::<T, f64>(close),
-        cast::slice_as::<T, f64>(volume),
-        cast::slice_as_mut::<T, f64>(output),
-    ) {
-        obv_f64_optimized(c, v, out);
+    if cast::same_type::<T, f64>() {
+        obv_f64_optimized(close, volume, output);
         return;
     }
 
@@ -355,7 +345,7 @@ fn compute_obv_core_into<T: SeriesElement + 'static>(close: &[T], volume: &[T], 
 ///
 /// Uses dual-path approach: fast path for clean data, NaN-aware path if NaN detected.
 #[inline]
-fn obv_f64_optimized(close: &[f64], volume: &[f64], output: &mut [f64]) {
+fn obv_f64_optimized<T: SeriesElement>(close: &[T], volume: &[T], output: &mut [T]) {
     let n = close.len();
     if n == 0 {
         return;
@@ -365,12 +355,12 @@ fn obv_f64_optimized(close: &[f64], volume: &[f64], output: &mut [f64]) {
     let mut prev_obv = volume[0];
     let mut prev_real = close[0];
     let is_first_invalid = !prev_obv.is_finite() || !prev_real.is_finite();
-    output[0] = if is_first_invalid { f64::NAN } else { prev_obv };
+    output[0] = if is_first_invalid { T::nan() } else { prev_obv };
 
     if is_first_invalid {
         // Invalid mode: fill rest with NaN
         for i in 1..n {
-            output[i] = f64::NAN;
+            output[i] = T::nan();
         }
         return;
     }
@@ -386,15 +376,15 @@ fn obv_f64_optimized(close: &[f64], volume: &[f64], output: &mut [f64]) {
         if !temp_real.is_finite() || !vol.is_finite() {
             // Fill current and rest with NaN
             for j in i..n {
-                output[j] = f64::NAN;
+                output[j] = T::nan();
             }
             return;
         }
 
         if temp_real > prev_real {
-            prev_obv += vol;
+            prev_obv = prev_obv + vol;
         } else if temp_real < prev_real {
-            prev_obv -= vol;
+            prev_obv = prev_obv - vol;
         }
         // If equal, prev_obv unchanged (no else needed)
 

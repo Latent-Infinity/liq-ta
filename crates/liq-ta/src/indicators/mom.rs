@@ -22,7 +22,7 @@
 use crate::cast;
 
 use crate::error::{Error, Result};
-use crate::kernels::simd::lagged_sub_sanitize_f64;
+use crate::kernels::simd::lagged_sub_sanitize;
 use crate::traits::SeriesElement;
 
 /// Computes the lookback period for MOM.
@@ -117,22 +117,15 @@ fn mom_compute_fast<T: SeriesElement + 'static>(
 ) {
     let n = data.len();
 
-    // Use chunked subtraction for f64
-    if let (Some(data_f64), Some(output_f64)) = (
-        cast::slice_as::<T, f64>(data),
-        cast::slice_as_mut::<T, f64>(&mut output[lookback..n]),
-    ) {
-        let current = &data_f64[period..];
-        let lagged = &data_f64[..n - period];
+    let current = &data[period..];
+    let lagged = &data[..n - period];
+    let out = &mut output[lookback..n];
 
+    if cast::same_type::<T, f64>() {
         // Use sanitized variant that converts infinity→NaN inline
-        lagged_sub_sanitize_f64(current, lagged, output_f64);
+        lagged_sub_sanitize(current, lagged, out);
     } else {
         // Scalar path for other types (f32, etc.)
-        let current = &data[period..];
-        let lagged = &data[..n - period];
-        let out = &mut output[lookback..n];
-
         for i in 0..out.len() {
             out[i] = current[i] - lagged[i];
         }
@@ -171,21 +164,13 @@ fn mom_compute_fast<T: SeriesElement + 'static>(
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 pub fn mom<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
-    if let Some(data_f64) = cast::slice_as::<T, f64>(data) {
-        let mut output: Vec<f64> = vec![0.0; data.len()];
-        mom_into(data_f64, period, &mut output)?;
-        if let Ok(output) = cast::vec_into(output) {
-            return Ok(output);
-        }
-    } else if let Some(data_f32) = cast::slice_as::<T, f32>(data) {
-        let mut output: Vec<f32> = vec![0.0; data.len()];
-        mom_into(data_f32, period, &mut output)?;
-        if let Ok(output) = cast::vec_into(output) {
-            return Ok(output);
-        }
-    }
-    // Generic fallback: safe initialization
-    let mut output = vec![T::nan(); data.len()];
+    // Zeroed allocation for f32/f64 (calloc); mom_into writes every index.
+    let mut output = if cast::same_type::<T, f64>() || cast::same_type::<T, f32>() {
+        vec![T::zero(); data.len()]
+    } else {
+        // Generic fallback: safe initialization
+        vec![T::nan(); data.len()]
+    };
     mom_into(data, period, &mut output)?;
     Ok(output)
 }

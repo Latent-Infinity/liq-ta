@@ -88,21 +88,14 @@ fn use_f64_accumulator<T: 'static>() -> bool {
 
 /// Helper to compute initial sum and sum of squares with NaN count for f64.
 ///
-/// Uses `sum_and_sum_sq_and_count_f64` to exclude nonfinite values from sums
+/// Uses `simd::sum_and_sum_sq_and_count` to exclude nonfinite values from sums
 /// while counting them.
 #[inline]
 fn compute_initial_sums<T: SeriesElement + 'static>(data: &[T], period: usize) -> (T, T, usize) {
-    if let Some(data_f64) = cast::slice_as::<T, f64>(data) {
-        let window = &data_f64[..period];
-
+    if cast::same_type::<T, f64>() {
         // Use NaN-aware chunked kernel that excludes NaN from sums
-        let (sum, sum_sq, valid_count) = simd::sum_and_sum_sq_and_count_f64(window);
-        let nan_count = period - valid_count;
-
-        // T is f64 here, so these conversions are exact and infallible.
-        if let (Ok(sum_t), Ok(sum_sq_t)) = (T::from_f64(sum), T::from_f64(sum_sq)) {
-            return (sum_t, sum_sq_t, nan_count);
-        }
+        let (sum, sum_sq, valid_count) = simd::sum_and_sum_sq_and_count(&data[..period]);
+        return (sum, sum_sq, period - valid_count);
     }
     // Fallback for f32
     let mut sum = T::zero();
