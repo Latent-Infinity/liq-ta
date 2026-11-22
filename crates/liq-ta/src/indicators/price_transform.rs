@@ -466,7 +466,6 @@ pub fn wclprice<T: SeriesElement>(high: &[T], low: &[T], close: &[T]) -> Result<
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::all, clippy::pedantic, clippy::nursery)]
     use super::*;
 
     const EPSILON: f64 = 1e-10;

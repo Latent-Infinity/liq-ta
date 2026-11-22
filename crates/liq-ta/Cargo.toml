@@ -70,3 +70,6 @@ harness = false
 [[bench]]
 name = "precision_comparison"
 harness = false
+
+[lints]
+workspace = true

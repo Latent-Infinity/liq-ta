@@ -77,7 +77,7 @@ pub const fn midpoint_min_len(period: usize) -> usize {
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 /// - The output buffer is too small (`Error::BufferTooSmall`)
 pub fn midpoint_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -> Result<()> {
-    use std::any::TypeId;
+    use crate::cast;
 
     // Validate inputs
     if data.is_empty() {
@@ -112,9 +112,12 @@ pub fn midpoint_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [
     // VHGW dispatch for f64: use VHGW for large n
     // Threshold: n >= 1000 (bench-derived, adjust based on benchmarks)
     const VHGW_THRESHOLD: usize = 1000;
-    if TypeId::of::<T>() == TypeId::of::<f64>() && n >= VHGW_THRESHOLD {
-        let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
-        let output_f64: &mut [f64] = unsafe { std::mem::transmute(output) };
+    if n >= VHGW_THRESHOLD
+        && let (Some(data_f64), Some(output_f64)) = (
+            cast::slice_as::<T, f64>(data),
+            cast::slice_as_mut::<T, f64>(output),
+        )
+    {
         crate::kernels::rolling_midpoint_vhgw_f64(data_f64, period, output_f64)?;
         return Ok(());
     }
@@ -141,13 +144,15 @@ pub fn midpoint_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [
 
     // For f64/f32: use specialized path with * 0.5 instead of / 2
     // This allows compiler to use multiply instead of divide (faster)
-    if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
-        let output_f64: &mut [f64] = unsafe { std::mem::transmute(output) };
+    if let (Some(data_f64), Some(output_f64)) = (
+        cast::slice_as::<T, f64>(data),
+        cast::slice_as_mut::<T, f64>(output),
+    ) {
         return midpoint_deque_f64(data_f64, period, lookback, output_f64);
-    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
-        let output_f32: &mut [f32] = unsafe { std::mem::transmute(output) };
+    } else if let (Some(data_f32), Some(output_f32)) = (
+        cast::slice_as::<T, f32>(data),
+        cast::slice_as_mut::<T, f32>(output),
+    ) {
         return midpoint_deque_f32(data_f32, period, lookback, output_f32);
     }
 
@@ -281,7 +286,6 @@ pub fn midpoint<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::all, clippy::pedantic, clippy::nursery)]
     use super::*;
     use half::f16;
     use num_traits::Float;

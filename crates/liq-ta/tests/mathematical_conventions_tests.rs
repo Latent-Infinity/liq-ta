@@ -5,11 +5,10 @@
 //! - Population standard deviation (÷n) for Bollinger Bands
 //! - EMA smoothing factors: α = 2/(period+1) for standard, α = 1/period for Wilder
 
-#![allow(clippy::needless_range_loop)]
-#![allow(clippy::cast_precision_loss)]
-#![allow(clippy::similar_names)]
-#![allow(clippy::unreadable_literal)]
-#![allow(clippy::float_cmp)]
+#![expect(
+    clippy::needless_range_loop,
+    reason = "index loops mirror the reference formulas across parallel arrays"
+)]
 
 use liq_ta::indicators::{
     bollinger::{bollinger, rolling_stddev},

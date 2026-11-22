@@ -1,5 +1,8 @@
 //! Vortex Indicator.
-#![allow(missing_docs)]
+#![expect(
+    missing_docs,
+    reason = "indicator output structs and helpers are documented at module level"
+)]
 
 use crate::error::{Error, Result};
 use crate::indicators::atr::true_range;

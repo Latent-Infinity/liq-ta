@@ -1,5 +1,8 @@
 //! Detrended Price Oscillator (DPO).
-#![allow(missing_docs)]
+#![expect(
+    missing_docs,
+    reason = "indicator output structs and helpers are documented at module level"
+)]
 
 use crate::error::{Error, Result};
 use crate::indicators::sma::{sma_into, sma_lookback, sma_min_len};

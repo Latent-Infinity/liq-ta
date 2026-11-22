@@ -78,6 +78,7 @@
 //! assert!(!fast.k[4].is_nan());
 //! ```
 
+use crate::cast;
 use crate::error::{Error, Result};
 use crate::indicators::sma::sma_from_idx_into;
 use crate::precision::{PrecisionMode, current_precision_mode};
@@ -446,34 +447,28 @@ pub fn stochastic_fast_into<T: SeriesElement>(
         compute_sma_of_series(&output.k, d_period, k_period - 1, &mut output.d)?;
     } else {
         // Fast path: VHGW algorithm (always, no threshold)
-        use std::any::TypeId;
-
         // f64 specialization: zero-overhead VHGW
-        if TypeId::of::<T>() == TypeId::of::<f64>() {
-            let high_f64: &[f64] = unsafe { std::mem::transmute(high) };
-            let low_f64: &[f64] = unsafe { std::mem::transmute(low) };
-            let close_f64: &[f64] = unsafe { std::mem::transmute(close) };
-            let k_f64: &mut [f64] = unsafe { std::mem::transmute(output.k.as_mut_slice()) };
-            let d_f64: &mut [f64] = unsafe { std::mem::transmute(output.d.as_mut_slice()) };
-
-            if let Err(err) = crate::kernels::compute_stochastic_fast_vhgw_f64(
+        if let (Some(high_f64), Some(low_f64), Some(close_f64)) = (
+            cast::slice_as::<T, f64>(high),
+            cast::slice_as::<T, f64>(low),
+            cast::slice_as::<T, f64>(close),
+        ) {
+            let k_f64 = cast::slice_as_mut::<T, f64>(&mut output.k).expect("T is f64");
+            let d_f64 = cast::slice_as_mut::<T, f64>(&mut output.d).expect("T is f64");
+            crate::kernels::compute_stochastic_fast_vhgw_f64(
                 high_f64, low_f64, close_f64, k_period, d_period, k_f64, d_f64,
-            ) {
-                return Err(err);
-            }
-        } else if TypeId::of::<T>() == TypeId::of::<f32>() {
+            )?;
+        } else if let (Some(high_f32), Some(low_f32), Some(close_f32)) = (
+            cast::slice_as::<T, f32>(high),
+            cast::slice_as::<T, f32>(low),
+            cast::slice_as::<T, f32>(close),
+        ) {
             // f32 specialization: zero-overhead VHGW
-            let high_f32: &[f32] = unsafe { std::mem::transmute(high) };
-            let low_f32: &[f32] = unsafe { std::mem::transmute(low) };
-            let close_f32: &[f32] = unsafe { std::mem::transmute(close) };
-            let k_f32: &mut [f32] = unsafe { std::mem::transmute(output.k.as_mut_slice()) };
-            let d_f32: &mut [f32] = unsafe { std::mem::transmute(output.d.as_mut_slice()) };
-
-            if let Err(err) = crate::kernels::compute_stochastic_fast_vhgw_f32(
+            let k_f32 = cast::slice_as_mut::<T, f32>(&mut output.k).expect("T is f32");
+            let d_f32 = cast::slice_as_mut::<T, f32>(&mut output.d).expect("T is f32");
+            crate::kernels::compute_stochastic_fast_vhgw_f32(
                 high_f32, low_f32, close_f32, k_period, d_period, k_f32, d_f32,
-            ) {
-                return Err(err);
-            }
+            )?;
         } else {
             // Generic fallback: streaming deque for non-f32/f64 types
             if let Err(err) = compute_stochastic_fast_streaming(
@@ -716,16 +711,15 @@ pub fn stochastic_full_into<T: SeriesElement>(
         compute_sma_of_series(&output.k, d_period, k_start_idx, &mut output.d)?;
     } else {
         // Fast path: VHGW algorithm (always, no threshold)
-        use std::any::TypeId;
-
         // f64 specialization: zero-overhead VHGW
-        if TypeId::of::<T>() == TypeId::of::<f64>() {
-            let high_f64: &[f64] = unsafe { std::mem::transmute(high) };
-            let low_f64: &[f64] = unsafe { std::mem::transmute(low) };
-            let close_f64: &[f64] = unsafe { std::mem::transmute(close) };
-            let k_f64: &mut [f64] = unsafe { std::mem::transmute(&mut output.k[..n]) };
-            let d_f64: &mut [f64] = unsafe { std::mem::transmute(&mut output.d[..n]) };
-            if let Err(err) = crate::kernels::compute_stochastic_full_vhgw_f64(
+        if let (Some(high_f64), Some(low_f64), Some(close_f64)) = (
+            cast::slice_as::<T, f64>(high),
+            cast::slice_as::<T, f64>(low),
+            cast::slice_as::<T, f64>(close),
+        ) {
+            let k_f64 = cast::slice_as_mut::<T, f64>(&mut output.k[..n]).expect("T is f64");
+            let d_f64 = cast::slice_as_mut::<T, f64>(&mut output.d[..n]).expect("T is f64");
+            crate::kernels::compute_stochastic_full_vhgw_f64(
                 high_f64,
                 low_f64,
                 close_f64,
@@ -734,17 +728,16 @@ pub fn stochastic_full_into<T: SeriesElement>(
                 d_period,
                 k_f64,
                 d_f64,
-            ) {
-                return Err(err);
-            }
-        } else if TypeId::of::<T>() == TypeId::of::<f32>() {
+            )?;
+        } else if let (Some(high_f32), Some(low_f32), Some(close_f32)) = (
+            cast::slice_as::<T, f32>(high),
+            cast::slice_as::<T, f32>(low),
+            cast::slice_as::<T, f32>(close),
+        ) {
             // f32 specialization: zero-overhead VHGW
-            let high_f32: &[f32] = unsafe { std::mem::transmute(high) };
-            let low_f32: &[f32] = unsafe { std::mem::transmute(low) };
-            let close_f32: &[f32] = unsafe { std::mem::transmute(close) };
-            let k_f32: &mut [f32] = unsafe { std::mem::transmute(&mut output.k[..n]) };
-            let d_f32: &mut [f32] = unsafe { std::mem::transmute(&mut output.d[..n]) };
-            if let Err(err) = crate::kernels::compute_stochastic_full_vhgw_f32(
+            let k_f32 = cast::slice_as_mut::<T, f32>(&mut output.k[..n]).expect("T is f32");
+            let d_f32 = cast::slice_as_mut::<T, f32>(&mut output.d[..n]).expect("T is f32");
+            crate::kernels::compute_stochastic_full_vhgw_f32(
                 high_f32,
                 low_f32,
                 close_f32,
@@ -753,9 +746,7 @@ pub fn stochastic_full_into<T: SeriesElement>(
                 d_period,
                 k_f32,
                 d_f32,
-            ) {
-                return Err(err);
-            }
+            )?;
         } else {
             // Generic fallback: streaming deque for non-f32/f64 types
             if let Err(err) = compute_stochastic_full_streaming(
@@ -1027,31 +1018,27 @@ impl<T: SeriesElement> RollingSma<T> {
 /// Push index to min queue, maintaining monotonic increasing values.
 #[inline]
 fn push_min_queue<T: SeriesElement>(q: &mut IdxRing, i: usize, vals: &[T]) {
-    unsafe {
-        while !q.is_empty() {
-            let b = q.back();
-            if *vals.get_unchecked(b) <= *vals.get_unchecked(i) {
-                break;
-            }
-            q.pop_back();
+    while !q.is_empty() {
+        let b = q.back();
+        if vals[b] <= vals[i] {
+            break;
         }
-        q.push_back(i);
+        q.pop_back();
     }
+    q.push_back(i);
 }
 
 /// Push index to max queue, maintaining monotonic decreasing values.
 #[inline]
 fn push_max_queue<T: SeriesElement>(q: &mut IdxRing, i: usize, vals: &[T]) {
-    unsafe {
-        while !q.is_empty() {
-            let b = q.back();
-            if *vals.get_unchecked(b) >= *vals.get_unchecked(i) {
-                break;
-            }
-            q.pop_back();
+    while !q.is_empty() {
+        let b = q.back();
+        if vals[b] >= vals[i] {
+            break;
         }
-        q.push_back(i);
+        q.pop_back();
     }
+    q.push_back(i);
 }
 
 /// Remove expired indices from front of queue.
@@ -1092,6 +1079,9 @@ fn compute_stochastic_fast_streaming<T: SeriesElement + 'static>(
     // Initialize rolling SMA for %D
     let mut sma_d = RollingSma::new(d_period, inv_d_period);
 
+    // Narrow once so per-index accesses below need no length checks.
+    let (high, low, k_out, d_out) = (&high[..n], &low[..n], &mut k_out[..n], &mut d_out[..n]);
+
     // Single pass through data
     for i in 0..n {
         // Expire old indices from front
@@ -1114,25 +1104,22 @@ fn compute_stochastic_fast_streaming<T: SeriesElement + 'static>(
                 pop_expired(&mut max_q, ws);
             }
 
-            unsafe {
-                let ll = *low.get_unchecked(min_q.front());
-                let hh = *high.get_unchecked(max_q.front());
-                let range = hh - ll;
-                let cl = *close.get_unchecked(i);
+            let ll = low[min_q.front()];
+            let hh = high[max_q.front()];
+            let range = hh - ll;
+            let cl = close[i];
 
-                let fk = if range > T::zero() {
-                    compute_percent_k_div_first(cl, ll, range, T::from_f64(100.0)?)?
-                } else {
-                    fifty
-                };
+            let fk = if range > T::zero() {
+                compute_percent_k_div_first(cl, ll, range, T::from_f64(100.0)?)?
+            } else {
+                fifty
+            };
 
-                *k_out.get_unchecked_mut(i) = fk;
+            k_out[i] = fk;
 
-                // Stream into SMA for %D
-                if let Some(fd) = sma_d.push(fk) {
-                    let d_idx = i;
-                    *d_out.get_unchecked_mut(d_idx) = fd;
-                }
+            // Stream into SMA for %D
+            if let Some(fd) = sma_d.push(fk) {
+                d_out[i] = fd;
             }
         }
     }
@@ -1176,6 +1163,9 @@ fn compute_stochastic_full_streaming<T: SeriesElement + 'static>(
     let mut sma_slow_k = RollingSma::new(slow_k_period, inv_slow_k);
     let mut sma_d = RollingSma::new(d_period, inv_d_period);
 
+    // Narrow once so per-index accesses below need no length checks.
+    let (high, low, k_out, d_out) = (&high[..n], &low[..n], &mut k_out[..n], &mut d_out[..n]);
+
     // Single pass through data
     for i in 0..n {
         // Expire old indices
@@ -1197,26 +1187,24 @@ fn compute_stochastic_full_streaming<T: SeriesElement + 'static>(
                 pop_expired(&mut max_q, ws);
             }
 
-            unsafe {
-                let ll = *low.get_unchecked(min_q.front());
-                let hh = *high.get_unchecked(max_q.front());
-                let range = hh - ll;
-                let cl = *close.get_unchecked(i);
+            let ll = low[min_q.front()];
+            let hh = high[max_q.front()];
+            let range = hh - ll;
+            let cl = close[i];
 
-                let fast_k = if range > T::zero() {
-                    compute_percent_k_div_first(cl, ll, range, T::from_f64(100.0)?)?
-                } else {
-                    fifty
-                };
+            let fast_k = if range > T::zero() {
+                compute_percent_k_div_first(cl, ll, range, T::from_f64(100.0)?)?
+            } else {
+                fifty
+            };
 
-                // Stream fastK into slow_k SMA
-                if let Some(slow_k) = sma_slow_k.push(fast_k) {
-                    *k_out.get_unchecked_mut(i) = slow_k;
+            // Stream fastK into slow_k SMA
+            if let Some(slow_k) = sma_slow_k.push(fast_k) {
+                k_out[i] = slow_k;
 
-                    // Stream slow_k into %D SMA
-                    if let Some(d) = sma_d.push(slow_k) {
-                        *d_out.get_unchecked_mut(i) = d;
-                    }
+                // Stream slow_k into %D SMA
+                if let Some(d) = sma_d.push(slow_k) {
+                    d_out[i] = d;
                 }
             }
         }
@@ -1602,7 +1590,6 @@ impl Stochastic {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::all, clippy::pedantic, clippy::nursery)]
     use super::*;
     use num_traits::Float;
 
@@ -1817,11 +1804,8 @@ mod tests {
 
         // Slow %K should have less variance than Fast %K
         // (This is a qualitative test - we just verify both produce valid output)
-        let fast_valid: Vec<f64> = fast.k.iter().filter(|x| !x.is_nan()).cloned().collect();
-        let slow_valid: Vec<f64> = slow.k.iter().filter(|x| !x.is_nan()).cloned().collect();
-
-        assert!(!fast_valid.is_empty());
-        assert!(!slow_valid.is_empty());
+        assert!(fast.k.iter().any(|x| !x.is_nan()));
+        assert!(slow.k.iter().any(|x| !x.is_nan()));
     }
 
     // ==================== Full Stochastic Tests ====================

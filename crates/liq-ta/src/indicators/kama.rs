@@ -21,6 +21,7 @@
 //!
 //! The lookback period is `period - 1`.
 
+use crate::cast;
 use crate::error::{Error, Result};
 use crate::traits::SeriesElement;
 
@@ -136,17 +137,17 @@ pub fn kama_full_into<T: SeriesElement>(
     }
 
     // Type specialization for f64/f32
-    use std::any::TypeId;
-    if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
-        let output_f64: &mut [f64] = unsafe { std::mem::transmute(output) };
-        return kama_full_into_f64(data_f64, period, fast_period, slow_period, output_f64);
+    if let (Some(d), Some(out)) = (
+        cast::slice_as::<T, f64>(data),
+        cast::slice_as_mut::<T, f64>(output),
+    ) {
+        return kama_full_into_f64(d, period, fast_period, slow_period, out);
     }
-
-    if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
-        let output_f32: &mut [f32] = unsafe { std::mem::transmute(output) };
-        return kama_full_into_f32(data_f32, period, fast_period, slow_period, output_f32);
+    if let (Some(d), Some(out)) = (
+        cast::slice_as::<T, f32>(data),
+        cast::slice_as_mut::<T, f32>(output),
+    ) {
+        return kama_full_into_f32(d, period, fast_period, slow_period, out);
     }
 
     // Generic fallback
@@ -565,7 +566,6 @@ pub fn kama_full<T: SeriesElement + 'static>(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::all, clippy::pedantic, clippy::nursery)]
     use super::*;
     use half::f16;
     use num_traits::Float;
@@ -785,18 +785,10 @@ mod tests {
         let result_slow = kama_full(&data, 10, 2, 50).unwrap();
 
         // Both should have same number of NaN
-        let fast_valid: Vec<f64> = result_fast
-            .iter()
-            .filter(|x| !x.is_nan())
-            .cloned()
-            .collect();
-        let slow_valid: Vec<f64> = result_slow
-            .iter()
-            .filter(|x| !x.is_nan())
-            .cloned()
-            .collect();
+        let fast_valid = result_fast.iter().filter(|x| !x.is_nan()).count();
+        let slow_valid = result_slow.iter().filter(|x| !x.is_nan()).count();
 
-        assert_eq!(fast_valid.len(), slow_valid.len());
+        assert_eq!(fast_valid, slow_valid);
     }
 
     #[test]

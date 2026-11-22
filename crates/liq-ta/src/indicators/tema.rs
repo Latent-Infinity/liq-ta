@@ -304,7 +304,6 @@ pub fn tema_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) 
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::all, clippy::pedantic, clippy::nursery)]
     use super::*;
     use crate::indicators::dema::dema;
     use num_traits::Float;

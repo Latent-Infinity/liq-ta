@@ -19,6 +19,7 @@
 //!
 //! The lookback period is `period - 1`.
 
+use crate::cast;
 use crate::error::{Error, Result};
 use crate::traits::SeriesElement;
 
@@ -121,16 +122,17 @@ pub fn trima_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T])
     output[..lookback].fill(T::nan());
 
     // No pre-scan: dispatch directly to specialized paths
-    use std::any::TypeId;
-    if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
-        let output_f64: &mut [f64] = unsafe { std::mem::transmute(output) };
+    if let (Some(data_f64), Some(output_f64)) = (
+        cast::slice_as::<T, f64>(data),
+        cast::slice_as_mut::<T, f64>(output),
+    ) {
         return trima_into_fast_f64_inline_nan(data_f64, period, output_f64, lookback);
     }
 
-    if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
-        let output_f32: &mut [f32] = unsafe { std::mem::transmute(output) };
+    if let (Some(data_f32), Some(output_f32)) = (
+        cast::slice_as::<T, f32>(data),
+        cast::slice_as_mut::<T, f32>(output),
+    ) {
         return trima_into_fast_f32_inline_nan(data_f32, period, output_f32, lookback);
     }
 
@@ -812,29 +814,13 @@ fn trima_into_generic_inline_nan<T: SeriesElement>(
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 pub fn trima<T: SeriesElement + 'static>(data: &[T], period: usize) -> Result<Vec<T>> {
-    use std::any::TypeId;
-
-    if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
-        let mut output: Vec<f64> = vec![0.0; data.len()];
-        trima_into(data_f64, period, &mut output)?;
-        Ok(unsafe { std::mem::transmute(output) })
-    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
-        let mut output: Vec<f32> = vec![0.0; data.len()];
-        trima_into(data_f32, period, &mut output)?;
-        Ok(unsafe { std::mem::transmute(output) })
-    } else {
-        // Generic fallback with safe initialization
-        let mut output = vec![T::nan(); data.len()];
-        trima_into(data, period, &mut output)?;
-        Ok(output)
-    }
+    let mut output = vec![T::zero(); data.len()];
+    trima_into(data, period, &mut output)?;
+    Ok(output)
 }
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::all, clippy::pedantic, clippy::nursery)]
     use super::*;
     use num_traits::Float;
 

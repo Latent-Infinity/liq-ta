@@ -3,15 +3,6 @@
 //! These tests load fixtures from JSON files and verify indicator behavior.
 //! The JSON files in tests/fixtures/ are the canonical specification.
 
-#![allow(clippy::needless_range_loop)]
-#![allow(clippy::cast_precision_loss)]
-#![allow(clippy::similar_names)]
-#![allow(clippy::unreadable_literal)]
-#![allow(clippy::float_cmp)]
-#![allow(clippy::too_many_lines)]
-#![allow(clippy::cast_possible_truncation)]
-#![allow(clippy::manual_let_else)]
-
 use liq_ta::indicators::{
     atr::{atr, true_range},
     bollinger::bollinger,

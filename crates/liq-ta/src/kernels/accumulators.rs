@@ -1097,7 +1097,7 @@ mod tests {
         }
 
         // Roll through many more values
-        let mut ring: Vec<f64> = initial.clone();
+        let mut ring: Vec<f64> = initial;
         let mut ring_idx = 0;
 
         for i in 0..1000 {

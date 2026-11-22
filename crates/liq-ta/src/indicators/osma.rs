@@ -1,5 +1,8 @@
 //! OSMA (Moving Average of Oscillator).
-#![allow(missing_docs)]
+#![expect(
+    missing_docs,
+    reason = "indicator output structs and helpers are documented at module level"
+)]
 
 use crate::error::{Error, Result};
 use crate::indicators::macd::{macd, macd_min_len, macd_signal_lookback};

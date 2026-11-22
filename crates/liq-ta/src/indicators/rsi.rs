@@ -537,7 +537,6 @@ fn compute_rsi_value<T: SeriesElement>(avg_gain: T, avg_loss: T, hundred: T, one
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::all, clippy::pedantic, clippy::nursery)]
     use super::*;
     use num_traits::Float;
 

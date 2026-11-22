@@ -13,10 +13,6 @@
 //! | High | RSI/Wilder smoothing | 15% |
 //! | Fast | All indicators | 2% |
 
-#![allow(clippy::cast_precision_loss)]
-#![allow(clippy::unreadable_literal)]
-#![allow(clippy::similar_names)]
-
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use liq_ta::indicators::{
     bollinger::bollinger, cci::cci, mfi::mfi, obv::obv, roc::roc, rsi::rsi, sma::sma,

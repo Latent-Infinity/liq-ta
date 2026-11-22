@@ -236,8 +236,8 @@ fn coverage_aroon_error_and_non_finite_paths() {
     assert!(aroonosc(&high, &low[..low.len() - 1], 5).is_err());
     assert!(aroonosc(&high[..5], &low[..5], 5).is_err());
 
-    let mut high_bad = high.clone();
-    let mut low_bad = low.clone();
+    let mut high_bad = high;
+    let mut low_bad = low;
     high_bad[10] = f64::NAN;
     low_bad[11] = f64::INFINITY;
     let out = aroon(&high_bad, &low_bad, 5).expect("aroon should succeed with non-finite input");
@@ -289,8 +289,8 @@ fn coverage_aroon_f32_dispatch_matrix_and_into() {
     assert!(aroon(&high_large32, &low_large32, 13).is_ok());
     assert!(aroonosc(&high_large32, &low_large32, 13).is_ok());
 
-    let mut high_bad = high_small32.clone();
-    let mut low_bad = low_small32.clone();
+    let mut high_bad = high_small32;
+    let mut low_bad = low_small32;
     high_bad[20] = f32::NAN;
     low_bad[21] = f32::INFINITY;
     let out_bad = aroon(&high_bad, &low_bad, 5).expect("aroon f32 non-finite should succeed");
@@ -372,9 +372,9 @@ fn coverage_adx_f32_non_finite_and_flat_paths() {
     let flat = vec![33.0_f32; 48];
     assert!(adx(&flat, &flat, &flat, 7).is_ok());
 
-    let mut high_bad = high32.clone();
-    let mut low_bad = low32.clone();
-    let mut close_bad = close32.clone();
+    let mut high_bad = high32;
+    let mut low_bad = low32;
+    let mut close_bad = close32;
     high_bad[18] = f32::NAN;
     low_bad[19] = f32::INFINITY;
     close_bad[20] = f32::NEG_INFINITY;

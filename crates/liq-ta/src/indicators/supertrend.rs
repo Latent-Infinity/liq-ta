@@ -1,5 +1,8 @@
 //! Super Trend indicator.
-#![allow(missing_docs)]
+#![expect(
+    missing_docs,
+    reason = "indicator output structs and helpers are documented at module level"
+)]
 
 use crate::error::{Error, Result};
 use crate::indicators::atr::{atr, atr_lookback, atr_min_len};
@@ -99,7 +102,6 @@ pub fn supertrend<T: SeriesElement>(
 }
 
 #[must_use = "this returns a Result with the count of valid SuperTrend values"]
-#[allow(clippy::too_many_arguments)]
 pub fn supertrend_into<T: SeriesElement>(
     high: &[T],
     low: &[T],

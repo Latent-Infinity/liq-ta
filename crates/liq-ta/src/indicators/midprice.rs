@@ -16,6 +16,7 @@
 //! - Time: O(n) for n elements (amortized O(1) per element using monotonic deques)
 //! - Space: O(n) for output + O(2k) for the deques, where k is the period
 
+use crate::cast;
 use crate::error::{Error, Result};
 use crate::kernels::rolling_extrema::MonotonicDeque;
 use crate::traits::SeriesElement;
@@ -144,13 +145,11 @@ pub fn midprice_into<T: SeriesElement>(
     }
 
     // Use specialized f64 path for common case
-    use std::any::TypeId;
-    if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let h = unsafe { std::slice::from_raw_parts(high.as_ptr() as *const f64, high.len()) };
-        let l = unsafe { std::slice::from_raw_parts(low.as_ptr() as *const f64, low.len()) };
-        let out = unsafe {
-            std::slice::from_raw_parts_mut(output.as_mut_ptr() as *mut f64, output.len())
-        };
+    if let (Some(h), Some(l), Some(out)) = (
+        cast::slice_as::<T, f64>(high),
+        cast::slice_as::<T, f64>(low),
+        cast::slice_as_mut::<T, f64>(output),
+    ) {
         return midprice_f64_optimized(h, l, period, lookback, out);
     }
 
@@ -376,7 +375,6 @@ pub fn midprice<T: SeriesElement + 'static>(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::all, clippy::pedantic, clippy::nursery)]
     use super::*;
     use num_traits::Float;
 

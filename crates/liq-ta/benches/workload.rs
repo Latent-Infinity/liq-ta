@@ -8,10 +8,6 @@
 //!
 //! Uses extended measurement time (15s) with 500 samples for statistical reliability.
 
-#![allow(clippy::cast_precision_loss)]
-#![allow(clippy::unreadable_literal)]
-#![allow(clippy::similar_names)]
-
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use liq_ta::indicators::{
     BollingerOutput, StochasticOutput, adx::adx_into, atr::atr_into, bollinger::bollinger_into,

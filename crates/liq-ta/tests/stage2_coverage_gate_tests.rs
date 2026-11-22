@@ -340,14 +340,14 @@ fn stage2_non_finite_and_flat_data_paths() {
     let connors = connors_rsi(&zigzag, 3, 2, 20).unwrap();
     assert_eq!(connors.len(), n);
 
-    let mut high_with_nan = high.clone();
-    let mut low_with_nan = low.clone();
+    let mut high_with_nan = high;
+    let mut low_with_nan = low;
     high_with_nan[30] = f64::NAN;
     low_with_nan[30] = f64::NAN;
     let ao_with_nan = ao(&high_with_nan, &low_with_nan).unwrap();
     assert_eq!(ao_with_nan.len(), n);
 
-    let mut autocorr_nan = close.clone();
+    let mut autocorr_nan = close;
     autocorr_nan[25] = f64::NAN;
     let ac = autocorr(&autocorr_nan, 32, 1).unwrap();
     assert_eq!(ac.len(), n);

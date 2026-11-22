@@ -51,9 +51,10 @@
 //! 1. **Van Herk algorithm**: Prefix-suffix block structure for rolling extrema with index tracking
 //! 2. **Hybrid algorithm dispatch**: Naive for p<8, van Herk for p≥25 or n≥1000, deque for medium
 //! 3. **Pre-computed lookup table**: Avoids division in the hot loop
-//! 4. **Unchecked array access**: Uses unsafe get_unchecked for known-safe indices
+//! 4. **Bounded lookups**: Lookup-table indices are bounded by the window, so no division is needed
 //! 5. **Cache-friendly memory layout**: Contiguous arrays enable auto-vectorization
 
+use crate::cast;
 use crate::error::{Error, Result};
 use crate::traits::SeriesElement;
 
@@ -289,20 +290,21 @@ fn aroon_into_naive<T: SeriesElement>(
     aroon_down_output: &mut [T],
 ) -> Result<()> {
     // Type specialization for f64/f32 - eliminates trait overhead
-    use std::any::TypeId;
-    if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let high_f64: &[f64] = unsafe { std::mem::transmute(high) };
-        let low_f64: &[f64] = unsafe { std::mem::transmute(low) };
-        let aroon_up_f64: &mut [f64] = unsafe { std::mem::transmute(aroon_up_output) };
-        let aroon_down_f64: &mut [f64] = unsafe { std::mem::transmute(aroon_down_output) };
+    if let (Some(high_f64), Some(low_f64)) = (
+        cast::slice_as::<T, f64>(high),
+        cast::slice_as::<T, f64>(low),
+    ) {
+        let aroon_up_f64 = cast::slice_as_mut::<T, f64>(aroon_up_output).expect("T is f64");
+        let aroon_down_f64 = cast::slice_as_mut::<T, f64>(aroon_down_output).expect("T is f64");
         return aroon_into_naive_f64(high_f64, low_f64, period, aroon_up_f64, aroon_down_f64);
     }
 
-    if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let high_f32: &[f32] = unsafe { std::mem::transmute(high) };
-        let low_f32: &[f32] = unsafe { std::mem::transmute(low) };
-        let aroon_up_f32: &mut [f32] = unsafe { std::mem::transmute(aroon_up_output) };
-        let aroon_down_f32: &mut [f32] = unsafe { std::mem::transmute(aroon_down_output) };
+    if let (Some(high_f32), Some(low_f32)) = (
+        cast::slice_as::<T, f32>(high),
+        cast::slice_as::<T, f32>(low),
+    ) {
+        let aroon_up_f32 = cast::slice_as_mut::<T, f32>(aroon_up_output).expect("T is f32");
+        let aroon_down_f32 = cast::slice_as_mut::<T, f32>(aroon_down_output).expect("T is f32");
         return aroon_into_naive_f32(high_f32, low_f32, period, aroon_up_f32, aroon_down_f32);
     }
 
@@ -446,11 +448,9 @@ fn aroon_into_naive_f64(
             let periods_since_high = i - highest_idx;
             let periods_since_low = i - lowest_idx;
 
-            // SAFETY: periods_since is always in [0, period] by construction
-            unsafe {
-                aroon_up_output[i] = *aroon_lookup.get_unchecked(periods_since_high);
-                aroon_down_output[i] = *aroon_lookup.get_unchecked(periods_since_low);
-            }
+            // periods_since is always in [0, period], within the lookup table
+            aroon_up_output[i] = aroon_lookup[periods_since_high];
+            aroon_down_output[i] = aroon_lookup[periods_since_low];
         }
     }
 
@@ -520,11 +520,9 @@ fn aroon_into_naive_f32(
             let periods_since_high = i - highest_idx;
             let periods_since_low = i - lowest_idx;
 
-            // SAFETY: periods_since is always in [0, period] by construction
-            unsafe {
-                aroon_up_output[i] = *aroon_lookup.get_unchecked(periods_since_high);
-                aroon_down_output[i] = *aroon_lookup.get_unchecked(periods_since_low);
-            }
+            // periods_since is always in [0, period], within the lookup table
+            aroon_up_output[i] = aroon_lookup[periods_since_high];
+            aroon_down_output[i] = aroon_lookup[periods_since_low];
         }
     }
 
@@ -549,20 +547,21 @@ fn aroon_into_lazy_rescan<T: SeriesElement>(
     aroon_down_output: &mut [T],
 ) -> Result<()> {
     // Type specialization for f64/f32 - eliminates trait overhead
-    use std::any::TypeId;
-    if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let high_f64: &[f64] = unsafe { std::mem::transmute(high) };
-        let low_f64: &[f64] = unsafe { std::mem::transmute(low) };
-        let aroon_up_f64: &mut [f64] = unsafe { std::mem::transmute(aroon_up_output) };
-        let aroon_down_f64: &mut [f64] = unsafe { std::mem::transmute(aroon_down_output) };
+    if let (Some(high_f64), Some(low_f64)) = (
+        cast::slice_as::<T, f64>(high),
+        cast::slice_as::<T, f64>(low),
+    ) {
+        let aroon_up_f64 = cast::slice_as_mut::<T, f64>(aroon_up_output).expect("T is f64");
+        let aroon_down_f64 = cast::slice_as_mut::<T, f64>(aroon_down_output).expect("T is f64");
         return aroon_into_lazy_rescan_f64(high_f64, low_f64, period, aroon_up_f64, aroon_down_f64);
     }
 
-    if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let high_f32: &[f32] = unsafe { std::mem::transmute(high) };
-        let low_f32: &[f32] = unsafe { std::mem::transmute(low) };
-        let aroon_up_f32: &mut [f32] = unsafe { std::mem::transmute(aroon_up_output) };
-        let aroon_down_f32: &mut [f32] = unsafe { std::mem::transmute(aroon_down_output) };
+    if let (Some(high_f32), Some(low_f32)) = (
+        cast::slice_as::<T, f32>(high),
+        cast::slice_as::<T, f32>(low),
+    ) {
+        let aroon_up_f32 = cast::slice_as_mut::<T, f32>(aroon_up_output).expect("T is f32");
+        let aroon_down_f32 = cast::slice_as_mut::<T, f32>(aroon_down_output).expect("T is f32");
         return aroon_into_lazy_rescan_f32(high_f32, low_f32, period, aroon_up_f32, aroon_down_f32);
     }
 
@@ -666,8 +665,10 @@ fn aroon_into_lazy_rescan<T: SeriesElement>(
             }
         }
 
-        let periods_since_high = today - highest_idx.unwrap();
-        let periods_since_low = today - lowest_idx.unwrap();
+        let periods_since_high =
+            today - highest_idx.expect("a non-empty window always yields a high index");
+        let periods_since_low =
+            today - lowest_idx.expect("a non-empty window always yields a low index");
 
         let ps_high_t = T::from_usize(periods_since_high)?;
         let ps_low_t = T::from_usize(periods_since_low)?;
@@ -1010,11 +1011,9 @@ fn aroon_into_ring<T: SeriesElement>(
                 let periods_since_high = i - highest_idx;
                 let periods_since_low = i - lowest_idx;
 
-                // SAFETY: periods_since is always in [0, period] by construction
-                unsafe {
-                    aroon_up_output[i] = *aroon_lookup.get_unchecked(periods_since_high);
-                    aroon_down_output[i] = *aroon_lookup.get_unchecked(periods_since_low);
-                }
+                // periods_since is always in [0, period], within the lookup table
+                aroon_up_output[i] = aroon_lookup[periods_since_high];
+                aroon_down_output[i] = aroon_lookup[periods_since_low];
             } else {
                 // Deque is empty (all values were NaN in window)
                 aroon_up_output[i] = T::nan();
@@ -1195,11 +1194,9 @@ fn aroon_into_van_herk<T: SeriesElement>(
             let periods_since_high = i - highest_idx;
             let periods_since_low = i - lowest_idx;
 
-            // SAFETY: periods_since is always in [0, period] by construction
-            unsafe {
-                aroon_up_output[i] = *aroon_lookup.get_unchecked(periods_since_high);
-                aroon_down_output[i] = *aroon_lookup.get_unchecked(periods_since_low);
-            }
+            // periods_since is always in [0, period], within the lookup table
+            aroon_up_output[i] = aroon_lookup[periods_since_high];
+            aroon_down_output[i] = aroon_lookup[periods_since_low];
         }
     }
 
@@ -1392,7 +1389,6 @@ pub fn aroonosc<T: SeriesElement>(high: &[T], low: &[T], period: usize) -> Resul
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::all, clippy::pedantic, clippy::nursery)]
     use super::*;
 
     #[test]

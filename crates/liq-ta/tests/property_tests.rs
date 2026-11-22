@@ -3,11 +3,10 @@
 //! These tests verify invariant properties that must hold for all valid inputs,
 //! using randomly generated test data to find edge cases.
 
-#![allow(clippy::needless_range_loop)]
-#![allow(clippy::cast_precision_loss)]
-#![allow(clippy::similar_names)]
-#![allow(clippy::unreadable_literal)]
-#![allow(clippy::float_cmp)]
+#![expect(
+    clippy::needless_range_loop,
+    reason = "index loops mirror the reference formulas across parallel arrays"
+)]
 
 use proptest::prelude::*;
 

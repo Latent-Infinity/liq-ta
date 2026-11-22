@@ -1,5 +1,8 @@
 //! DeMarker indicator.
-#![allow(missing_docs)]
+#![expect(
+    missing_docs,
+    reason = "indicator output structs and helpers are documented at module level"
+)]
 
 use crate::error::{Error, Result};
 use crate::traits::SeriesElement;
@@ -251,8 +254,12 @@ fn demarker_robust<T: SeriesElement>(
             };
         push_sum(&mut incoming, value);
         if i >= period {
-            let left = outgoing.last().map_or(Totals::default(), |(_, sum)| *sum);
-            let right = incoming.last().map_or(Totals::default(), |(_, sum)| *sum);
+            let left = outgoing
+                .last()
+                .map_or_else(Totals::default, |(_, sum)| *sum);
+            let right = incoming
+                .last()
+                .map_or_else(Totals::default, |(_, sum)| *sum);
             let sum = left.add(right);
             if sum.invalid == 0 {
                 let exponent = sum.max.exponent.max(sum.min.exponent);

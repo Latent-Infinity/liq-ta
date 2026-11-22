@@ -50,6 +50,7 @@
 //! - Space complexity: O(n) for temporary arrays (positive/negative money flows)
 //! - Fast path: ~20-30% faster when no NaN values present
 
+use crate::cast;
 use crate::error::{Error, Result};
 use crate::traits::SeriesElement;
 
@@ -311,16 +312,13 @@ fn mfi_rolling_fast<T: SeriesElement>(
     output: &mut [T],
 ) -> Result<()> {
     // Use optimized streaming path for f64 (handles invalids inline)
-    use std::any::TypeId;
-    if TypeId::of::<T>() == TypeId::of::<f64>() {
-        // Safety: We've checked the type is f64
-        let h = unsafe { std::slice::from_raw_parts(high.as_ptr() as *const f64, high.len()) };
-        let l = unsafe { std::slice::from_raw_parts(low.as_ptr() as *const f64, low.len()) };
-        let c = unsafe { std::slice::from_raw_parts(close.as_ptr() as *const f64, close.len()) };
-        let v = unsafe { std::slice::from_raw_parts(volume.as_ptr() as *const f64, volume.len()) };
-        let out = unsafe {
-            std::slice::from_raw_parts_mut(output.as_mut_ptr() as *mut f64, output.len())
-        };
+    if let (Some(h), Some(l), Some(c), Some(v), Some(out)) = (
+        cast::slice_as::<T, f64>(high),
+        cast::slice_as::<T, f64>(low),
+        cast::slice_as::<T, f64>(close),
+        cast::slice_as::<T, f64>(volume),
+        cast::slice_as_mut::<T, f64>(output),
+    ) {
         return mfi_rolling_fast_f64_simd(h, l, c, v, period, out);
     }
 
@@ -594,7 +592,6 @@ pub fn mfi<T: SeriesElement>(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::all, clippy::pedantic, clippy::nursery)]
     use super::*;
 
     #[test]

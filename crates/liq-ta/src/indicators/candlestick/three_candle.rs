@@ -834,12 +834,10 @@ pub fn cdl_3white_soldiers_into<T: SeriesElement>(
         }
 
         // Each opens within previous body (between body_bottom and body_top)
-        #[allow(clippy::suspicious_operation_groupings)]
         if open[second] < open[first] || open[second] > close[first] {
             out[i] = PATTERN_NONE;
             continue;
         }
-        #[allow(clippy::suspicious_operation_groupings)]
         if open[third] < open[second] || open[third] > close[second] {
             out[i] = PATTERN_NONE;
             continue;
@@ -985,12 +983,10 @@ pub fn cdl_3black_crows_into<T: SeriesElement>(
         }
 
         // Each opens within previous body (between body_bottom and body_top)
-        #[allow(clippy::suspicious_operation_groupings)]
         if open[second] > open[first] || open[second] < close[first] {
             out[i] = PATTERN_NONE;
             continue;
         }
-        #[allow(clippy::suspicious_operation_groupings)]
         if open[third] > open[second] || open[third] < close[second] {
             out[i] = PATTERN_NONE;
             continue;

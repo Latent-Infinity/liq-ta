@@ -1,5 +1,7 @@
 # High-Performance Rust Coding Standards
 
+> **Superseded (2026-11-21).** This is an old local copy, kept because historical audits cite it. The governing standard is *High-Performance Rust Coding Standards v3.6* in the shared Software-Standards library. Where they conflict, v3.6 wins. Examples: no `panic = "abort"` in a workspace that ships a library (`RPS-128`), no unchecked indexing without measured benefit (`RPS-099`, `RPS-236`), and `#[expect(lint, reason = "...")]` for every suppression (`RPS-318`).
+
 > If it feels fast at small scale but collapses under load, the problem is design, not the compiler.
 
 Rust enables writing code that's simultaneously safe and fast through zero-cost abstractions, but achieving peak performance requires understanding specific patterns. **The most impactful optimizations come from treating allocations, syscalls, hashing, and scheduler interactions as first-class design constraints** — with proper patterns, Rust code regularly matches or exceeds C++ performance while maintaining memory safety guarantees.

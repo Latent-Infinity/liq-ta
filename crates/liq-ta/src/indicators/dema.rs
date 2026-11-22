@@ -265,7 +265,6 @@ pub fn dema_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) 
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::all, clippy::pedantic, clippy::nursery)]
     use super::*;
     use num_traits::Float;
 

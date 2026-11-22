@@ -44,9 +44,9 @@
 //! assert!((result[4] - 4.0).abs() < 1e-10); // (3+4+5)/3 = 4.0
 //! ```
 
+use crate::cast;
 use crate::error::{Error, Result};
 use crate::traits::SeriesElement;
-use std::any::TypeId;
 
 /// f64 SMA with ring buffer for invalid tracking (1 finiteness check per step).
 #[inline]
@@ -168,6 +168,7 @@ fn sma_f32_with_tracking(data: &[f32], period: usize, output: &mut [f32]) {
 #[inline]
 fn sma_f64_optimistic(data: &[f64], period: usize, output: &mut [f64]) {
     let n = data.len();
+    let output = &mut output[..n];
     let inv_period = 1.0 / period as f64;
 
     output[..period - 1].fill(f64::NAN);
@@ -177,7 +178,7 @@ fn sma_f64_optimistic(data: &[f64], period: usize, output: &mut [f64]) {
     let mut has_invalid = false;
 
     for i in 0..period {
-        let val = unsafe { *data.get_unchecked(i) };
+        let val = data[i];
         if !val.is_finite() {
             has_invalid = true;
             break;
@@ -192,20 +193,16 @@ fn sma_f64_optimistic(data: &[f64], period: usize, output: &mut [f64]) {
     }
 
     // First output
-    unsafe {
-        *output.get_unchecked_mut(period - 1) = sum * inv_period;
-    }
+    output[period - 1] = sum * inv_period;
 
     // Optimistic fast path - no old value check needed
     // (old values guaranteed finite until we hit invalid new value)
     for i in period..n {
-        let new_val = unsafe { *data.get_unchecked(i) };
+        let new_val = data[i];
 
         if new_val.is_finite() {
-            sum += new_val - unsafe { *data.get_unchecked(i - period) };
-            unsafe {
-                *output.get_unchecked_mut(i) = sum * inv_period;
-            }
+            sum += new_val - data[i - period];
+            output[i] = sum * inv_period;
         } else {
             // Hit invalid - switch to tracking for remainder
             sma_f64_with_tracking_from(data, period, output, i);
@@ -267,6 +264,7 @@ fn sma_f64_with_tracking_from(data: &[f64], period: usize, output: &mut [f64], s
 #[inline]
 fn sma_f32_optimistic(data: &[f32], period: usize, output: &mut [f32]) {
     let n = data.len();
+    let output = &mut output[..n];
     let inv_period = 1.0 / period as f64;
 
     output[..period - 1].fill(f32::NAN);
@@ -275,7 +273,7 @@ fn sma_f32_optimistic(data: &[f32], period: usize, output: &mut [f32]) {
     let mut has_invalid = false;
 
     for i in 0..period {
-        let val = unsafe { *data.get_unchecked(i) };
+        let val = data[i];
         if !val.is_finite() {
             has_invalid = true;
             break;
@@ -288,18 +286,14 @@ fn sma_f32_optimistic(data: &[f32], period: usize, output: &mut [f32]) {
         return;
     }
 
-    unsafe {
-        *output.get_unchecked_mut(period - 1) = (sum * inv_period) as f32;
-    }
+    output[period - 1] = (sum * inv_period) as f32;
 
     for i in period..n {
-        let new_val = unsafe { *data.get_unchecked(i) };
+        let new_val = data[i];
 
         if new_val.is_finite() {
-            sum += new_val as f64 - unsafe { *data.get_unchecked(i - period) as f64 };
-            unsafe {
-                *output.get_unchecked_mut(i) = (sum * inv_period) as f32;
-            }
+            sum += new_val as f64 - data[i - period] as f64;
+            output[i] = (sum * inv_period) as f32;
         } else {
             sma_f32_with_tracking(data, period, output);
             return;
@@ -398,38 +392,29 @@ pub fn sma<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
 
     let n = data.len();
 
-    // Optimized path for f64: unchecked rolling sum
-    if TypeId::of::<T>() == TypeId::of::<f64>() {
-        // SAFETY: We've verified T is f64
-        let data_f64: &[f64] =
-            unsafe { std::slice::from_raw_parts(data.as_ptr() as *const f64, n) };
+    let mut result = vec![T::nan(); n];
 
-        let mut result_vec: Vec<f64> = vec![0.0; n];
-        let result_f64 = result_vec.as_mut_slice();
-
-        // Use optimistic fast path (unchecked until first invalid)
+    // Optimized path for f64: optimistic rolling sum
+    if let (Some(data_f64), Some(result_f64)) = (
+        cast::slice_as::<T, f64>(data),
+        cast::slice_as_mut::<T, f64>(&mut result),
+    ) {
+        // Use optimistic fast path (no per-step tracking until first invalid)
         // Fastest for clean data, safe for data with NaN/Inf
         sma_f64_optimistic(data_f64, period, result_f64);
-
-        // SAFETY: We've verified T is f64, transmute back
-        return Ok(unsafe { std::mem::transmute(result_vec) });
+        return Ok(result);
     }
 
     // Optimized path for f32: f64 accumulator
-    if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let data_f32: &[f32] =
-            unsafe { std::slice::from_raw_parts(data.as_ptr() as *const f32, n) };
-
-        let mut result_vec: Vec<f32> = vec![0.0; n];
-        let result_f32 = result_vec.as_mut_slice();
-
+    if let (Some(data_f32), Some(result_f32)) = (
+        cast::slice_as::<T, f32>(data),
+        cast::slice_as_mut::<T, f32>(&mut result),
+    ) {
         sma_f32_optimistic(data_f32, period, result_f32);
-
-        return Ok(unsafe { std::mem::transmute(result_vec) });
+        return Ok(result);
     }
 
-    // Generic fallback for other types (still uses initialized vec)
-    let mut result = vec![T::nan(); n];
+    // Generic fallback for other types (reuses the initialized vec)
     sma_generic(data, period, &mut result)?;
     Ok(result)
 }
@@ -535,28 +520,24 @@ pub fn sma_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -
         });
     }
 
-    // Optimized path for f64: unchecked rolling sum
-    if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let data_f64: &[f64] =
-            unsafe { std::slice::from_raw_parts(data.as_ptr() as *const f64, data.len()) };
-        let output_f64: &mut [f64] =
-            unsafe { std::slice::from_raw_parts_mut(output.as_mut_ptr() as *mut f64, data.len()) };
+    let n = data.len();
 
+    // Optimized path for f64: optimistic rolling sum
+    if let (Some(data_f64), Some(output_f64)) = (
+        cast::slice_as::<T, f64>(data),
+        cast::slice_as_mut::<T, f64>(&mut output[..n]),
+    ) {
         sma_f64_optimistic(data_f64, period, output_f64);
-
-        return Ok(data.len() - period + 1);
+        return Ok(n - period + 1);
     }
 
     // Optimized path for f32
-    if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let data_f32: &[f32] =
-            unsafe { std::slice::from_raw_parts(data.as_ptr() as *const f32, data.len()) };
-        let output_f32: &mut [f32] =
-            unsafe { std::slice::from_raw_parts_mut(output.as_mut_ptr() as *mut f32, data.len()) };
-
+    if let (Some(data_f32), Some(output_f32)) = (
+        cast::slice_as::<T, f32>(data),
+        cast::slice_as_mut::<T, f32>(&mut output[..n]),
+    ) {
         sma_f32_optimistic(data_f32, period, output_f32);
-
-        return Ok(data.len() - period + 1);
+        return Ok(n - period + 1);
     }
 
     // Generic fallback for other types
@@ -770,7 +751,6 @@ pub fn sma_from_idx_into<T: SeriesElement>(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::all, clippy::pedantic, clippy::nursery)]
     use super::*;
     use num_traits::Float;
 

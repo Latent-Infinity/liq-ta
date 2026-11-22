@@ -2,7 +2,10 @@
 //!
 //! For f32 inputs, High mode calculates midpoints and means in f64 and rounds
 //! the final difference once; Fast mode uses native f32 arithmetic throughout.
-#![allow(missing_docs)]
+#![expect(
+    missing_docs,
+    reason = "indicator output structs and helpers are documented at module level"
+)]
 
 use crate::error::{Error, Result};
 use crate::indicators::sma::{sma_lookback, sma_min_len};
@@ -82,8 +85,11 @@ pub fn ao_into<T: SeriesElement>(high: &[T], low: &[T], output: &mut [T]) -> Res
             high,
             low,
             output,
-            |v| v.to_f64().unwrap(),
-            |v| num_traits::NumCast::from(v).unwrap(),
+            |v| v.to_f64().expect("f32 always widens to f64"),
+            |v| {
+                num_traits::NumCast::from(v)
+                    .expect("f64 to f32 saturates to infinity instead of failing")
+            },
         )?;
     } else {
         calculate(high, low, output, |v| v, |v| v)?;

@@ -25,6 +25,7 @@
 //! - **Population formulas**: Uses ÷n, not ÷(n-1) to match TA-Lib
 //! - **Linear regression**: Uses least-squares method over rolling windows
 
+use crate::cast;
 use crate::error::{Error, Result};
 use crate::precision::{PrecisionMode, current_precision_mode};
 use crate::traits::SeriesElement;
@@ -165,7 +166,7 @@ fn var_talib_f64(data: &[f64], period: usize, output: &mut [f64]) -> Result<()> 
 fn var_talib_fast<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -> Result<()> {
     let n = data.len();
     let lookback = var_lookback(period);
-    let period_t = T::from_usize(period).unwrap_or(T::infinity());
+    let period_t = T::from_usize(period).unwrap_or_else(|_| T::infinity());
 
     // Fill lookback with NaN
     for i in 0..lookback {
@@ -250,7 +251,7 @@ fn var_talib_fast<T: SeriesElement>(data: &[T], period: usize, output: &mut [T])
 fn var_welford_slow<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -> Result<()> {
     let n = data.len();
     let lookback = var_lookback(period);
-    let period_t = T::from_usize(period).unwrap_or(T::infinity());
+    let period_t = T::from_usize(period).unwrap_or_else(|_| T::infinity());
 
     // Fill lookback with NaN
     for i in 0..lookback {
@@ -280,7 +281,7 @@ fn var_welford_slow<T: SeriesElement>(data: &[T], period: usize, output: &mut [T
             nan_count += 1;
         } else {
             valid_count += 1;
-            let count_t = T::from_usize(valid_count).unwrap_or(T::infinity());
+            let count_t = T::from_usize(valid_count).unwrap_or_else(|_| T::infinity());
             let delta = data[i] - mean;
             mean = mean + delta / count_t;
             let delta2 = data[i] - mean;
@@ -301,7 +302,7 @@ fn var_welford_slow<T: SeriesElement>(data: &[T], period: usize, output: &mut [T
         .iter()
         .find(|&&x| !x.is_nan())
         .copied()
-        .unwrap_or(T::zero());
+        .unwrap_or_else(T::zero);
 
     // Initialize shifted sums from initial window (excluding NaN values)
     let mut sum = T::zero(); // Σ(x - shift) for valid values
@@ -432,8 +433,10 @@ pub fn var_into<T: SeriesElement + 'static>(
     // Skip NaN pre-scan to match TA-Lib performance (NaN naturally propagates through variance formula)
     use std::any::TypeId;
     if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
-        let output_f64: &mut [f64] = unsafe { std::mem::transmute(output) };
+        let data_f64: &[f64] =
+            cast::slice_as(data).expect("TypeId check proved T matches the element type");
+        let output_f64: &mut [f64] =
+            cast::slice_as_mut(output).expect("TypeId check proved T matches the element type");
         var_talib_f64(data_f64, period, output_f64)?;
         clamp_negative_variance_f64(output_f64, lookback);
         return Ok(());
@@ -661,15 +664,17 @@ pub fn var<T: SeriesElement + 'static>(data: &[T], period: usize) -> Result<Vec<
     use std::any::TypeId;
 
     if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
+        let data_f64: &[f64] =
+            cast::slice_as(data).expect("TypeId check proved T matches the element type");
         let mut output: Vec<f64> = vec![0.0; data.len()];
         var_into(data_f64, period, &mut output)?;
-        Ok(unsafe { std::mem::transmute(output) })
+        Ok(cast::vec_into(output).expect("TypeId check proved T matches the output element type"))
     } else if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
+        let data_f32: &[f32] =
+            cast::slice_as(data).expect("TypeId check proved T matches the element type");
         let mut output: Vec<f32> = vec![0.0; data.len()];
         var_into(data_f32, period, &mut output)?;
-        Ok(unsafe { std::mem::transmute(output) })
+        Ok(cast::vec_into(output).expect("TypeId check proved T matches the output element type"))
     } else {
         // Generic fallback: safe initialization
         let mut output = vec![T::nan(); data.len()];
@@ -745,15 +750,17 @@ pub fn stddev<T: SeriesElement + 'static>(data: &[T], period: usize) -> Result<V
     use std::any::TypeId;
 
     if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
+        let data_f64: &[f64] =
+            cast::slice_as(data).expect("TypeId check proved T matches the element type");
         let mut output: Vec<f64> = vec![0.0; data.len()];
         stddev_into(data_f64, period, &mut output)?;
-        Ok(unsafe { std::mem::transmute(output) })
+        Ok(cast::vec_into(output).expect("TypeId check proved T matches the output element type"))
     } else if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
+        let data_f32: &[f32] =
+            cast::slice_as(data).expect("TypeId check proved T matches the element type");
         let mut output: Vec<f32> = vec![0.0; data.len()];
         stddev_into(data_f32, period, &mut output)?;
-        Ok(unsafe { std::mem::transmute(output) })
+        Ok(cast::vec_into(output).expect("TypeId check proved T matches the output element type"))
     } else {
         // Generic fallback: safe initialization
         let mut output = vec![T::nan(); data.len()];
@@ -829,7 +836,7 @@ pub fn skew_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) 
     }
 
     let lookback = skew_lookback(period);
-    let period_t = T::from_usize(period).unwrap_or(T::infinity());
+    let period_t = T::from_usize(period).unwrap_or_else(|_| T::infinity());
 
     // Fill lookback with NaN
     for i in 0..lookback {
@@ -907,15 +914,17 @@ pub fn skew<T: SeriesElement + 'static>(data: &[T], period: usize) -> Result<Vec
     use std::any::TypeId;
 
     if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
+        let data_f64: &[f64] =
+            cast::slice_as(data).expect("TypeId check proved T matches the element type");
         let mut output: Vec<f64> = vec![0.0; data.len()];
         skew_into(data_f64, period, &mut output)?;
-        Ok(unsafe { std::mem::transmute(output) })
+        Ok(cast::vec_into(output).expect("TypeId check proved T matches the output element type"))
     } else if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
+        let data_f32: &[f32] =
+            cast::slice_as(data).expect("TypeId check proved T matches the element type");
         let mut output: Vec<f32> = vec![0.0; data.len()];
         skew_into(data_f32, period, &mut output)?;
-        Ok(unsafe { std::mem::transmute(output) })
+        Ok(cast::vec_into(output).expect("TypeId check proved T matches the output element type"))
     } else {
         let mut output = vec![T::nan(); data.len()];
         skew_into(data, period, &mut output)?;
@@ -991,8 +1000,8 @@ pub fn kurt_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) 
     }
 
     let lookback = kurt_lookback(period);
-    let period_t = T::from_usize(period).unwrap_or(T::infinity());
-    let three = T::from_usize(3).unwrap_or(T::infinity());
+    let period_t = T::from_usize(period).unwrap_or_else(|_| T::infinity());
+    let three = T::from_usize(3).unwrap_or_else(|_| T::infinity());
 
     // Fill lookback with NaN
     for i in 0..lookback {
@@ -1070,15 +1079,17 @@ pub fn kurt<T: SeriesElement + 'static>(data: &[T], period: usize) -> Result<Vec
     use std::any::TypeId;
 
     if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
+        let data_f64: &[f64] =
+            cast::slice_as(data).expect("TypeId check proved T matches the element type");
         let mut output: Vec<f64> = vec![0.0; data.len()];
         kurt_into(data_f64, period, &mut output)?;
-        Ok(unsafe { std::mem::transmute(output) })
+        Ok(cast::vec_into(output).expect("TypeId check proved T matches the output element type"))
     } else if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
+        let data_f32: &[f32] =
+            cast::slice_as(data).expect("TypeId check proved T matches the element type");
         let mut output: Vec<f32> = vec![0.0; data.len()];
         kurt_into(data_f32, period, &mut output)?;
-        Ok(unsafe { std::mem::transmute(output) })
+        Ok(cast::vec_into(output).expect("TypeId check proved T matches the output element type"))
     } else {
         let mut output = vec![T::nan(); data.len()];
         kurt_into(data, period, &mut output)?;
@@ -1165,7 +1176,7 @@ pub fn cov_into<T: SeriesElement>(
     }
 
     let lookback = cov_lookback(period);
-    let period_t = T::from_usize(period).unwrap_or(T::infinity());
+    let period_t = T::from_usize(period).unwrap_or_else(|_| T::infinity());
 
     // Fill lookback with NaN
     for i in 0..lookback {
@@ -1226,17 +1237,21 @@ pub fn cov<T: SeriesElement + 'static>(data0: &[T], data1: &[T], period: usize) 
     use std::any::TypeId;
 
     if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let data0_f64: &[f64] = unsafe { std::mem::transmute(data0) };
-        let data1_f64: &[f64] = unsafe { std::mem::transmute(data1) };
+        let data0_f64: &[f64] =
+            cast::slice_as(data0).expect("TypeId check proved T matches the element type");
+        let data1_f64: &[f64] =
+            cast::slice_as(data1).expect("TypeId check proved T matches the element type");
         let mut output: Vec<f64> = vec![0.0; data0.len()];
         cov_into(data0_f64, data1_f64, period, &mut output)?;
-        Ok(unsafe { std::mem::transmute(output) })
+        Ok(cast::vec_into(output).expect("TypeId check proved T matches the output element type"))
     } else if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let data0_f32: &[f32] = unsafe { std::mem::transmute(data0) };
-        let data1_f32: &[f32] = unsafe { std::mem::transmute(data1) };
+        let data0_f32: &[f32] =
+            cast::slice_as(data0).expect("TypeId check proved T matches the element type");
+        let data1_f32: &[f32] =
+            cast::slice_as(data1).expect("TypeId check proved T matches the element type");
         let mut output: Vec<f32> = vec![0.0; data0.len()];
         cov_into(data0_f32, data1_f32, period, &mut output)?;
-        Ok(unsafe { std::mem::transmute(output) })
+        Ok(cast::vec_into(output).expect("TypeId check proved T matches the output element type"))
     } else {
         let mut output = vec![T::nan(); data0.len()];
         cov_into(data0, data1, period, &mut output)?;
@@ -1311,7 +1326,7 @@ pub fn zscore_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]
     }
 
     let lookback = zscore_lookback(period);
-    let period_t = T::from_usize(period).unwrap_or(T::infinity());
+    let period_t = T::from_usize(period).unwrap_or_else(|_| T::infinity());
 
     // Fill lookback with NaN
     for i in 0..lookback {
@@ -1376,15 +1391,17 @@ pub fn zscore<T: SeriesElement + 'static>(data: &[T], period: usize) -> Result<V
     use std::any::TypeId;
 
     if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
+        let data_f64: &[f64] =
+            cast::slice_as(data).expect("TypeId check proved T matches the element type");
         let mut output: Vec<f64> = vec![0.0; data.len()];
         zscore_into(data_f64, period, &mut output)?;
-        Ok(unsafe { std::mem::transmute(output) })
+        Ok(cast::vec_into(output).expect("TypeId check proved T matches the output element type"))
     } else if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
+        let data_f32: &[f32] =
+            cast::slice_as(data).expect("TypeId check proved T matches the element type");
         let mut output: Vec<f32> = vec![0.0; data.len()];
         zscore_into(data_f32, period, &mut output)?;
-        Ok(unsafe { std::mem::transmute(output) })
+        Ok(cast::vec_into(output).expect("TypeId check proved T matches the output element type"))
     } else {
         let mut output = vec![T::nan(); data.len()];
         zscore_into(data, period, &mut output)?;
@@ -1457,7 +1474,7 @@ pub fn mad_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -
     }
 
     let lookback = mad_lookback(period);
-    let period_t = T::from_usize(period).unwrap_or(T::infinity());
+    let period_t = T::from_usize(period).unwrap_or_else(|_| T::infinity());
 
     // Fill lookback with NaN
     for i in 0..lookback {
@@ -1515,15 +1532,17 @@ pub fn mad<T: SeriesElement + 'static>(data: &[T], period: usize) -> Result<Vec<
     use std::any::TypeId;
 
     if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
+        let data_f64: &[f64] =
+            cast::slice_as(data).expect("TypeId check proved T matches the element type");
         let mut output: Vec<f64> = vec![0.0; data.len()];
         mad_into(data_f64, period, &mut output)?;
-        Ok(unsafe { std::mem::transmute(output) })
+        Ok(cast::vec_into(output).expect("TypeId check proved T matches the output element type"))
     } else if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
+        let data_f32: &[f32] =
+            cast::slice_as(data).expect("TypeId check proved T matches the element type");
         let mut output: Vec<f32> = vec![0.0; data.len()];
         mad_into(data_f32, period, &mut output)?;
-        Ok(unsafe { std::mem::transmute(output) })
+        Ok(cast::vec_into(output).expect("TypeId check proved T matches the output element type"))
     } else {
         let mut output = vec![T::nan(); data.len()];
         mad_into(data, period, &mut output)?;
@@ -1597,7 +1616,7 @@ pub fn sem_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -
     }
 
     let lookback = sem_lookback(period);
-    let period_t = T::from_usize(period).unwrap_or(T::infinity());
+    let period_t = T::from_usize(period).unwrap_or_else(|_| T::infinity());
     let period_sqrt = period_t.sqrt();
 
     // Fill lookback with NaN
@@ -1663,15 +1682,17 @@ pub fn sem<T: SeriesElement + 'static>(data: &[T], period: usize) -> Result<Vec<
     use std::any::TypeId;
 
     if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
+        let data_f64: &[f64] =
+            cast::slice_as(data).expect("TypeId check proved T matches the element type");
         let mut output: Vec<f64> = vec![0.0; data.len()];
         sem_into(data_f64, period, &mut output)?;
-        Ok(unsafe { std::mem::transmute(output) })
+        Ok(cast::vec_into(output).expect("TypeId check proved T matches the output element type"))
     } else if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
+        let data_f32: &[f32] =
+            cast::slice_as(data).expect("TypeId check proved T matches the element type");
         let mut output: Vec<f32> = vec![0.0; data.len()];
         sem_into(data_f32, period, &mut output)?;
-        Ok(unsafe { std::mem::transmute(output) })
+        Ok(cast::vec_into(output).expect("TypeId check proved T matches the output element type"))
     } else {
         let mut output = vec![T::nan(); data.len()];
         sem_into(data, period, &mut output)?;
@@ -1747,7 +1768,7 @@ pub fn correl_into<T: SeriesElement>(
     }
 
     let lookback = correl_lookback(period);
-    let period_t = T::from_usize(period).unwrap_or(T::infinity());
+    let period_t = T::from_usize(period).unwrap_or_else(|_| T::infinity());
 
     // Fill lookback with NaN
     for i in 0..lookback {
@@ -1846,17 +1867,21 @@ pub fn correl<T: SeriesElement + 'static>(
     use std::any::TypeId;
 
     if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let data0_f64: &[f64] = unsafe { std::mem::transmute(data0) };
-        let data1_f64: &[f64] = unsafe { std::mem::transmute(data1) };
+        let data0_f64: &[f64] =
+            cast::slice_as(data0).expect("TypeId check proved T matches the element type");
+        let data1_f64: &[f64] =
+            cast::slice_as(data1).expect("TypeId check proved T matches the element type");
         let mut output: Vec<f64> = vec![0.0; data0.len()];
         correl_into(data0_f64, data1_f64, period, &mut output)?;
-        Ok(unsafe { std::mem::transmute(output) })
+        Ok(cast::vec_into(output).expect("TypeId check proved T matches the output element type"))
     } else if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let data0_f32: &[f32] = unsafe { std::mem::transmute(data0) };
-        let data1_f32: &[f32] = unsafe { std::mem::transmute(data1) };
+        let data0_f32: &[f32] =
+            cast::slice_as(data0).expect("TypeId check proved T matches the element type");
+        let data1_f32: &[f32] =
+            cast::slice_as(data1).expect("TypeId check proved T matches the element type");
         let mut output: Vec<f32> = vec![0.0; data0.len()];
         correl_into(data0_f32, data1_f32, period, &mut output)?;
-        Ok(unsafe { std::mem::transmute(output) })
+        Ok(cast::vec_into(output).expect("TypeId check proved T matches the output element type"))
     } else {
         let mut output = vec![T::nan(); data0.len()];
         correl_into(data0, data1, period, &mut output)?;
@@ -1934,7 +1959,7 @@ pub fn beta_into<T: SeriesElement>(
     }
 
     let lookback = beta_lookback(period);
-    let period_t = T::from_usize(period).unwrap_or(T::infinity());
+    let period_t = T::from_usize(period).unwrap_or_else(|_| T::infinity());
 
     // Fill lookback with NaN
     for i in 0..lookback {
@@ -2019,17 +2044,21 @@ pub fn beta<T: SeriesElement + 'static>(data0: &[T], data1: &[T], period: usize)
     use std::any::TypeId;
 
     if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let data0_f64: &[f64] = unsafe { std::mem::transmute(data0) };
-        let data1_f64: &[f64] = unsafe { std::mem::transmute(data1) };
+        let data0_f64: &[f64] =
+            cast::slice_as(data0).expect("TypeId check proved T matches the element type");
+        let data1_f64: &[f64] =
+            cast::slice_as(data1).expect("TypeId check proved T matches the element type");
         let mut output: Vec<f64> = vec![0.0; data0.len()];
         beta_into(data0_f64, data1_f64, period, &mut output)?;
-        Ok(unsafe { std::mem::transmute(output) })
+        Ok(cast::vec_into(output).expect("TypeId check proved T matches the output element type"))
     } else if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let data0_f32: &[f32] = unsafe { std::mem::transmute(data0) };
-        let data1_f32: &[f32] = unsafe { std::mem::transmute(data1) };
+        let data0_f32: &[f32] =
+            cast::slice_as(data0).expect("TypeId check proved T matches the element type");
+        let data1_f32: &[f32] =
+            cast::slice_as(data1).expect("TypeId check proved T matches the element type");
         let mut output: Vec<f32> = vec![0.0; data0.len()];
         beta_into(data0_f32, data1_f32, period, &mut output)?;
-        Ok(unsafe { std::mem::transmute(output) })
+        Ok(cast::vec_into(output).expect("TypeId check proved T matches the output element type"))
     } else {
         let mut output = vec![T::nan(); data0.len()];
         beta_into(data0, data1, period, &mut output)?;
@@ -2094,7 +2123,7 @@ pub fn linearreg_into<T: SeriesElement>(data: &[T], period: usize, output: &mut 
     }
 
     let lookback = linearreg_lookback(period);
-    let period_t = T::from_usize(period).unwrap_or(T::infinity());
+    let period_t = T::from_usize(period).unwrap_or_else(|_| T::infinity());
 
     // Fill lookback with NaN
     for i in 0..lookback {
@@ -2105,13 +2134,13 @@ pub fn linearreg_into<T: SeriesElement>(data: &[T], period: usize, output: &mut 
     let mut x_sum = T::zero();
     let mut x_sq_sum = T::zero();
     for i in 0..period {
-        let x = T::from_usize(i).unwrap_or(T::infinity());
+        let x = T::from_usize(i).unwrap_or_else(|_| T::infinity());
         x_sum = x_sum + x;
         x_sq_sum = x_sq_sum + x * x;
     }
 
     // Precompute constants
-    let x_end = T::from_usize(period - 1).unwrap_or(T::infinity());
+    let x_end = T::from_usize(period - 1).unwrap_or_else(|_| T::infinity());
     let x_sum_sq = x_sum * x_sum;
     let denominator_const = period_t * x_sq_sum - x_sum_sq;
 
@@ -2127,7 +2156,7 @@ pub fn linearreg_into<T: SeriesElement>(data: &[T], period: usize, output: &mut 
     let mut y_sum = T::zero();
     let mut xy_sum = T::zero();
     for j in 0..period {
-        let x = T::from_usize(j).unwrap_or(T::infinity());
+        let x = T::from_usize(j).unwrap_or_else(|_| T::infinity());
         y_sum = y_sum + data[j];
         xy_sum = xy_sum + x * data[j];
     }
@@ -2174,15 +2203,17 @@ pub fn linearreg<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> 
     use std::any::TypeId;
 
     if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
+        let data_f64: &[f64] =
+            cast::slice_as(data).expect("TypeId check proved T matches the element type");
         let mut output: Vec<f64> = vec![0.0; data.len()];
         linearreg_into(data_f64, period, &mut output)?;
-        Ok(unsafe { std::mem::transmute(output) })
+        Ok(cast::vec_into(output).expect("TypeId check proved T matches the output element type"))
     } else if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
+        let data_f32: &[f32] =
+            cast::slice_as(data).expect("TypeId check proved T matches the element type");
         let mut output: Vec<f32> = vec![0.0; data.len()];
         linearreg_into(data_f32, period, &mut output)?;
-        Ok(unsafe { std::mem::transmute(output) })
+        Ok(cast::vec_into(output).expect("TypeId check proved T matches the output element type"))
     } else {
         // Generic fallback: initialize to NaN
         let mut output = vec![T::nan(); data.len()];
@@ -2254,7 +2285,7 @@ pub fn linearreg_slope_into<T: SeriesElement>(
     }
 
     let lookback = linearreg_slope_lookback(period);
-    let period_t = T::from_usize(period).unwrap_or(T::infinity());
+    let period_t = T::from_usize(period).unwrap_or_else(|_| T::infinity());
 
     // Fill lookback with NaN
     for i in 0..lookback {
@@ -2265,7 +2296,7 @@ pub fn linearreg_slope_into<T: SeriesElement>(
     let mut x_sum = T::zero();
     let mut x_sq_sum = T::zero();
     for i in 0..period {
-        let x = T::from_usize(i).unwrap_or(T::infinity());
+        let x = T::from_usize(i).unwrap_or_else(|_| T::infinity());
         x_sum = x_sum + x;
         x_sq_sum = x_sq_sum + x * x;
     }
@@ -2286,7 +2317,7 @@ pub fn linearreg_slope_into<T: SeriesElement>(
     let mut y_sum = T::zero();
     let mut xy_sum = T::zero();
     for j in 0..period {
-        let x = T::from_usize(j).unwrap_or(T::infinity());
+        let x = T::from_usize(j).unwrap_or_else(|_| T::infinity());
         y_sum = y_sum + data[j];
         xy_sum = xy_sum + x * data[j];
     }
@@ -2329,15 +2360,17 @@ pub fn linearreg_slope<T: SeriesElement>(data: &[T], period: usize) -> Result<Ve
     use std::any::TypeId;
 
     if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
+        let data_f64: &[f64] =
+            cast::slice_as(data).expect("TypeId check proved T matches the element type");
         let mut output: Vec<f64> = vec![0.0; data.len()];
         linearreg_slope_into(data_f64, period, &mut output)?;
-        Ok(unsafe { std::mem::transmute(output) })
+        Ok(cast::vec_into(output).expect("TypeId check proved T matches the output element type"))
     } else if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
+        let data_f32: &[f32] =
+            cast::slice_as(data).expect("TypeId check proved T matches the element type");
         let mut output: Vec<f32> = vec![0.0; data.len()];
         linearreg_slope_into(data_f32, period, &mut output)?;
-        Ok(unsafe { std::mem::transmute(output) })
+        Ok(cast::vec_into(output).expect("TypeId check proved T matches the output element type"))
     } else {
         // Generic fallback: safe initialization
         let mut output = vec![T::nan(); data.len()];
@@ -2409,7 +2442,7 @@ pub fn linearreg_intercept_into<T: SeriesElement>(
     }
 
     let lookback = linearreg_intercept_lookback(period);
-    let period_t = T::from_usize(period).unwrap_or(T::infinity());
+    let period_t = T::from_usize(period).unwrap_or_else(|_| T::infinity());
 
     // Fill lookback with NaN
     for i in 0..lookback {
@@ -2420,7 +2453,7 @@ pub fn linearreg_intercept_into<T: SeriesElement>(
     let mut x_sum = T::zero();
     let mut x_sq_sum = T::zero();
     for i in 0..period {
-        let x = T::from_usize(i).unwrap_or(T::infinity());
+        let x = T::from_usize(i).unwrap_or_else(|_| T::infinity());
         x_sum = x_sum + x;
         x_sq_sum = x_sq_sum + x * x;
     }
@@ -2441,7 +2474,7 @@ pub fn linearreg_intercept_into<T: SeriesElement>(
     let mut y_sum = T::zero();
     let mut xy_sum = T::zero();
     for j in 0..period {
-        let x = T::from_usize(j).unwrap_or(T::infinity());
+        let x = T::from_usize(j).unwrap_or_else(|_| T::infinity());
         y_sum = y_sum + data[j];
         xy_sum = xy_sum + x * data[j];
     }
@@ -2486,15 +2519,17 @@ pub fn linearreg_intercept<T: SeriesElement>(data: &[T], period: usize) -> Resul
     use std::any::TypeId;
 
     if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
+        let data_f64: &[f64] =
+            cast::slice_as(data).expect("TypeId check proved T matches the element type");
         let mut output: Vec<f64> = vec![0.0; data.len()];
         linearreg_intercept_into(data_f64, period, &mut output)?;
-        Ok(unsafe { std::mem::transmute(output) })
+        Ok(cast::vec_into(output).expect("TypeId check proved T matches the output element type"))
     } else if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
+        let data_f32: &[f32] =
+            cast::slice_as(data).expect("TypeId check proved T matches the element type");
         let mut output: Vec<f32> = vec![0.0; data.len()];
         linearreg_intercept_into(data_f32, period, &mut output)?;
-        Ok(unsafe { std::mem::transmute(output) })
+        Ok(cast::vec_into(output).expect("TypeId check proved T matches the output element type"))
     } else {
         // Generic fallback: safe initialization
         let mut output = vec![T::nan(); data.len()];
@@ -2566,7 +2601,7 @@ pub fn linearreg_angle_into<T: SeriesElement>(
     }
 
     let lookback = linearreg_angle_lookback(period);
-    let period_t = T::from_usize(period).unwrap_or(T::infinity());
+    let period_t = T::from_usize(period).unwrap_or_else(|_| T::infinity());
     let degrees_per_radian = T::from_f64(180.0 / std::f64::consts::PI)?;
 
     // Fill lookback with NaN
@@ -2578,7 +2613,7 @@ pub fn linearreg_angle_into<T: SeriesElement>(
     let mut x_sum = T::zero();
     let mut x_sq_sum = T::zero();
     for i in 0..period {
-        let x = T::from_usize(i).unwrap_or(T::infinity());
+        let x = T::from_usize(i).unwrap_or_else(|_| T::infinity());
         x_sum = x_sum + x;
         x_sq_sum = x_sq_sum + x * x;
     }
@@ -2599,7 +2634,7 @@ pub fn linearreg_angle_into<T: SeriesElement>(
     let mut y_sum = T::zero();
     let mut xy_sum = T::zero();
     for j in 0..period {
-        let x = T::from_usize(j).unwrap_or(T::infinity());
+        let x = T::from_usize(j).unwrap_or_else(|_| T::infinity());
         y_sum = y_sum + data[j];
         xy_sum = xy_sum + x * data[j];
     }
@@ -2644,15 +2679,17 @@ pub fn linearreg_angle<T: SeriesElement>(data: &[T], period: usize) -> Result<Ve
     use std::any::TypeId;
 
     if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
+        let data_f64: &[f64] =
+            cast::slice_as(data).expect("TypeId check proved T matches the element type");
         let mut output: Vec<f64> = vec![0.0; data.len()];
         linearreg_angle_into(data_f64, period, &mut output)?;
-        Ok(unsafe { std::mem::transmute(output) })
+        Ok(cast::vec_into(output).expect("TypeId check proved T matches the output element type"))
     } else if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
+        let data_f32: &[f32] =
+            cast::slice_as(data).expect("TypeId check proved T matches the element type");
         let mut output: Vec<f32> = vec![0.0; data.len()];
         linearreg_angle_into(data_f32, period, &mut output)?;
-        Ok(unsafe { std::mem::transmute(output) })
+        Ok(cast::vec_into(output).expect("TypeId check proved T matches the output element type"))
     } else {
         // Generic fallback: safe initialization
         let mut output = vec![T::nan(); data.len()];
@@ -2720,7 +2757,7 @@ pub fn tsf_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -
     }
 
     let lookback = tsf_lookback(period);
-    let period_t = T::from_usize(period).unwrap_or(T::infinity());
+    let period_t = T::from_usize(period).unwrap_or_else(|_| T::infinity());
 
     // Fill lookback with NaN
     for i in 0..lookback {
@@ -2731,13 +2768,13 @@ pub fn tsf_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -
     let mut x_sum = T::zero();
     let mut x_sq_sum = T::zero();
     for i in 0..period {
-        let x = T::from_usize(i).unwrap_or(T::infinity());
+        let x = T::from_usize(i).unwrap_or_else(|_| T::infinity());
         x_sum = x_sum + x;
         x_sq_sum = x_sq_sum + x * x;
     }
 
     // Precompute constants
-    let x_forecast = T::from_usize(period).unwrap_or(T::infinity()); // Forecast one period ahead (x = period)
+    let x_forecast = T::from_usize(period).unwrap_or_else(|_| T::infinity()); // Forecast one period ahead (x = period)
     let x_sum_sq = x_sum * x_sum;
     let denominator_const = period_t * x_sq_sum - x_sum_sq;
 
@@ -2753,7 +2790,7 @@ pub fn tsf_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -
     let mut y_sum = T::zero();
     let mut xy_sum = T::zero();
     for j in 0..period {
-        let x = T::from_usize(j).unwrap_or(T::infinity());
+        let x = T::from_usize(j).unwrap_or_else(|_| T::infinity());
         y_sum = y_sum + data[j];
         xy_sum = xy_sum + x * data[j];
     }
@@ -2800,15 +2837,17 @@ pub fn tsf<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
     use std::any::TypeId;
 
     if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
+        let data_f64: &[f64] =
+            cast::slice_as(data).expect("TypeId check proved T matches the element type");
         let mut output: Vec<f64> = vec![0.0; data.len()];
         tsf_into(data_f64, period, &mut output)?;
-        Ok(unsafe { std::mem::transmute(output) })
+        Ok(cast::vec_into(output).expect("TypeId check proved T matches the output element type"))
     } else if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
+        let data_f32: &[f32] =
+            cast::slice_as(data).expect("TypeId check proved T matches the element type");
         let mut output: Vec<f32> = vec![0.0; data.len()];
         tsf_into(data_f32, period, &mut output)?;
-        Ok(unsafe { std::mem::transmute(output) })
+        Ok(cast::vec_into(output).expect("TypeId check proved T matches the output element type"))
     } else {
         // Generic fallback: safe initialization
         let mut output = vec![T::nan(); data.len()];

@@ -220,29 +220,27 @@ pub fn trix_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) 
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 pub fn trix<T: SeriesElement + 'static>(data: &[T], period: usize) -> Result<Vec<T>> {
-    use std::any::TypeId;
-
-    if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
+    if let Some(data_f64) = crate::cast::slice_as::<T, f64>(data) {
         let mut output: Vec<f64> = vec![0.0; data.len()];
         trix_into(data_f64, period, &mut output)?;
-        Ok(unsafe { std::mem::transmute(output) })
-    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
+        if let Ok(output) = crate::cast::vec_into(output) {
+            return Ok(output);
+        }
+    } else if let Some(data_f32) = crate::cast::slice_as::<T, f32>(data) {
         let mut output: Vec<f32> = vec![0.0; data.len()];
         trix_into(data_f32, period, &mut output)?;
-        Ok(unsafe { std::mem::transmute(output) })
-    } else {
-        // Generic fallback: safe initialization
-        let mut output = vec![T::nan(); data.len()];
-        trix_into(data, period, &mut output)?;
-        Ok(output)
+        if let Ok(output) = crate::cast::vec_into(output) {
+            return Ok(output);
+        }
     }
+    // Generic fallback: safe initialization
+    let mut output = vec![T::nan(); data.len()];
+    trix_into(data, period, &mut output)?;
+    Ok(output)
 }
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::all, clippy::pedantic, clippy::nursery)]
     use super::*;
     use half::f16;
 

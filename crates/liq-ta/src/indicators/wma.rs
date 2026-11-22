@@ -45,9 +45,9 @@
 //! assert!((result[2] - 2.333333).abs() < 1e-5);
 //! ```
 
+use crate::cast;
 use crate::error::{Error, Result};
 use crate::traits::SeriesElement;
-use std::any::TypeId;
 
 /// Check if a value is invalid (NaN or Infinity).
 /// Both NaN and Infinity must propagate through indicators per IEEE 754 policy.
@@ -203,7 +203,7 @@ fn wma_f64_optimistic(data: &[f64], period: usize, output: &mut [f64]) {
     let mut has_invalid = false;
 
     for i in 0..period {
-        let val = unsafe { *data.get_unchecked(i) };
+        let val = data[i];
         if !val.is_finite() {
             has_invalid = true;
             break;
@@ -218,21 +218,17 @@ fn wma_f64_optimistic(data: &[f64], period: usize, output: &mut [f64]) {
         return;
     }
 
-    unsafe {
-        *output.get_unchecked_mut(period - 1) = weighted_sum * inv_weight_sum;
-    }
+    output[period - 1] = weighted_sum * inv_weight_sum;
 
     // Optimistic fast path
     for i in period..n {
-        let new_val = unsafe { *data.get_unchecked(i) };
+        let new_val = data[i];
 
         if new_val.is_finite() {
-            let old_val = unsafe { *data.get_unchecked(i - period) };
+            let old_val = data[i - period];
             weighted_sum = weighted_sum - simple_sum + new_val * period_f64;
             simple_sum = simple_sum - old_val + new_val;
-            unsafe {
-                *output.get_unchecked_mut(i) = weighted_sum * inv_weight_sum;
-            }
+            output[i] = weighted_sum * inv_weight_sum;
         } else {
             // Hit invalid - switch to tracking
             wma_f64_with_tracking(data, period, output);
@@ -245,6 +241,7 @@ fn wma_f64_optimistic(data: &[f64], period: usize, output: &mut [f64]) {
 #[inline]
 fn wma_f32_optimistic(data: &[f32], period: usize, output: &mut [f32]) {
     let n = data.len();
+    let output = &mut output[..n];
     let weight_sum = (period * (period + 1) / 2) as f64;
     let inv_weight_sum = 1.0 / weight_sum;
     let period_f64 = period as f64;
@@ -256,7 +253,7 @@ fn wma_f32_optimistic(data: &[f32], period: usize, output: &mut [f32]) {
     let mut has_invalid = false;
 
     for i in 0..period {
-        let val = unsafe { *data.get_unchecked(i) };
+        let val = data[i];
         if !val.is_finite() {
             has_invalid = true;
             break;
@@ -271,20 +268,16 @@ fn wma_f32_optimistic(data: &[f32], period: usize, output: &mut [f32]) {
         return;
     }
 
-    unsafe {
-        *output.get_unchecked_mut(period - 1) = (weighted_sum * inv_weight_sum) as f32;
-    }
+    output[period - 1] = (weighted_sum * inv_weight_sum) as f32;
 
     for i in period..n {
-        let new_val = unsafe { *data.get_unchecked(i) };
+        let new_val = data[i];
 
         if new_val.is_finite() {
-            let old_val = unsafe { *data.get_unchecked(i - period) };
+            let old_val = data[i - period];
             weighted_sum = weighted_sum - simple_sum + new_val as f64 * period_f64;
             simple_sum = simple_sum - old_val as f64 + new_val as f64;
-            unsafe {
-                *output.get_unchecked_mut(i) = (weighted_sum * inv_weight_sum) as f32;
-            }
+            output[i] = (weighted_sum * inv_weight_sum) as f32;
         } else {
             wma_f32_with_tracking(data, period, output);
             return;
@@ -383,35 +376,28 @@ pub fn wma<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
 
     let n = data.len();
 
+    let mut result = vec![T::nan(); n];
+
     // Optimized path for f64: optimistic fast path
-    if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let data_f64: &[f64] =
-            unsafe { std::slice::from_raw_parts(data.as_ptr() as *const f64, n) };
-
-        let mut result_vec: Vec<f64> = vec![0.0; n];
-        let result_f64 = result_vec.as_mut_slice();
-
+    if let (Some(data_f64), Some(result_f64)) = (
+        cast::slice_as::<T, f64>(data),
+        cast::slice_as_mut::<T, f64>(&mut result),
+    ) {
         wma_f64_optimistic(data_f64, period, result_f64);
-
-        return Ok(unsafe { std::mem::transmute(result_vec) });
+        return Ok(result);
     }
 
     // Optimized path for f32: f64 accumulator
-    if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let data_f32: &[f32] =
-            unsafe { std::slice::from_raw_parts(data.as_ptr() as *const f32, n) };
-
-        let mut result_vec: Vec<f32> = vec![0.0; n];
-        let result_f32 = result_vec.as_mut_slice();
-
+    if let (Some(data_f32), Some(result_f32)) = (
+        cast::slice_as::<T, f32>(data),
+        cast::slice_as_mut::<T, f32>(&mut result),
+    ) {
         wma_f32_optimistic(data_f32, period, result_f32);
-
-        return Ok(unsafe { std::mem::transmute(result_vec) });
+        return Ok(result);
     }
 
     // Generic fallback for other types
     let weight_sum = T::from_usize(period * (period + 1) / 2)?;
-    let mut result = vec![T::nan(); n];
 
     let mut weighted_sum = T::zero();
     let mut simple_sum = T::zero();
@@ -451,7 +437,7 @@ pub fn wma<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
                     weighted_sum = T::zero();
                     simple_sum = T::zero();
                     for (j, &val) in data[i - period + 1..=i].iter().enumerate() {
-                        let weight = T::from_usize(j + 1).unwrap();
+                        let weight = T::from_usize(j + 1)?;
                         weighted_sum = weighted_sum + val * weight;
                         simple_sum = simple_sum + val;
                     }
@@ -523,28 +509,24 @@ pub fn wma_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -
         });
     }
 
+    let n = data.len();
+
     // Optimized path for f64
-    if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let data_f64: &[f64] =
-            unsafe { std::slice::from_raw_parts(data.as_ptr() as *const f64, data.len()) };
-        let output_f64: &mut [f64] =
-            unsafe { std::slice::from_raw_parts_mut(output.as_mut_ptr() as *mut f64, data.len()) };
-
+    if let (Some(data_f64), Some(output_f64)) = (
+        cast::slice_as::<T, f64>(data),
+        cast::slice_as_mut::<T, f64>(&mut output[..n]),
+    ) {
         wma_f64_optimistic(data_f64, period, output_f64);
-
-        return Ok(data.len() - period + 1);
+        return Ok(n - period + 1);
     }
 
     // Optimized path for f32
-    if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let data_f32: &[f32] =
-            unsafe { std::slice::from_raw_parts(data.as_ptr() as *const f32, data.len()) };
-        let output_f32: &mut [f32] =
-            unsafe { std::slice::from_raw_parts_mut(output.as_mut_ptr() as *mut f32, data.len()) };
-
+    if let (Some(data_f32), Some(output_f32)) = (
+        cast::slice_as::<T, f32>(data),
+        cast::slice_as_mut::<T, f32>(&mut output[..n]),
+    ) {
         wma_f32_optimistic(data_f32, period, output_f32);
-
-        return Ok(data.len() - period + 1);
+        return Ok(n - period + 1);
     }
 
     // Generic fallback for other types
@@ -594,7 +576,7 @@ pub fn wma_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -
                     weighted_sum = T::zero();
                     simple_sum = T::zero();
                     for (j, &val) in data[i - period + 1..=i].iter().enumerate() {
-                        let weight = T::from_usize(j + 1).unwrap();
+                        let weight = T::from_usize(j + 1)?;
                         weighted_sum = weighted_sum + val * weight;
                         simple_sum = simple_sum + val;
                     }
@@ -617,7 +599,6 @@ pub fn wma_into<T: SeriesElement>(data: &[T], period: usize, output: &mut [T]) -
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::all, clippy::pedantic, clippy::nursery)]
     use super::*;
     use num_traits::Float;
 
@@ -877,7 +858,7 @@ mod tests {
         let valid_count = wma_into(&data, 3, &mut output).unwrap();
 
         assert_eq!(valid_count, 4);
-        assert!(output[2].is_nan() == false);
+        assert!(!output[2].is_nan());
         assert!(output[3].is_nan());
         assert!(output[4].is_nan());
     }

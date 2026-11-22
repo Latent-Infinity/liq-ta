@@ -165,7 +165,6 @@ pub fn bop<T: SeriesElement>(open: &[T], high: &[T], low: &[T], close: &[T]) -> 
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::all, clippy::pedantic, clippy::nursery)]
     use super::*;
 
     #[test]

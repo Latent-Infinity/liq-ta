@@ -5,7 +5,10 @@
 //!
 //! This suite verifies that all indicators meet the Error Tolerance Specification
 //! defined in docs/numeric-policy-plan.md.
-#![allow(clippy::type_complexity)]
+#![expect(
+    clippy::type_complexity,
+    reason = "tuple-typed test tables are clearer inline than named aliases"
+)]
 
 use liq_ta::indicators::{
     bollinger, cci, mfi, obv, roc, rocp, rocr, rocr100, rsi, sma, stochastic, var, vwap, williams_r,
@@ -18,7 +21,7 @@ use rand_chacha::ChaCha8Rng;
 const SEED: u64 = 0xFA57_7A00;
 
 /// Test sizes
-#[allow(dead_code)]
+#[expect(dead_code, reason = "shared test helper not used by every test binary")]
 const SMALL_SIZE: usize = 1_000;
 const LARGE_SIZE: usize = 10_000;
 
@@ -92,7 +95,7 @@ fn generate_near_constant_f32(size: usize, base: f64, noise: f64) -> Vec<f32> {
 }
 
 /// Generate extreme values data
-#[allow(dead_code)]
+#[expect(dead_code, reason = "shared test helper not used by every test binary")]
 fn generate_extreme_values(size: usize) -> Vec<f64> {
     let mut rng = ChaCha8Rng::seed_from_u64(SEED + 2);
     let extremes = [1e6, 1e-6, 1e4, 1e-4, 1e2, 1e-2, 100.0];
@@ -101,7 +104,7 @@ fn generate_extreme_values(size: usize) -> Vec<f64> {
         .collect()
 }
 
-#[allow(dead_code)]
+#[expect(dead_code, reason = "shared test helper not used by every test binary")]
 fn generate_extreme_values_f32(size: usize) -> Vec<f32> {
     generate_extreme_values(size)
         .iter()

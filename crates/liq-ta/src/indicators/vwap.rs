@@ -513,7 +513,6 @@ fn compute_vwap_core_into_f64<T: SeriesElement>(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::all, clippy::pedantic, clippy::nursery)]
     use super::*;
     use num_traits::Float;
 

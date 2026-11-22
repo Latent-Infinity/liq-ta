@@ -408,6 +408,8 @@ The tax is negligible when:
 
 **Optimization: Uninitialized Allocation for f64/f32**
 
+> **Superseded (2026-11-21):** liq-ta no longer uses this pattern. The crate's only unsafe code is `crate::cast`, whose `TypeId`-checked `slice_as`/`slice_as_mut`/`vec_into` replace the `transmute` and `set_len` shown below. Outputs are always initialized, and unchecked indexing has been removed (Rust standards v3.6, `RPS-236`/`RPS-251`). The example is kept as history.
+
 ```rust
 pub fn indicator<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
     use std::any::TypeId;
@@ -891,7 +893,7 @@ Why ring buffer matters for WMA:
 
 **Micro-optimizations that worked:**
 - Pre-compute `inv_period = 1.0 / period` (multiply vs divide)
-- Use `get_unchecked` in hot loops after validation
+- ~~Use `get_unchecked` in hot loops after validation~~ (retired 2026-11-21: narrowed slices and `zip` instead, `RPS-097`/`RPS-099`)
 - Fill lookback once (not in initialization + kernel)
 - No `saturating_sub` in hot loops (use plain arithmetic when safe)
 - No old_value check in optimistic path (guaranteed finite until first invalid)

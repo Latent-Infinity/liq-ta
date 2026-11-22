@@ -51,6 +51,7 @@
 //! let wilder = ema_wilder(&data, 3).unwrap();
 //! ```
 
+use crate::cast;
 use crate::error::{Error, Result};
 use crate::traits::SeriesElement;
 
@@ -291,29 +292,28 @@ pub fn ema_with_alpha<T: SeriesElement + 'static>(
     // Validate inputs
     crate::traits::validate_indicator_input(data, period, "ema")?;
 
-    use std::any::TypeId;
-
     // Dispatch to specialized kernels for f64/f32
-    if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
-        let alpha_f64: f64 = unsafe { std::mem::transmute_copy(&alpha) };
-
+    let alpha = std::slice::from_ref(&alpha);
+    if let (Some(data_f64), Some(&[alpha_f64])) = (
+        cast::slice_as::<T, f64>(data),
+        cast::slice_as::<T, f64>(alpha),
+    ) {
         let mut result: Vec<f64> = vec![0.0; data.len()];
 
         ema_core_f64(data_f64, period, alpha_f64, &mut result);
-        Ok(unsafe { std::mem::transmute(result) })
-    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
-        let alpha_f32: f32 = unsafe { std::mem::transmute_copy(&alpha) };
-
+        Ok(cast::vec_into(result).expect("T is f64"))
+    } else if let (Some(data_f32), Some(&[alpha_f32])) = (
+        cast::slice_as::<T, f32>(data),
+        cast::slice_as::<T, f32>(alpha),
+    ) {
         let mut result: Vec<f32> = vec![0.0; data.len()];
 
         ema_core_f32(data_f32, period, alpha_f32, &mut result);
-        Ok(unsafe { std::mem::transmute(result) })
+        Ok(cast::vec_into(result).expect("T is f32"))
     } else {
         // Generic fallback: safe initialization
         let mut result = vec![T::nan(); data.len()];
-        compute_ema_core(data, period, alpha, &mut result);
+        compute_ema_core(data, period, alpha[0], &mut result);
         Ok(result)
     }
 }
@@ -357,24 +357,23 @@ pub fn ema_with_alpha_into<T: SeriesElement + 'static>(
         });
     }
 
-    use std::any::TypeId;
-
     // Dispatch to specialized kernels for f64/f32 (kernels initialize prefix)
-    if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
-        let alpha_f64: f64 = unsafe { std::mem::transmute_copy(&alpha) };
-        let output_f64: &mut [f64] = unsafe { std::mem::transmute(output) };
-
+    let alpha = std::slice::from_ref(&alpha);
+    if let (Some(data_f64), Some(&[alpha_f64])) = (
+        cast::slice_as::<T, f64>(data),
+        cast::slice_as::<T, f64>(alpha),
+    ) {
+        let output_f64 = cast::slice_as_mut::<T, f64>(output).expect("T is f64");
         ema_core_f64(data_f64, period, alpha_f64, output_f64);
-    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
-        let alpha_f32: f32 = unsafe { std::mem::transmute_copy(&alpha) };
-        let output_f32: &mut [f32] = unsafe { std::mem::transmute(output) };
-
+    } else if let (Some(data_f32), Some(&[alpha_f32])) = (
+        cast::slice_as::<T, f32>(data),
+        cast::slice_as::<T, f32>(alpha),
+    ) {
+        let output_f32 = cast::slice_as_mut::<T, f32>(output).expect("T is f32");
         ema_core_f32(data_f32, period, alpha_f32, output_f32);
     } else {
         // Generic fallback: compute_ema_core handles NaN prefix fill
-        compute_ema_core(data, period, alpha, output);
+        compute_ema_core(data, period, alpha[0], output);
     }
 
     // Return count of valid (non-NaN) values
@@ -440,46 +439,6 @@ fn handle_invalid_f32(output: &mut [f32], i: usize) {
     output[i + 1..].fill(f32::NAN);
 }
 
-/// f64-specialized EMA kernel WITHOUT validation checks (finite data assumed).
-///
-/// UNSAFE: Assumes all input data is finite. Use only when data is pre-validated.
-/// This matches TA-Lib's behavior (no per-element checks) and shows ~3% performance gain.
-///
-/// Uses difference form like TA-Lib: ema = (x - ema) * alpha + ema
-/// This has lower critical path latency than standard form.
-#[inline]
-#[allow(dead_code)]
-fn ema_core_f64_unchecked(data: &[f64], period: usize, alpha: f64, output: &mut [f64]) {
-    let n = data.len();
-
-    if period == 1 {
-        output[..n].copy_from_slice(data);
-        return;
-    }
-
-    output[..period - 1].fill(f64::NAN);
-
-    let mut sum = 0.0_f64;
-    for i in 0..period {
-        sum += unsafe { *data.get_unchecked(i) };
-    }
-
-    let mut ema = sum / (period as f64);
-    output[period - 1] = ema;
-
-    // Hot loop: NO CHECKS - matches TA-Lib behavior
-    // Uses difference form for minimal critical path latency
-    let mut i = period;
-    while i < n {
-        let x = unsafe { *data.get_unchecked(i) };
-        ema = (x - ema).mul_add(alpha, ema);
-        unsafe {
-            *output.get_unchecked_mut(i) = ema;
-        }
-        i += 1;
-    }
-}
-
 /// f64-specialized EMA kernel using difference form for minimal critical path latency.
 ///
 /// Uses `ema = (x - ema).mul_add(alpha, ema)` which reduces critical path
@@ -500,8 +459,7 @@ fn ema_core_f64(data: &[f64], period: usize, alpha: f64, output: &mut [f64]) {
 
     // Compute SMA seed
     let mut sum = 0.0_f64;
-    for i in 0..period {
-        let x = unsafe { *data.get_unchecked(i) };
+    for &x in &data[..period] {
         if !x.is_finite() {
             output[period - 1] = f64::NAN;
             output[period..].fill(f64::NAN);
@@ -514,9 +472,9 @@ fn ema_core_f64(data: &[f64], period: usize, alpha: f64, output: &mut [f64]) {
     output[period - 1] = ema;
 
     // Hot loop: difference form for minimal critical path latency
-    let mut i = period;
-    while i < n {
-        let x = unsafe { *data.get_unchecked(i) };
+    let output = &mut output[..n];
+    for i in period..n {
+        let x = data[i];
 
         // Cold path: invalid input makes EMA sticky NaN
         // Note: !ema.is_finite() removed - ema is finite by construction after seed
@@ -528,10 +486,7 @@ fn ema_core_f64(data: &[f64], period: usize, alpha: f64, output: &mut [f64]) {
         // Hot path: difference form (section 5.3)
         // Critical path: SUB(x - ema) → FMA((x-ema)*alpha + ema) = ~5-6 cycles
         ema = (x - ema).mul_add(alpha, ema);
-        unsafe {
-            *output.get_unchecked_mut(i) = ema;
-        }
-        i += 1;
+        output[i] = ema;
     }
 }
 
@@ -548,8 +503,7 @@ fn ema_core_f32(data: &[f32], period: usize, alpha: f32, output: &mut [f32]) {
     output[..period - 1].fill(f32::NAN);
 
     let mut sum = 0.0_f32;
-    for i in 0..period {
-        let x = unsafe { *data.get_unchecked(i) };
+    for &x in &data[..period] {
         if !x.is_finite() {
             output[period - 1] = f32::NAN;
             output[period..].fill(f32::NAN);
@@ -561,9 +515,9 @@ fn ema_core_f32(data: &[f32], period: usize, alpha: f32, output: &mut [f32]) {
     let mut ema = sum / (period as f32);
     output[period - 1] = ema;
 
-    let mut i = period;
-    while i < n {
-        let x = unsafe { *data.get_unchecked(i) };
+    let output = &mut output[..n];
+    for i in period..n {
+        let x = data[i];
 
         if !x.is_finite() {
             handle_invalid_f32(output, i);
@@ -572,10 +526,7 @@ fn ema_core_f32(data: &[f32], period: usize, alpha: f32, output: &mut [f32]) {
 
         // Hot path: difference form (section 5.3)
         ema = (x - ema).mul_add(alpha, ema);
-        unsafe {
-            *output.get_unchecked_mut(i) = ema;
-        }
-        i += 1;
+        output[i] = ema;
     }
 }
 
@@ -591,7 +542,8 @@ fn compute_ema_core<T: SeriesElement>(data: &[T], period: usize, alpha: T, outpu
     // Always initialize NaN prefix
     output[..period - 1].fill(T::nan());
 
-    let period_t = T::from_usize(period).unwrap();
+    let period_t =
+        T::from_usize(period).expect("callers validate period, which every float type represents");
 
     // Compute SMA seed
     let mut sum = T::zero();
@@ -662,7 +614,6 @@ pub const fn standard_to_wilder_period(standard_period: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::all, clippy::pedantic, clippy::nursery)]
     use super::*;
     use num_traits::Float;
 
@@ -1296,11 +1247,11 @@ mod coverage_push_private_paths_tests {
     fn ema_private_kernels_and_handlers() {
         let data = [1.0_f64, 2.0, 3.0, 4.0, 5.0];
         let mut out = vec![0.0_f64; data.len()];
-        ema_core_f64_unchecked(&data, 1, 0.5, &mut out);
+        ema_core_f64(&data, 1, 0.5, &mut out);
         assert_eq!(out, data);
 
         let mut out2 = vec![0.0_f64; data.len()];
-        ema_core_f64_unchecked(&data, 3, 0.5, &mut out2);
+        ema_core_f64(&data, 3, 0.5, &mut out2);
         assert!(out2[0].is_nan());
         assert!(out2[1].is_nan());
         assert!(out2[2].is_finite());

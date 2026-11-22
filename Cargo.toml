@@ -34,6 +34,28 @@ criterion = "0.5.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
+# Rust standards v3.6 Section 22 baseline; `allow_attributes` enforces RPS-318's `#[expect]` form.
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+perf = { level = "warn", priority = -1 }
+suspicious = { level = "warn", priority = -1 }
+needless_collect = "warn"
+redundant_clone = "warn"
+large_enum_variant = "warn"
+large_stack_arrays = "warn"
+await_holding_lock = "deny"
+await_holding_refcell_ref = "deny"
+large_futures = "warn"
+unused_async = "warn"
+rc_buffer = "warn"
+format_push_string = "warn"
+undocumented_unsafe_blocks = "deny"
+allow_attributes_without_reason = "deny"
+allow_attributes = "deny"
+
 [profile.dev]
 debug = "line-tables-only"
 incremental = false
@@ -46,5 +68,9 @@ incremental = false
 opt-level = 3              # Maximum optimizations
 lto = "fat"                # Full cross-crate LTO
 codegen-units = 1          # Single codegen unit for maximum optimization
-panic = "abort"            # Abort on panic (no unwinding overhead)
-strip = true               # Strip symbols from binary
+# Unwinding stays enabled: the PyO3 extension converts Rust panics into Python
+# exceptions instead of aborting the host interpreter (RPS-128, RPS-129).
+# Release keeps integer wrap-on-overflow (the Cargo default), chosen explicitly
+# because indicator index math is validated up front (RPS-263).
+overflow-checks = false
+strip = "debuginfo"        # Keep the symbol table for profiling and crash attribution (RPS-255)

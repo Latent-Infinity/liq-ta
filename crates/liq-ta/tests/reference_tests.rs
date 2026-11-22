@@ -5,15 +5,6 @@
 //!
 //! Use `--features reference-checks-strict` to treat divergences as test failures.
 
-#![allow(clippy::needless_range_loop)]
-#![allow(clippy::cast_precision_loss)]
-#![allow(clippy::similar_names)]
-#![allow(clippy::unreadable_literal)]
-#![allow(clippy::float_cmp)]
-#![allow(clippy::too_many_lines)]
-#![allow(clippy::cast_possible_truncation)]
-#![allow(clippy::manual_let_else)]
-
 use liq_ta::indicators::{
     atr::atr, bollinger::bollinger, ema::ema, macd::macd, rsi::rsi, sma::sma,
     stochastic::stochastic_fast,

@@ -151,7 +151,6 @@ pub fn ht_trendline<T: SeriesElement>(data: &[T]) -> Result<Vec<T>> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::all, clippy::pedantic, clippy::nursery)]
     use super::*;
 
     #[test]

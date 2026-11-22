@@ -345,7 +345,6 @@ pub fn ppo<T: SeriesElement>(data: &[T], fast_period: usize, slow_period: usize)
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::all, clippy::pedantic, clippy::nursery)]
     use super::*;
 
     // =========================================================================

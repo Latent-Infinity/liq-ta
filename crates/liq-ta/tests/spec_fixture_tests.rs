@@ -3,14 +3,10 @@
 //! These tests verify indicator behavior against hand-constructed test fixtures
 //! derived from the PRD specification. They are the authoritative source of truth.
 
-#![allow(clippy::needless_range_loop)]
-#![allow(clippy::cast_precision_loss)]
-#![allow(clippy::similar_names)]
-#![allow(clippy::unreadable_literal)]
-#![allow(clippy::float_cmp)]
-#![allow(clippy::too_many_lines)]
-#![allow(clippy::cast_possible_truncation)]
-#![allow(clippy::missing_panics_doc)]
+#![expect(
+    clippy::needless_range_loop,
+    reason = "index loops mirror the reference formulas across parallel arrays"
+)]
 
 use liq_ta::indicators::{
     adx::{adx, adx_lookback, adx_min_len},

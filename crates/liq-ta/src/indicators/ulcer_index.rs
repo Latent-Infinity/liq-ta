@@ -4,7 +4,10 @@
 //! Output starts at index `period - 1`. Until index `2 * period - 2`, early
 //! drawdowns use the shorter peak history available; Martin's standard
 //! definition (`StockCharts`, pandas-ta) returns NaN there.
-#![allow(missing_docs)]
+#![expect(
+    missing_docs,
+    reason = "indicator output structs and helpers are documented at module level"
+)]
 
 use crate::error::{Error, Result};
 use crate::traits::SeriesElement;

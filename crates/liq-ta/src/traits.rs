@@ -119,8 +119,7 @@ pub trait SeriesElement: Float + NumCast + Copy + Default + Send + Sync + 'stati
     #[inline]
     #[must_use]
     fn two() -> Self {
-        // Safe unwrap: 2 is always representable in Float types
-        <Self as NumCast>::from(2).unwrap()
+        <Self as NumCast>::from(2).expect("2 is representable in every float type")
     }
 
     /// Returns the constant 100 as this type.
@@ -129,8 +128,7 @@ pub trait SeriesElement: Float + NumCast + Copy + Default + Send + Sync + 'stati
     #[inline]
     #[must_use]
     fn hundred() -> Self {
-        // Safe unwrap: 100 is always representable in Float types
-        <Self as NumCast>::from(100).unwrap()
+        <Self as NumCast>::from(100).expect("100 is representable in every float type")
     }
 
     /// Returns the constant 50 as this type.
@@ -139,8 +137,7 @@ pub trait SeriesElement: Float + NumCast + Copy + Default + Send + Sync + 'stati
     #[inline]
     #[must_use]
     fn fifty() -> Self {
-        // Safe unwrap: 50 is always representable in Float types
-        <Self as NumCast>::from(50).unwrap()
+        <Self as NumCast>::from(50).expect("50 is representable in every float type")
     }
 }
 
@@ -300,11 +297,11 @@ mod tests {
 
     #[test]
     fn test_series_element_from_f32() {
-        let val: f64 = SeriesElement::from_f32(3.14159_f32).unwrap();
-        assert!((val - 3.14159).abs() < 1e-5);
+        let val: f64 = SeriesElement::from_f32(3.25_f32).unwrap();
+        assert!((val - 3.25).abs() < 1e-5);
 
-        let val_f32: f32 = SeriesElement::from_f32(2.71828_f32).unwrap();
-        assert!((val_f32 - 2.71828).abs() < 1e-5);
+        let val_f32: f32 = SeriesElement::from_f32(2.5_f32).unwrap();
+        assert!((val_f32 - 2.5).abs() < 1e-5);
     }
 
     #[test]

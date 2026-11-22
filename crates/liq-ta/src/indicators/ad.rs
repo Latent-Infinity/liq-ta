@@ -52,7 +52,7 @@
 //! assert_eq!(result.len(), 5);
 //! ```
 
-use std::any::TypeId;
+use crate::cast;
 
 use crate::error::{Error, Result};
 use crate::precision::{PrecisionMode, current_precision_mode};
@@ -209,17 +209,18 @@ pub fn ad_into<T: SeriesElement + 'static>(
     }
 
     // Specialized f32 path for High precision mode
-    if TypeId::of::<T>() == TypeId::of::<f32>() && current_precision_mode() == PrecisionMode::High {
-        // SAFETY: We just checked that T is f32
-        unsafe {
-            let high_f32 = std::slice::from_raw_parts(high.as_ptr() as *const f32, n);
-            let low_f32 = std::slice::from_raw_parts(low.as_ptr() as *const f32, n);
-            let close_f32 = std::slice::from_raw_parts(close.as_ptr() as *const f32, n);
-            let volume_f32 = std::slice::from_raw_parts(volume.as_ptr() as *const f32, n);
-            let output_f32 = std::slice::from_raw_parts_mut(output.as_mut_ptr() as *mut f32, n);
-            ad_core_f32_high(high_f32, low_f32, close_f32, volume_f32, output_f32)
-        }
-    } else if use_f64_precision::<T>() {
+    if current_precision_mode() == PrecisionMode::High
+        && let (Some(h), Some(l), Some(c), Some(v), Some(out)) = (
+            cast::slice_as::<T, f32>(high),
+            cast::slice_as::<T, f32>(low),
+            cast::slice_as::<T, f32>(close),
+            cast::slice_as::<T, f32>(volume),
+            cast::slice_as_mut::<T, f32>(output),
+        )
+    {
+        return ad_core_f32_high(&h[..n], &l[..n], &c[..n], &v[..n], &mut out[..n]);
+    }
+    if use_f64_precision::<T>() {
         ad_core_f64(high, low, close, volume, output)
     } else {
         ad_core_native(high, low, close, volume, output)
@@ -573,7 +574,6 @@ pub fn ad<T: SeriesElement + 'static>(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::all, clippy::pedantic, clippy::nursery)]
     use super::*;
 
     fn approx_eq(a: f64, b: f64, tol: f64) -> bool {

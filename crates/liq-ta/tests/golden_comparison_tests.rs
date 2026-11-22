@@ -9,12 +9,6 @@
 //! - Floating-point precision variations
 //! - Implementation-specific choices within specification boundaries
 
-#![allow(clippy::needless_range_loop)]
-#![allow(clippy::cast_precision_loss)]
-#![allow(clippy::similar_names)]
-#![allow(clippy::unreadable_literal)]
-#![allow(clippy::float_cmp)]
-
 use liq_ta::indicators::{ema::ema, rsi::rsi, sma::sma};
 
 const EPSILON: f64 = 1e-10;

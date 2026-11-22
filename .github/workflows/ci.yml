@@ -21,7 +21,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@1.98.1
         with:
-          components: clippy, rustfmt
+          components: clippy, rustfmt, llvm-tools-preview
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -41,10 +41,19 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Run clippy
-        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 
       - name: Run tests
         run: cargo test --locked --features parallel,serde,reference-checks-strict,precision-fast
+
+      - name: Run release-mode tests
+        run: cargo test --locked --release --features parallel,serde,precision-fast
+
+      - name: Install cargo-llvm-cov
+        run: cargo install --locked cargo-llvm-cov@0.9.1
+
+      - name: Line coverage floor (RPS-313)
+        run: cargo llvm-cov --locked --features parallel,serde --fail-under-lines 90
 
       - name: Build documentation
         run: cargo doc --locked --no-deps --all-features
@@ -134,4 +143,39 @@ jobs:
       - name: Record compiler version
         run: rustc +1.95.0 --version --verbose
       - name: Test minimum supported Rust
-        run: cargo +1.95.0 test --locked --workspace
+        run: cargo +1.95.0 test --locked
+      - name: Check Python bindings on minimum supported Rust
+        run: cargo +1.95.0 check --locked -p liq-ta-python --all-targets
+
+  # The crate's only unsafe code is `cast.rs`; Miri checks it (RPS-234).
+  miri:
+    name: Miri (unsafe casts)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
+      - name: Record compiler version
+        run: rustc +nightly --version --verbose
+      - name: Miri
+        run: 'cargo +nightly miri test --locked -p liq-ta --lib cast::tests'
+
+  # Non-blocking early warning for newer compilers (RPS-006, RPS-013).
+  newer-toolchains:
+    name: Rust ${{ matrix.toolchain }} (non-blocking)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain: [stable, beta]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.toolchain }}
+      - name: Record compiler version
+        run: rustc +${{ matrix.toolchain }} --version --verbose
+      - name: Release-mode tests
+        run: cargo +${{ matrix.toolchain }} test --locked --release

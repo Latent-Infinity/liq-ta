@@ -121,47 +121,37 @@
 #![warn(clippy::or_fun_call)]
 #![warn(clippy::inefficient_to_string)]
 #![warn(clippy::useless_conversion)]
-#![allow(clippy::style)] // Numeric kernels favor explicit low-level style over idiomatic style lints
-#![allow(clippy::pedantic)] // Pedantic lints are too noisy for this codebase's performance patterns
-#![allow(clippy::nursery)] // Nursery lints are unstable and produce high churn
-#![allow(clippy::restriction)] // Restriction lints conflict with intentionally unsafe/optimized internals
-#![allow(clippy::doc_markdown)] // Documentation uses finance/math terminology without backticks everywhere
-#![allow(clippy::must_use_candidate)] // API surface is intentionally selective about #[must_use]
-#![allow(clippy::missing_const_for_fn)] // Constness here is not a project requirement
-#![allow(clippy::ptr_as_ptr)] // Raw pointer casts are used in controlled type specializations
-#![allow(clippy::transmute_ptr_to_ptr)] // Transmute-based casting is used in audited monomorphization paths
-#![allow(clippy::missing_transmute_annotations)] // Type context is explicit in surrounding code and tests
-#![allow(clippy::items_after_statements)] // Local helper placement keeps kernels adjacent to call-sites
-#![allow(clippy::inline_always)] // Hot paths use explicit inlining hints for benchmark stability
-#![allow(clippy::if_same_then_else)]
-// Branch shape is kept explicit for readability across type paths
-// Allowed pedantic lints - intentional design choices for this codebase
-#![allow(clippy::module_name_repetitions)] // Types like error::Error are idiomatic in Rust libraries
-#![allow(clippy::similar_names)] // Financial indicator variables often have similar names (e.g., ema1, ema2)
-#![allow(clippy::cast_precision_loss)] // Expected when casting usize to f64 for indicator calculations
-#![allow(clippy::cast_possible_truncation)] // Controlled truncation in period calculations
-#![allow(clippy::cast_sign_loss)] // Controlled in validated contexts
-#![allow(clippy::too_many_lines)] // Complex indicators naturally have longer functions
-#![allow(clippy::too_many_arguments)] // OHLCV indicators require multiple array parameters
-#![allow(clippy::needless_range_loop)] // Index loops often clearer for array algorithms
-#![allow(clippy::float_cmp)] // Intentional NaN checks and exact comparisons
-#![allow(clippy::suboptimal_flops)] // mul_add can change results; we prioritize reproducibility
-#![allow(clippy::many_single_char_names)] // Common in mathematical code (i, j, n, etc.)
-#![allow(clippy::manual_range_contains)] // Explicit comparisons often clearer in bounds checking
-#![allow(clippy::cast_lossless)] // Explicit i32 to f64 casts are intentional
-#![allow(clippy::redundant_else)] // Style preference for explicit else blocks
-#![allow(clippy::int_plus_one)] // Explicit +1/-1 comparisons clearer in index math
-#![allow(clippy::manual_slice_size_calculation)] // Explicit slice calculations clearer
-#![allow(clippy::struct_field_names)] // Naming convention for period fields is intentional
-#![allow(clippy::manual_memcpy)] // Explicit loops for clarity in algorithm code
-#![allow(clippy::if_not_else)] // Style preference
-#![allow(clippy::manual_clamp)] // Explicit clamping clearer in some contexts
-#![allow(clippy::missing_panics_doc)] // Panics are unreachable in validated paths
-#![allow(clippy::approx_constant)] // Explicit constant values for reproducibility
-#![allow(clippy::type_complexity)] // Complex types acceptable for generic indicator functions
-#![allow(clippy::unnecessary_wraps)] // Some Results are for API consistency
+#![expect(
+    clippy::style,
+    reason = "numeric kernels favor explicit low-level style over idiomatic style lints"
+)]
+#![expect(
+    clippy::if_same_then_else,
+    reason = "branch shape is kept explicit for readability across type paths"
+)]
+#![expect(
+    clippy::too_many_arguments,
+    reason = "OHLCV indicators require multiple array parameters"
+)]
+#![expect(
+    clippy::needless_range_loop,
+    reason = "index loops often clearer for array algorithms"
+)]
+#![expect(
+    clippy::int_plus_one,
+    reason = "explicit +1/-1 comparisons clearer in index math"
+)]
+#![expect(
+    clippy::manual_memcpy,
+    reason = "explicit loops for clarity in algorithm code"
+)]
+#![expect(
+    clippy::manual_clamp,
+    reason = "explicit clamping keeps NaN handling visible"
+)]
 
 pub mod batch;
+mod cast;
 pub mod error;
 pub mod indicators;
 pub mod kernels;

@@ -28,10 +28,10 @@
 //! | VWAP | 1e-5 | 1e-7 | hybrid |
 //! | OBV, AD | 1e-4 | 1.0 | hybrid |
 
-#![allow(clippy::float_cmp)]
-#![allow(clippy::cast_precision_loss)]
-#![allow(clippy::unreadable_literal)]
-#![allow(clippy::type_complexity)]
+#![expect(
+    clippy::type_complexity,
+    reason = "tuple-typed test tables are clearer inline than named aliases"
+)]
 
 use liq_ta::indicators::{
     bollinger::bollinger, obv::obv, rsi::rsi, sma::sma, stochastic::stochastic, vwap::vwap,

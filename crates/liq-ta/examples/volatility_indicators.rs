@@ -4,8 +4,10 @@
 //!
 //! Run with: `cargo run --example volatility_indicators`
 
-#![allow(clippy::unreadable_literal)]
-#![allow(clippy::needless_range_loop)]
+#![expect(
+    clippy::needless_range_loop,
+    reason = "index loops mirror the reference formulas across parallel arrays"
+)]
 
 use liq_ta::indicators::{atr, bollinger, donchian};
 

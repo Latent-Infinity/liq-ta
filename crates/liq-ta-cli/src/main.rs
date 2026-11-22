@@ -586,6 +586,7 @@ fn run_vwap(input: &str, dest: &OutputDest) -> Result<()> {
 mod tests {
     use super::*;
     use clap::Parser;
+    use std::fmt::Write as _;
     use std::fs;
     use std::io;
     use std::path::PathBuf;
@@ -616,9 +617,11 @@ mod tests {
             let low = base - 1.0;
             let close = base + 0.25;
             let volume = 1_000.0 + i as f64;
-            csv.push_str(&format!(
-                "t{i},{open:.6},{high:.6},{low:.6},{close:.6},{volume:.2}\n"
-            ));
+            writeln!(
+                csv,
+                "t{i},{open:.6},{high:.6},{low:.6},{close:.6},{volume:.2}"
+            )
+            .unwrap();
         }
 
         fs::write(&path, csv).unwrap();
@@ -631,13 +634,15 @@ mod tests {
 
         for i in 0..rows {
             let base = 50.0 + i as f64;
-            csv.push_str(&format!(
-                "n{i},{:.6},{:.6},{:.6},{:.2}\n",
+            writeln!(
+                csv,
+                "n{i},{:.6},{:.6},{:.6},{:.2}",
                 base,
                 base + 1.0,
                 base - 1.0,
                 500.0 + i as f64
-            ));
+            )
+            .unwrap();
         }
 
         fs::write(&path, csv).unwrap();

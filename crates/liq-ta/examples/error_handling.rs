@@ -4,11 +4,6 @@
 //!
 //! Run with: `cargo run --example error_handling`
 
-#![allow(clippy::cast_precision_loss)]
-#![allow(clippy::unreadable_literal)]
-#![allow(clippy::wildcard_enum_match_arm)]
-#![allow(clippy::items_after_statements)]
-
 use liq_ta::Error;
 use liq_ta::indicators::sma;
 

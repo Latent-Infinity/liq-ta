@@ -5,9 +5,6 @@
 //!
 //! Run with: `cargo run --example zero_allocation`
 
-#![allow(clippy::cast_precision_loss)]
-#![allow(clippy::unreadable_literal)]
-
 use liq_ta::indicators::{
     bollinger::{BollingerOutput, bollinger_into},
     ema::ema_into,

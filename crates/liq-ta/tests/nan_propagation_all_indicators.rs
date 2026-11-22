@@ -2,11 +2,14 @@
 //!
 //! Candlestick pattern indicators return integer codes; NaN propagation does not apply.
 
-#![allow(clippy::needless_range_loop)]
-#![allow(clippy::cast_precision_loss)]
-#![allow(clippy::similar_names)]
-#![allow(clippy::unreadable_literal)]
-#![allow(clippy::needless_borrow)]
+#![expect(
+    clippy::needless_range_loop,
+    reason = "index loops mirror the reference formulas across parallel arrays"
+)]
+#![expect(
+    clippy::needless_borrow,
+    reason = "macro-generated calls borrow uniformly"
+)]
 
 use liq_ta::indicators::{
     ad::ad,

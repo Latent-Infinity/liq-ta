@@ -17,9 +17,6 @@
 //! - `near_constant.json`: Nearly constant data for variance stress testing
 //! - `typical_ohlcv.json`: Realistic OHLCV data with volume
 
-#![allow(clippy::cast_precision_loss)]
-#![allow(clippy::unreadable_literal)]
-
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use serde::{Deserialize, Serialize};

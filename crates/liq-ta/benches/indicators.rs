@@ -8,14 +8,10 @@
 //! Standard groups use Criterion defaults; stochastic groups use a 5s warmup,
 //! 15s measurement time and 500 samples.
 
-#![allow(clippy::cast_precision_loss)]
-#![allow(clippy::unreadable_literal)]
-#![allow(clippy::similar_names)]
-#![allow(clippy::needless_range_loop)]
-#![allow(clippy::cast_possible_truncation)]
-#![allow(clippy::items_after_statements)]
-#![allow(clippy::many_single_char_names)]
-#![allow(clippy::type_complexity)]
+#![expect(
+    clippy::type_complexity,
+    reason = "tuple-typed test tables are clearer inline than named aliases"
+)]
 
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use liq_ta::indicators::{

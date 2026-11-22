@@ -57,6 +57,7 @@
 //! assert!(result[4] >= -100.0 && result[4] <= 0.0);
 //! ```
 
+use crate::cast;
 use crate::error::{Error, Result};
 use crate::kernels::rolling_extrema::MonotonicDeque;
 use crate::precision::{PrecisionMode, current_precision_mode};
@@ -188,42 +189,10 @@ pub fn williams_r<T: SeriesElement + 'static>(
 
     let n = high.len();
 
-    use std::any::TypeId;
-
-    if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let high_f64: &[f64] = unsafe { std::mem::transmute(high) };
-        let low_f64: &[f64] = unsafe { std::mem::transmute(low) };
-        let close_f64: &[f64] = unsafe { std::mem::transmute(close) };
-        let mut result: Vec<f64> = vec![0.0; n];
-
-        // Fill lookback period with NaN
-        let lookback = williams_r_lookback(period);
-        for item in result.iter_mut().take(lookback) {
-            *item = f64::NAN;
-        }
-
-        compute_williams_r_core(high_f64, low_f64, close_f64, period, &mut result)?;
-        Ok(unsafe { std::mem::transmute(result) })
-    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let high_f32: &[f32] = unsafe { std::mem::transmute(high) };
-        let low_f32: &[f32] = unsafe { std::mem::transmute(low) };
-        let close_f32: &[f32] = unsafe { std::mem::transmute(close) };
-        let mut result: Vec<f32> = vec![0.0; n];
-
-        // Fill lookback period with NaN
-        let lookback = williams_r_lookback(period);
-        for item in result.iter_mut().take(lookback) {
-            *item = f32::NAN;
-        }
-
-        compute_williams_r_core(high_f32, low_f32, close_f32, period, &mut result)?;
-        Ok(unsafe { std::mem::transmute(result) })
-    } else {
-        // Generic fallback: safe initialization
-        let mut result = vec![T::nan(); n];
-        compute_williams_r_core(high, low, close, period, &mut result)?;
-        Ok(result)
-    }
+    let mut result = vec![T::zero(); n];
+    result[..williams_r_lookback(period).min(n)].fill(T::nan());
+    compute_williams_r_core(high, low, close, period, &mut result)?;
+    Ok(result)
 }
 
 /// Computes Williams %R into a pre-allocated output buffer.
@@ -352,35 +321,29 @@ fn compute_williams_r_core<T: SeriesElement + 'static>(
     period: usize,
     output: &mut [T],
 ) -> Result<()> {
-    use std::any::TypeId;
-
     // Use specialized f64 path for f64 inputs
-    if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let h = unsafe { std::slice::from_raw_parts(high.as_ptr() as *const f64, high.len()) };
-        let l = unsafe { std::slice::from_raw_parts(low.as_ptr() as *const f64, low.len()) };
-        let c = unsafe { std::slice::from_raw_parts(close.as_ptr() as *const f64, close.len()) };
-        let out = unsafe {
-            std::slice::from_raw_parts_mut(output.as_mut_ptr() as *mut f64, output.len())
-        };
+    if let (Some(h), Some(l), Some(c), Some(out)) = (
+        cast::slice_as::<T, f64>(high),
+        cast::slice_as::<T, f64>(low),
+        cast::slice_as::<T, f64>(close),
+        cast::slice_as_mut::<T, f64>(output),
+    ) {
         return williams_r_f64_optimized(h, l, c, period, out);
     }
 
     // For f32 inputs: convert to f64, run Van Herk, convert back
     // This ensures both types use the same algorithm AND satisfies f64 accumulator requirement
-    if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let h_f32 = unsafe { std::slice::from_raw_parts(high.as_ptr() as *const f32, high.len()) };
-        let l_f32 = unsafe { std::slice::from_raw_parts(low.as_ptr() as *const f32, low.len()) };
-        let c_f32 =
-            unsafe { std::slice::from_raw_parts(close.as_ptr() as *const f32, close.len()) };
-        let out_f32 = unsafe {
-            std::slice::from_raw_parts_mut(output.as_mut_ptr() as *mut f32, output.len())
-        };
-
+    if let (Some(h_f32), Some(l_f32), Some(c_f32), Some(out_f32)) = (
+        cast::slice_as::<T, f32>(high),
+        cast::slice_as::<T, f32>(low),
+        cast::slice_as::<T, f32>(close),
+        cast::slice_as_mut::<T, f32>(output),
+    ) {
         // Convert f32 to f64
         let h_f64: Vec<f64> = h_f32.iter().map(|&x| x as f64).collect();
         let l_f64: Vec<f64> = l_f32.iter().map(|&x| x as f64).collect();
         let c_f64: Vec<f64> = c_f32.iter().map(|&x| x as f64).collect();
-        let mut out_f64 = vec![f64::NAN; output.len()];
+        let mut out_f64 = vec![f64::NAN; out_f32.len()];
 
         // Run Van Herk in f64
         williams_r_f64_optimized(&h_f64, &l_f64, &c_f64, period, &mut out_f64)?;
@@ -644,7 +607,6 @@ fn williams_r_f64_optimized(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::all, clippy::pedantic, clippy::nursery)]
     use super::*;
     use num_traits::Float;
 

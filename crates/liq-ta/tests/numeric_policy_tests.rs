@@ -3,11 +3,10 @@
 //! These tests verify compliance with the numeric policy defined in PRD §4.3 and §4.5.
 //! The policy covers NaN propagation, infinity handling, and edge case behaviors.
 
-#![allow(clippy::needless_range_loop)]
-#![allow(clippy::cast_precision_loss)]
-#![allow(clippy::similar_names)]
-#![allow(clippy::unreadable_literal)]
-#![allow(clippy::float_cmp)]
+#![expect(
+    clippy::needless_range_loop,
+    reason = "index loops mirror the reference formulas across parallel arrays"
+)]
 
 use liq_ta::indicators::{
     atr::{atr, true_range},

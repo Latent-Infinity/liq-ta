@@ -349,7 +349,6 @@ pub fn cmo<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::all, clippy::pedantic, clippy::nursery)]
     use super::*;
 
     #[test]

@@ -278,7 +278,6 @@ pub fn stochrsi_default<T: SeriesElement>(data: &[T]) -> Result<StochRsiOutput<T
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::all, clippy::pedantic, clippy::nursery)]
     use super::*;
 
     #[test]

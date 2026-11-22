@@ -403,37 +403,13 @@ pub fn cci<T: SeriesElement + 'static>(
     close: &[T],
     period: usize,
 ) -> Result<Vec<T>> {
-    use std::any::TypeId;
-
-    if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let high_f64: &[f64] = unsafe { std::mem::transmute(high) };
-        let low_f64: &[f64] = unsafe { std::mem::transmute(low) };
-        let close_f64: &[f64] = unsafe { std::mem::transmute(close) };
-
-        let mut output: Vec<f64> = vec![0.0; high.len()];
-
-        cci_into(high_f64, low_f64, close_f64, period, &mut output)?;
-        Ok(unsafe { std::mem::transmute(output) })
-    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let high_f32: &[f32] = unsafe { std::mem::transmute(high) };
-        let low_f32: &[f32] = unsafe { std::mem::transmute(low) };
-        let close_f32: &[f32] = unsafe { std::mem::transmute(close) };
-
-        let mut output: Vec<f32> = vec![0.0; high.len()];
-
-        cci_into(high_f32, low_f32, close_f32, period, &mut output)?;
-        Ok(unsafe { std::mem::transmute(output) })
-    } else {
-        // Generic fallback: safe initialization
-        let mut output = vec![T::zero(); high.len()];
-        cci_into(high, low, close, period, &mut output)?;
-        Ok(output)
-    }
+    let mut output = vec![T::zero(); high.len()];
+    cci_into(high, low, close, period, &mut output)?;
+    Ok(output)
 }
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::all, clippy::pedantic, clippy::nursery)]
     use super::*;
 
     #[test]

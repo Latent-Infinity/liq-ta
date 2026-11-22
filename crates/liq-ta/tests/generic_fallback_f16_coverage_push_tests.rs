@@ -212,7 +212,7 @@ fn generic_f16_fallback_matrix_alloc_and_into() {
     trix_into(&data, 5, &mut trix_into_out).expect("trix_into f16");
 
     // WMA generic fallback NaN/recovery branches
-    let mut wma_data_nan = data.clone();
+    let mut wma_data_nan = data;
     wma_data_nan[1] = h(f32::NAN);
     wma_data_nan[2] = h(f32::NAN);
     wma_data_nan[10] = h(11.0);
@@ -225,7 +225,7 @@ fn generic_f16_fallback_matrix_alloc_and_into() {
     let mut high_v = high.clone();
     let mut low_v = low.clone();
     let mut close_v = close.clone();
-    let mut vol_v = vol.clone();
+    let mut vol_v = vol;
     vol_v[0] = h(0.0);
     high_v[2] = h(f32::INFINITY);
     low_v[2] = h(f32::INFINITY);
@@ -239,7 +239,7 @@ fn generic_f16_fallback_matrix_alloc_and_into() {
     let flat_close = vec![h(10.0); n];
     let wr_flat = williams_r(&flat_high, &flat_low, &flat_close, 5).expect("williams_r flat");
     assert_eq!(wr_flat.len(), n);
-    let mut high_bad = flat_high.clone();
+    let mut high_bad = flat_high;
     high_bad[6] = h(f32::NAN);
     assert!(williams_r(&high_bad, &flat_low, &flat_close, 5).is_ok());
 

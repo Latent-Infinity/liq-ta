@@ -3,11 +3,10 @@
 //! These tests validate the ergonomics and usability of the liq-ta public API,
 //! ensuring that typical usage patterns work correctly and feel natural.
 
-#![allow(clippy::needless_range_loop)]
-#![allow(clippy::cast_precision_loss)]
-#![allow(clippy::similar_names)]
-#![allow(clippy::unreadable_literal)]
-#![allow(clippy::float_cmp)]
+#![expect(
+    clippy::needless_range_loop,
+    reason = "index loops mirror the reference formulas across parallel arrays"
+)]
 
 use liq_ta::Error;
 use liq_ta::prelude::*;

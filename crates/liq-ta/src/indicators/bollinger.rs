@@ -68,6 +68,7 @@
 
 use num_traits::Float;
 
+use crate::cast;
 use crate::error::{Error, Result};
 use crate::kernels::accumulators::WelfordVarianceF64;
 use crate::kernels::simd;
@@ -91,20 +92,17 @@ fn use_f64_accumulator<T: 'static>() -> bool {
 /// while counting them.
 #[inline]
 fn compute_initial_sums<T: SeriesElement + 'static>(data: &[T], period: usize) -> (T, T, usize) {
-    use std::any::TypeId;
-    if TypeId::of::<T>() == TypeId::of::<f64>() {
-        // SAFETY: We verified T is f64 via TypeId
-        let data_f64: &[f64] = unsafe { &*(data as *const [T] as *const [f64]) };
+    if let Some(data_f64) = cast::slice_as::<T, f64>(data) {
         let window = &data_f64[..period];
 
         // Use NaN-aware chunked kernel that excludes NaN from sums
         let (sum, sum_sq, valid_count) = simd::sum_and_sum_sq_and_count_f64(window);
         let nan_count = period - valid_count;
 
-        // SAFETY: We verified T is f64 via TypeId
-        let sum_t: T = unsafe { *(&sum as *const f64 as *const T) };
-        let sum_sq_t: T = unsafe { *(&sum_sq as *const f64 as *const T) };
-        return (sum_t, sum_sq_t, nan_count);
+        // T is f64 here, so these conversions are exact and infallible.
+        if let (Ok(sum_t), Ok(sum_sq_t)) = (T::from_f64(sum), T::from_f64(sum_sq)) {
+            return (sum_t, sum_sq_t, nan_count);
+        }
     }
     // Fallback for f32
     let mut sum = T::zero();
@@ -894,7 +892,6 @@ impl Bollinger {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::all, clippy::pedantic, clippy::nursery)]
     use super::*;
 
     // Helper function to compare floating point values

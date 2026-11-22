@@ -39,37 +39,6 @@ pub(crate) fn is_invalid<T: SeriesElement>(value: T) -> bool {
     value.is_nan() || value.is_infinite()
 }
 
-#[inline]
-#[must_use]
-#[allow(dead_code)]
-pub(crate) fn build_invalid_mask<T: SeriesElement>(data: &[T]) -> Vec<u8> {
-    data.iter()
-        .map(|&value| if is_invalid(value) { 1 } else { 0 })
-        .collect()
-}
-
-#[inline]
-#[must_use]
-#[allow(dead_code)]
-pub(crate) fn init_invalid_count(mask: &[u8], start: usize, period: usize) -> usize {
-    mask.iter()
-        .skip(start)
-        .take(period)
-        .map(|&value| usize::from(value))
-        .sum()
-}
-
-#[inline]
-#[allow(dead_code)]
-pub(crate) fn update_invalid_count(count: &mut usize, old_invalid: bool, new_invalid: bool) {
-    if new_invalid {
-        *count += 1;
-    }
-    if old_invalid {
-        *count -= 1;
-    }
-}
-
 /// Approximate equality check for floating-point values.
 ///
 /// Returns `true` if `a` and `b` are within `tolerance` of each other,
@@ -257,21 +226,6 @@ mod tests {
         assert!(is_invalid(f64::INFINITY));
         assert!(is_invalid(f64::NEG_INFINITY));
         assert!(!is_invalid(1.0_f64));
-
-        let data = vec![1.0_f64, f64::NAN, f64::INFINITY, -2.0, f64::NEG_INFINITY];
-        let mask = build_invalid_mask(&data);
-        assert_eq!(mask, vec![0_u8, 1, 1, 0, 1]);
-
-        assert_eq!(init_invalid_count(&mask, 0, 5), 3);
-        assert_eq!(init_invalid_count(&mask, 1, 3), 2);
-
-        let mut count = 2_usize;
-        update_invalid_count(&mut count, true, false);
-        assert_eq!(count, 1);
-        update_invalid_count(&mut count, false, true);
-        assert_eq!(count, 2);
-        update_invalid_count(&mut count, true, true);
-        assert_eq!(count, 2);
     }
 
     #[test]

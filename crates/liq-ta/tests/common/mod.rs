@@ -15,7 +15,7 @@
 /// # Returns
 ///
 /// `true` if the values are approximately equal (within `eps`), or if both are NaN.
-#[allow(dead_code)]
+#[expect(dead_code, reason = "shared test helper not used by every test binary")]
 pub fn approx_eq(a: f64, b: f64, eps: f64) -> bool {
     if a.is_nan() && b.is_nan() {
         return true;
@@ -27,7 +27,7 @@ pub fn approx_eq(a: f64, b: f64, eps: f64) -> bool {
 }
 
 /// Approximate equality check for f32 floating-point values.
-#[allow(dead_code)]
+#[expect(dead_code, reason = "shared test helper not used by every test binary")]
 pub fn approx_eq_f32(a: f32, b: f32, eps: f32) -> bool {
     if a.is_nan() && b.is_nan() {
         return true;
@@ -39,21 +39,21 @@ pub fn approx_eq_f32(a: f32, b: f32, eps: f32) -> bool {
 }
 
 /// Standard epsilon for high-precision comparisons.
-#[allow(dead_code)]
+#[expect(dead_code, reason = "shared test helper not used by every test binary")]
 pub const EPSILON: f64 = 1e-10;
 
 /// Looser epsilon for comparisons involving accumulated floating-point operations.
-#[allow(dead_code)]
+#[expect(dead_code, reason = "shared test helper not used by every test binary")]
 pub const LOOSE_EPSILON: f64 = 1e-6;
 
 /// Count the number of NaN values in a slice.
-#[allow(dead_code)]
+#[expect(dead_code, reason = "shared test helper not used by every test binary")]
 pub fn count_nans(data: &[f64]) -> usize {
     data.iter().filter(|x| x.is_nan()).count()
 }
 
 /// Verify that the first `n` values are NaN and the rest are not.
-#[allow(dead_code)]
+#[expect(dead_code, reason = "shared test helper not used by every test binary")]
 pub fn verify_nan_prefix(data: &[f64], expected_nan_count: usize) -> bool {
     let nan_count = count_nans(data);
     if nan_count != expected_nan_count {

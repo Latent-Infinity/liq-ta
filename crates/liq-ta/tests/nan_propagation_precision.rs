@@ -8,9 +8,10 @@
 //! - Infinity → NaN behavior unchanged
 //! - Edge cases (signed zeros, subnormals)
 
-#![allow(clippy::needless_range_loop)]
-#![allow(clippy::cast_precision_loss)]
-#![allow(clippy::similar_names)]
+#![expect(
+    clippy::needless_range_loop,
+    reason = "index loops mirror the reference formulas across parallel arrays"
+)]
 
 use liq_ta::indicators::{
     bollinger::bollinger,

@@ -314,7 +314,6 @@ pub fn sar_full<T: SeriesElement>(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::all, clippy::pedantic, clippy::nursery)]
     use super::*;
 
     #[test]

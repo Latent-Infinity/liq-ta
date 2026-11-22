@@ -19,7 +19,7 @@
 //! This implementation uses chunked f64 subtraction and IEEE 754 NaN
 //! propagation.
 
-use std::any::TypeId;
+use crate::cast;
 
 use crate::error::{Error, Result};
 use crate::kernels::simd::lagged_sub_sanitize_f64;
@@ -118,18 +118,10 @@ fn mom_compute_fast<T: SeriesElement + 'static>(
     let n = data.len();
 
     // Use chunked subtraction for f64
-    if TypeId::of::<T>() == TypeId::of::<f64>() {
-        // SAFETY: We've verified T is f64, and the slices have compatible layouts
-        let data_f64: &[f64] =
-            unsafe { std::slice::from_raw_parts(data.as_ptr() as *const f64, data.len()) };
-        let output_slice = &mut output[lookback..n];
-        let output_f64: &mut [f64] = unsafe {
-            std::slice::from_raw_parts_mut(
-                output_slice.as_mut_ptr() as *mut f64,
-                output_slice.len(),
-            )
-        };
-
+    if let (Some(data_f64), Some(output_f64)) = (
+        cast::slice_as::<T, f64>(data),
+        cast::slice_as_mut::<T, f64>(&mut output[lookback..n]),
+    ) {
         let current = &data_f64[period..];
         let lagged = &data_f64[..n - period];
 
@@ -179,27 +171,27 @@ fn mom_compute_fast<T: SeriesElement + 'static>(
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 pub fn mom<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
-    if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
+    if let Some(data_f64) = cast::slice_as::<T, f64>(data) {
         let mut output: Vec<f64> = vec![0.0; data.len()];
         mom_into(data_f64, period, &mut output)?;
-        Ok(unsafe { std::mem::transmute(output) })
-    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
+        if let Ok(output) = cast::vec_into(output) {
+            return Ok(output);
+        }
+    } else if let Some(data_f32) = cast::slice_as::<T, f32>(data) {
         let mut output: Vec<f32> = vec![0.0; data.len()];
         mom_into(data_f32, period, &mut output)?;
-        Ok(unsafe { std::mem::transmute(output) })
-    } else {
-        // Generic fallback: safe initialization
-        let mut output = vec![T::nan(); data.len()];
-        mom_into(data, period, &mut output)?;
-        Ok(output)
+        if let Ok(output) = cast::vec_into(output) {
+            return Ok(output);
+        }
     }
+    // Generic fallback: safe initialization
+    let mut output = vec![T::nan(); data.len()];
+    mom_into(data, period, &mut output)?;
+    Ok(output)
 }
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::all, clippy::pedantic, clippy::nursery)]
     use super::*;
 
     #[test]

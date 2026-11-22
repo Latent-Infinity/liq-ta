@@ -16,12 +16,14 @@
 //!
 //! Per PRD §7.7: "Synthetic fixtures test edge cases, but real-world data tests robustness."
 
-#![allow(clippy::needless_range_loop)]
-#![allow(clippy::cast_precision_loss)]
-#![allow(clippy::similar_names)]
-#![allow(clippy::unreadable_literal)]
-#![allow(clippy::float_cmp)]
-#![allow(clippy::manual_clamp)]
+#![expect(
+    clippy::needless_range_loop,
+    reason = "index loops mirror the reference formulas across parallel arrays"
+)]
+#![expect(
+    clippy::manual_clamp,
+    reason = "explicit min/max keeps NaN behavior distinct from clamp"
+)]
 
 use rand::Rng;
 use rand::SeedableRng;

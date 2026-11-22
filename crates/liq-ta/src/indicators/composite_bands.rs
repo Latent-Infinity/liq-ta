@@ -1,5 +1,8 @@
 //! Composite band indicators built from base indicators.
-#![allow(missing_docs)]
+#![expect(
+    missing_docs,
+    reason = "indicator output structs and helpers are documented at module level"
+)]
 
 use crate::error::{Error, Result};
 use crate::indicators::atr::{atr_into, atr_lookback};
@@ -55,7 +58,6 @@ pub fn hma_atr_bands<T: SeriesElement>(
 }
 
 #[must_use = "this returns a Result with the count of valid HMA ATR Band values"]
-#[allow(clippy::too_many_arguments)]
 pub fn hma_atr_bands_into<T: SeriesElement>(
     high: &[T],
     low: &[T],
@@ -122,7 +124,6 @@ pub fn hma_bollinger_bands<T: SeriesElement>(
 }
 
 #[must_use = "this returns a Result with the count of valid HMA Bollinger Band values"]
-#[allow(clippy::too_many_arguments)]
 pub fn hma_bollinger_bands_into<T: SeriesElement>(
     data: &[T],
     hma_period: usize,
@@ -191,7 +192,6 @@ pub fn vwap_atr_bands<T: SeriesElement + 'static>(
 }
 
 #[must_use = "this returns a Result with the count of valid VWAP ATR Band values"]
-#[allow(clippy::too_many_arguments)]
 pub fn vwap_atr_bands_into<T: SeriesElement + 'static>(
     high: &[T],
     low: &[T],
@@ -260,7 +260,6 @@ pub fn vwap_bollinger_bands<T: SeriesElement + 'static>(
 }
 
 #[must_use = "this returns a Result with the count of valid VWAP Bollinger Band values"]
-#[allow(clippy::too_many_arguments)]
 pub fn vwap_bollinger_bands_into<T: SeriesElement + 'static>(
     high: &[T],
     low: &[T],

@@ -2,7 +2,10 @@
 //!
 //! The period must be at least 2; period 1 makes the logarithmic
 //! normalization undefined.
-#![allow(missing_docs)]
+#![expect(
+    missing_docs,
+    reason = "indicator output structs and helpers are documented at module level"
+)]
 
 use crate::error::{Error, Result};
 use crate::traits::SeriesElement;

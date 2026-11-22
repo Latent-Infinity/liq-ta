@@ -298,7 +298,6 @@ pub fn ultosc_default<T: SeriesElement>(high: &[T], low: &[T], close: &[T]) -> R
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::all, clippy::pedantic, clippy::nursery)]
     use super::*;
 
     #[test]
@@ -455,9 +454,9 @@ mod tests {
         let mut out = vec![f64::NAN; 39];
         assert!(ultosc_into(&high, &low, &close, 7, 14, 28, &mut out).is_err());
 
-        let mut high_nf = high.clone();
-        let mut low_nf = low.clone();
-        let mut close_nf = close.clone();
+        let mut high_nf = high;
+        let mut low_nf = low;
+        let mut close_nf = close;
         high_nf[8] = f64::NAN;
         low_nf[13] = f64::INFINITY;
         close_nf[21] = f64::NEG_INFINITY;

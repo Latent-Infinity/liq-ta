@@ -268,24 +268,9 @@ pub fn t3_full_into<T: SeriesElement>(
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 pub fn t3<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
-    use std::any::TypeId;
-
-    if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
-        let mut output: Vec<f64> = vec![0.0; data.len()];
-        t3_into(data_f64, period, &mut output)?;
-        Ok(unsafe { std::mem::transmute(output) })
-    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
-        let mut output: Vec<f32> = vec![0.0; data.len()];
-        t3_into(data_f32, period, &mut output)?;
-        Ok(unsafe { std::mem::transmute(output) })
-    } else {
-        // Generic fallback: initialize to NaN
-        let mut output = vec![T::nan(); data.len()];
-        t3_into(data, period, &mut output)?;
-        Ok(output)
-    }
+    let mut output = vec![T::zero(); data.len()];
+    t3_into(data, period, &mut output)?;
+    Ok(output)
 }
 
 /// Computes T3 with custom volume factor.
@@ -308,31 +293,13 @@ pub fn t3<T: SeriesElement>(data: &[T], period: usize) -> Result<Vec<T>> {
 /// - The period is invalid (`Error::InvalidPeriod`)
 /// - There is insufficient data for the lookback (`Error::InsufficientData`)
 pub fn t3_full<T: SeriesElement>(data: &[T], period: usize, vfactor: T) -> Result<Vec<T>> {
-    use std::any::TypeId;
-
-    if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let data_f64: &[f64] = unsafe { std::mem::transmute(data) };
-        let vfactor_f64: f64 = unsafe { std::mem::transmute_copy(&vfactor) };
-        let mut output: Vec<f64> = vec![0.0; data.len()];
-        t3_full_into(data_f64, period, vfactor_f64, &mut output)?;
-        Ok(unsafe { std::mem::transmute(output) })
-    } else if TypeId::of::<T>() == TypeId::of::<f32>() {
-        let data_f32: &[f32] = unsafe { std::mem::transmute(data) };
-        let vfactor_f32: f32 = unsafe { std::mem::transmute_copy(&vfactor) };
-        let mut output: Vec<f32> = vec![0.0; data.len()];
-        t3_full_into(data_f32, period, vfactor_f32, &mut output)?;
-        Ok(unsafe { std::mem::transmute(output) })
-    } else {
-        // Generic fallback: initialize to NaN
-        let mut output = vec![T::nan(); data.len()];
-        t3_full_into(data, period, vfactor, &mut output)?;
-        Ok(output)
-    }
+    let mut output = vec![T::zero(); data.len()];
+    t3_full_into(data, period, vfactor, &mut output)?;
+    Ok(output)
 }
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::all, clippy::pedantic, clippy::nursery)]
     use super::*;
     use num_traits::Float;
 

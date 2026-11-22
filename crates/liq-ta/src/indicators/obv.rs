@@ -59,6 +59,7 @@
 //! assert_eq!(result.len(), 5);
 //! ```
 
+use crate::cast;
 use crate::error::{Error, Result};
 use crate::precision::{PrecisionMode, current_precision_mode};
 use crate::traits::SeriesElement;
@@ -242,20 +243,17 @@ fn validate_inputs<T: SeriesElement>(close: &[T], volume: &[T]) -> Result<()> {
 /// Core OBV computation that allocates a new vector.
 fn compute_obv_core<T: SeriesElement + 'static>(close: &[T], volume: &[T], output: &mut Vec<T>) {
     // Use specialized f64 path for common case
-    use std::any::TypeId;
-    if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let c = unsafe { std::slice::from_raw_parts(close.as_ptr() as *const f64, close.len()) };
-        let v = unsafe { std::slice::from_raw_parts(volume.as_ptr() as *const f64, volume.len()) };
-
+    if let (Some(c), Some(v)) = (
+        cast::slice_as::<T, f64>(close),
+        cast::slice_as::<T, f64>(volume),
+    ) {
         // Pre-allocate vector with exact size needed
-        let n = close.len();
-        let mut temp = vec![0.0_f64; n];
+        let mut temp = vec![0.0_f64; close.len()];
         obv_f64_optimized(c, v, &mut temp);
-
-        // Cast back to Vec<T>
-        let result = unsafe { std::mem::transmute::<Vec<f64>, Vec<T>>(temp) };
-        *output = result;
-        return;
+        if let Ok(result) = cast::vec_into::<f64, T>(temp) {
+            *output = result;
+            return;
+        }
     }
 
     let n = close.len();
@@ -303,13 +301,11 @@ fn compute_obv_core<T: SeriesElement + 'static>(close: &[T], volume: &[T], outpu
 /// Core OBV computation into pre-allocated buffer.
 fn compute_obv_core_into<T: SeriesElement + 'static>(close: &[T], volume: &[T], output: &mut [T]) {
     // Use specialized f64 path for common case
-    use std::any::TypeId;
-    if TypeId::of::<T>() == TypeId::of::<f64>() {
-        let c = unsafe { std::slice::from_raw_parts(close.as_ptr() as *const f64, close.len()) };
-        let v = unsafe { std::slice::from_raw_parts(volume.as_ptr() as *const f64, volume.len()) };
-        let out = unsafe {
-            std::slice::from_raw_parts_mut(output.as_mut_ptr() as *mut f64, output.len())
-        };
+    if let (Some(c), Some(v), Some(out)) = (
+        cast::slice_as::<T, f64>(close),
+        cast::slice_as::<T, f64>(volume),
+        cast::slice_as_mut::<T, f64>(output),
+    ) {
         obv_f64_optimized(c, v, out);
         return;
     }
@@ -526,7 +522,6 @@ fn compute_obv_core_into_f64<T: SeriesElement>(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::all, clippy::pedantic, clippy::nursery)]
     use super::*;
     use num_traits::Float;
 

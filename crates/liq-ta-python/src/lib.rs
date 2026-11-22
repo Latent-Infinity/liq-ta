@@ -9,10 +9,19 @@
 
 // Pedantic lint suppressions for Python bindings
 // These are intentional patterns for PyO3 FFI code
-#![allow(clippy::too_many_arguments)] // Python functions mirror indicator signatures
-#![allow(clippy::too_many_lines)] // Complex binding logic requires more lines
-#![allow(clippy::type_complexity)] // PyO3 types are complex by nature
-#![allow(clippy::needless_pass_by_value)] // PyO3 requires pass-by-value for Python interop
+#![expect(
+    clippy::too_many_arguments,
+    reason = "Python functions mirror indicator signatures"
+)]
+#![expect(
+    clippy::too_many_lines,
+    reason = "Complex binding logic requires more lines"
+)]
+#![expect(clippy::type_complexity, reason = "PyO3 types are complex by nature")]
+#![expect(
+    clippy::needless_pass_by_value,
+    reason = "PyO3 requires pass-by-value for Python interop"
+)]
 
 use numpy::{PyArray1, PyArrayMethods, PyReadonlyArray1};
 use pyo3::exceptions::PyValueError;

@@ -79,6 +79,7 @@
 //! assert!(!result[5].is_nan());
 //! ```
 
+use crate::cast;
 use crate::error::{Error, Result};
 use crate::precision::{PrecisionMode, current_precision_mode};
 use crate::traits::SeriesElement;
@@ -316,14 +317,13 @@ pub fn true_range_into<T: SeriesElement + 'static>(
     }
 
     // Use specialized f64 fast path when possible
-    use std::any::TypeId;
-    if TypeId::of::<T>() == TypeId::of::<f64>() {
-        // Safety: We've checked the type is f64
-        let h = unsafe { std::slice::from_raw_parts(high.as_ptr() as *const f64, high.len()) };
-        let l = unsafe { std::slice::from_raw_parts(low.as_ptr() as *const f64, low.len()) };
-        let c = unsafe { std::slice::from_raw_parts(close.as_ptr() as *const f64, close.len()) };
-        let out = unsafe { std::slice::from_raw_parts_mut(output.as_mut_ptr() as *mut f64, n) };
-        true_range_f64_optimized(h, l, c, out);
+    if let (Some(h), Some(l), Some(c), Some(out)) = (
+        cast::slice_as::<T, f64>(high),
+        cast::slice_as::<T, f64>(low),
+        cast::slice_as::<T, f64>(close),
+        cast::slice_as_mut::<T, f64>(output),
+    ) {
+        true_range_f64_optimized(h, l, c, &mut out[..n]);
         return Ok(n - 1);
     }
 
@@ -683,7 +683,6 @@ fn compute_atr_core_f64<T: SeriesElement>(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::all, clippy::pedantic, clippy::nursery)]
     use super::*;
     use num_traits::Float;
 

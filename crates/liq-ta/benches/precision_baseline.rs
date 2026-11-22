@@ -21,10 +21,10 @@
 //! Each indicator is benchmarked with both f32 and f64 input types to
 //! establish type-specific baselines.
 
-#![allow(clippy::cast_precision_loss)]
-#![allow(clippy::unreadable_literal)]
-#![allow(clippy::similar_names)]
-#![allow(clippy::type_complexity)]
+#![expect(
+    clippy::type_complexity,
+    reason = "tuple-typed test tables are clearer inline than named aliases"
+)]
 
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use liq_ta::indicators::{

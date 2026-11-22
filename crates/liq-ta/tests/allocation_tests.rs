@@ -1,12 +1,9 @@
 //! Buffer reuse, output initialization, and optional heap-allocation tests.
 
-#![allow(clippy::needless_range_loop)]
-#![allow(clippy::cast_precision_loss)]
-#![allow(clippy::similar_names)]
-#![allow(clippy::unreadable_literal)]
-#![allow(clippy::float_cmp)]
-#![allow(clippy::too_many_lines)]
-#![allow(clippy::cast_possible_truncation)]
+#![expect(
+    clippy::needless_range_loop,
+    reason = "index loops mirror the reference formulas across parallel arrays"
+)]
 
 use liq_ta::indicators::{
     bollinger::{BollingerOutput, bollinger_into},
